@@ -55,6 +55,25 @@ A person registers with `--human`.
   Do not do it inside your current item.
 - Waiting on something outside the queue: `river blocked <id> --reason "<what>"`.
 
+## Messages
+
+Every command ends with a line such as
+`[you: holds #12 20m left; inbox: 2 unread, 1 question to answer (river --as you inbox)]`.
+When you see it, read your inbox before you continue.
+
+- `river inbox`: unread messages and questions that wait for your answer.
+  Add `--all` for read ones, `--peek` to leave them unread.
+- `river answer <msg-id> "<text>"`: answer a question. The asker gets it.
+- `river send question|alert|note "<text>" --to <agent>`: to one agent.
+  Use `--item <id>` instead of `--to` to reach whoever holds that item
+  (or the next holder, if nobody holds it). `--reply <msg-id>` replies to
+  the sender of that message.
+- `river thread <msg-id>`: the whole conversation; `river thread --item <id>`:
+  every message about an item.
+
+An alert means stop and read now. A notice comes from river itself, for
+example when your lease expired.
+
 ## Looking around
 
 - `river who`: every agent and person, and what each one holds.

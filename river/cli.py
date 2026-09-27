@@ -115,6 +115,8 @@ def _print_show(a):
         print("  lease until:", a["lease_expires_at"])
     if a.get("output"):
         print("  output:", a["output"])
+    if a.get("message_count"):
+        print(f"  messages: {a['message_count']} (river thread --item {a['id']})")
     if a.get("now_ready"):
         print("  now ready:", ", ".join(f"#{i}" for i in a["now_ready"]))
     for e in a.get("events", [])[:8]:
@@ -138,6 +140,17 @@ def _print_tree(n, prefix="", last=True, root=True):
         _print_tree(c, prefix + ext, i == len(kids) - 1, False)
 
 
+def _unread_text(u, actor):
+    if not u["unread"] and not u["questions"]:
+        return None
+    parts = [f"{u['unread']} unread"] if u["unread"] else []
+    if u["alerts"]:
+        parts.append(f"{u['alerts']} alert{'s' if u['alerts'] > 1 else ''}")
+    if u["questions"]:
+        parts.append(f"{u['questions']} question{'s' if u['questions'] > 1 else ''} to answer")
+    return f"inbox: {', '.join(parts)} (river --as {actor} inbox)"
+
+
 def _footer(conn, actor):
     if not actor:
         return
@@ -146,6 +159,7 @@ def _footer(conn, actor):
         print(f"(agent {actor} is not registered: river register {actor} [--human])", file=sys.stderr)
         return
     holds = core.agent_status(conn, actor)["holds"]
+    bits = []
     if holds:
         parts = []
         for h in holds:
@@ -154,7 +168,27 @@ def _footer(conn, actor):
                 parts.append(f"#{h['id']} {mins}m left")
             else:
                 parts.append(f"#{h['id']}")
-        print(f"[{actor}: holds {', '.join(parts)}]", file=sys.stderr)
+        bits.append(f"holds {', '.join(parts)}")
+    msg = _unread_text(core.unread(conn, actor), actor)
+    if msg:
+        bits.append(msg)
+    if bits:
+        print(f"[{actor}: {'; '.join(bits)}]", file=sys.stderr)
+
+
+def _fmt_msg(m, indent=""):
+    to = m["to_agent"] or (f"the holder of #{m['item_id']}" if m["item_id"] else "?")
+    about = f" about #{m['item_id']}" + (f" {m['item_title']}" if m.get("item_title") else "") if m["item_id"] else ""
+    head = f"{indent}#{m['id']} {m['kind']} from {m['from_agent']} to {to}{about}  ({m['created_at']}"
+    if m["kind"] in ("question", "offer") or m["state"] not in ("open", "read"):
+        head += f", {m['state']}"
+    if m["unread"]:
+        head += ", new"
+    if m["reply_to"]:
+        head += f", reply to #{m['reply_to']}"
+    lines = [head + ")"]
+    lines += [f"{indent}    {line}" for line in m["body"].splitlines() or [""]]
+    return "\n".join(lines)
 
 
 def build_parser():
@@ -225,6 +259,17 @@ def build_parser():
     x = sub.add_parser("blocked", help="record a blocker outside the queue"); x.add_argument("id", type=int); x.add_argument("--reason", required=True)
     x = sub.add_parser("unblock", help="clear an outside blocker"); x.add_argument("id", type=int)
     x = sub.add_parser("blockers", help="tree of what an item waits on"); x.add_argument("id", type=int)
+
+    x = sub.add_parser("send", help="send an alert, question, or note to an agent or to the holder of an item")
+    x.add_argument("kind", choices=core.SEND_KINDS); x.add_argument("text")
+    x.add_argument("--to", help="agent name"); x.add_argument("--item", type=int, help="the item it is about; without --to it goes to the holder")
+    x.add_argument("--reply", type=int, help="message id this replies to (goes to its sender)")
+    x = sub.add_parser("answer", help="answer a question"); x.add_argument("id", type=int); x.add_argument("text")
+    x = sub.add_parser("inbox", help="your unread messages and questions waiting for your answer")
+    x.add_argument("--all", action="store_true", help="read messages too")
+    x.add_argument("--peek", action="store_true", help="do not mark them read")
+    x = sub.add_parser("thread", help="a message and its replies")
+    x.add_argument("id", type=int, nargs="?"); x.add_argument("--item", type=int, help="every message about this item")
 
     x = sub.add_parser("register", help="register this agent or person")
     x.add_argument("name"); x.add_argument("--human", action="store_true"); x.add_argument("--note", default="")
@@ -324,6 +369,10 @@ def _hint(a, res, actor):
         return HINTS["done"].format(id=res["id"])
     if c == "release":
         return HINTS["release"]
+    if c == "inbox" and res:
+        me = f"river --as {actor}"
+        return (f"answer a question: {me} answer <id> \"...\"   reply: {me} send note --reply <id> \"...\"   "
+                f"whole conversation: {me} thread <id>")
     if not actor and c in ("list", "show", "who", "capacity", "blockers"):
         return HINTS["no_actor"]
     return None
@@ -424,6 +473,18 @@ def dispatch(conn, a, actor):
         return core.unblock(conn, a.id, actor)
     if c == "blockers":
         return core.blockers(conn, a.id)
+    if c == "send":
+        return core.send(conn, a.kind, a.text, a.to, a.item, a.reply, actor)
+    if c == "answer":
+        return core.answer(conn, a.id, a.text, actor)
+    if c == "inbox":
+        return core.inbox(conn, actor, a.all, not a.peek)
+    if c == "thread":
+        if (a.id is None) == (a.item is None):
+            raise RiverError("give a message id or --item <id>")
+        if a.item is not None:
+            return {"thread_id": None, "messages": core.item_messages(conn, a.item)}
+        return core.thread(conn, a.id, actor)
     if c == "register":
         return core.register(conn, a.name, a.human, a.note)
     if c == "unregister":
@@ -514,6 +575,10 @@ def render_go(b):
             f"  - work elsewhere: river project list, then {r} go --project <name>, or",
             f"  - check again later: {r} go",
         ]
+    msg = _unread_text(b.get("messages") or {"unread": 0, "questions": 0}, me)
+    if msg:
+        out.append("")
+        out.append(f"Messages for you: {msg}. Read them before you start.")
     if b.get("human_waiting"):
         out.append("")
         out.append("Waiting on the user (tell them):")
@@ -563,6 +628,25 @@ def render(a, res):
         return
     if c == "blockers":
         _print_tree(res)
+        return
+    if c == "send":
+        to = res["to_agent"] or f"the next holder of #{res['item_id']} (nobody holds it now)"
+        print(f"sent #{res['id']} {res['kind']} to {to}")
+        return
+    if c == "answer":
+        print(f"answered: sent #{res['id']} to {res['to_agent']}; question #{res['reply_to']} is closed")
+        return
+    if c == "inbox":
+        if not res:
+            print("(inbox empty)")
+        for m in res:
+            print(_fmt_msg(m))
+        return
+    if c == "thread":
+        if not res["messages"]:
+            print("(no messages)")
+        for m in res["messages"]:
+            print(_fmt_msg(m, "  " if m["reply_to"] else ""))
         return
     if c == "who":
         if not res:

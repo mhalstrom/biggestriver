@@ -18,6 +18,13 @@ OPEN_STATES = ("open", "in_progress", "held")
 CLOSED_STATES = ("done", "dropped")
 DOERS = ("any", "ai", "human")
 
+# Messages. An alert asks for attention now, a question waits for an answer,
+# a note is for information, a notice comes from river itself, and an offer
+# (help on a blocked item) is accepted or declined.
+MESSAGE_KINDS = ("alert", "question", "answer", "note", "notice", "offer")
+SEND_KINDS = ("alert", "question", "note")
+MESSAGE_STATES = ("open", "accepted", "declined", "answered", "read")
+
 DEFAULT_SETTINGS = {
     "lease_ttl": "30m",
     "hold_ttl": "2h",
@@ -92,9 +99,29 @@ CREATE TABLE IF NOT EXISTS settings (
   PRIMARY KEY (scope, key)
 );
 
+CREATE TABLE IF NOT EXISTS messages (
+  id          INTEGER PRIMARY KEY,
+  kind        TEXT NOT NULL
+              CHECK (kind IN ('alert','question','answer','note','notice','offer')),
+  from_agent  TEXT NOT NULL,
+  to_agent    TEXT,
+  item_id     INTEGER REFERENCES items(id),
+  reply_to    INTEGER REFERENCES messages(id),
+  thread_id   INTEGER NOT NULL,
+  body        TEXT NOT NULL,
+  state       TEXT NOT NULL DEFAULT 'open'
+              CHECK (state IN ('open','accepted','declined','answered','read')),
+  created_at  TEXT NOT NULL,
+  read_at     TEXT,
+  closed_at   TEXT
+);
+
 CREATE INDEX IF NOT EXISTS items_status ON items(status);
 CREATE INDEX IF NOT EXISTS deps_blocked_by ON deps(blocked_by);
 CREATE INDEX IF NOT EXISTS events_item ON events(item_id);
+CREATE INDEX IF NOT EXISTS messages_to ON messages(to_agent, read_at);
+CREATE INDEX IF NOT EXISTS messages_item ON messages(item_id);
+CREATE INDEX IF NOT EXISTS messages_thread ON messages(thread_id);
 """
 
 
@@ -697,6 +724,8 @@ def _sweep(conn):
         conn.execute("UPDATE items SET status='open', assignee=NULL, claimed_at=NULL, lease_expires_at=NULL WHERE id=?",
                      (r["id"],))
         _event(conn, r["id"], "river", f"lease expired (was {r['assignee']}); back to open")
+        _send(conn, "notice", "river", f"your lease on #{r['id']} expired; the item is open again. "
+              f"Claim it again if you still work on it: river claim {r['id']}", to=r["assignee"], item_id=r["id"])
     return [r["id"] for r in expired]
 
 
@@ -895,6 +924,7 @@ def item_show(conn, item_id, ann=None):
     a["unblocks_detail"] = [{"id": d, "title": ann[d]["title"], "status": ann[d]["status"]} for d in a["unblocks"]]
     a["events"] = [dict(r) for r in conn.execute(
         "SELECT at, actor, change FROM events WHERE item_id=? ORDER BY id DESC LIMIT 50", (iid,))]
+    a["message_count"] = conn.execute("SELECT COUNT(*) FROM messages WHERE item_id=?", (iid,)).fetchone()[0]
     return a
 
 
@@ -930,6 +960,163 @@ def blockers(conn, item_id):
         }
 
     return node(root, frozenset())
+
+
+# ---------------------------------------------------------------- messages
+
+def _message(conn, msg_id):
+    r = conn.execute("SELECT * FROM messages WHERE id=?", (int(msg_id),)).fetchone()
+    if not r:
+        raise RiverError(f"no message {msg_id}")
+    return r
+
+
+def _send(conn, kind, sender, body, to=None, item_id=None, reply_to=None):
+    """Insert one message inside the caller's transaction and return its id."""
+    t = iso(now())
+    cur = conn.execute(
+        "INSERT INTO messages(kind,from_agent,to_agent,item_id,reply_to,thread_id,body,created_at) "
+        "VALUES (?,?,?,?,?,0,?,?)", (kind, sender, to, item_id, reply_to, body, t))
+    mid = cur.lastrowid
+    thread = _message(conn, reply_to)["thread_id"] if reply_to else mid
+    conn.execute("UPDATE messages SET thread_id=? WHERE id=?", (thread, mid))
+    return mid
+
+
+# A message reaches its to_agent. A message with no to_agent but an item
+# reaches whoever holds that item when they read, so a question on an
+# unclaimed item waits for the next holder.
+_TO_ME = ("(m.to_agent=? OR (m.to_agent IS NULL AND m.item_id IN "
+          "(SELECT id FROM items WHERE assignee=? AND status IN ('in_progress','held'))))")
+
+
+def _msg_dict(r):
+    m = dict(r)
+    m["unread"] = m["read_at"] is None
+    return m
+
+
+def send(conn, kind, body, to=None, item=None, reply_to=None, actor=None):
+    """Send an alert, question, or note to an agent, to the holder of an item, or as a reply."""
+    if not actor:
+        raise RiverError("sending needs an agent name: set RIVER_AGENT or pass --as <name>")
+    if kind not in SEND_KINDS:
+        raise RiverError(f"send kind is one of {', '.join(SEND_KINDS)}; to answer a question: river answer <message-id> \"...\"")
+    if not body or not body.strip():
+        raise RiverError("a message needs text")
+    with tx(conn):
+        if reply_to is not None:
+            parent = _message(conn, reply_to)
+            if to is None:
+                to = parent["from_agent"] if parent["from_agent"] != actor else parent["to_agent"]
+            if item is None:
+                item = parent["item_id"]
+        if item is not None:
+            it = _item(conn, item)
+            item = it["id"]
+            if to is None and it["status"] in ("in_progress", "held"):
+                to = it["assignee"]
+        if to is None and item is None:
+            raise RiverError("say who gets it: --to <agent>, --item <id> (its holder), or --reply <message-id>")
+        if to is not None:
+            _agent(conn, to)
+        mid = _send(conn, kind, actor, body.strip(), to=to, item_id=item, reply_to=reply_to)
+        if reply_to is not None:
+            # Replying to a message means the sender read it.
+            if conn.execute(f"SELECT 1 FROM messages m WHERE m.id=? AND {_TO_ME}", (reply_to, actor, actor)).fetchone():
+                _mark_read(conn, [reply_to])
+        if item is not None:
+            _event(conn, item, actor, f"{kind} #{mid} to {to or 'the next holder'}")
+    return message_show(conn, mid)
+
+
+def answer(conn, msg_id, body, actor=None):
+    """Answer a question: the answer goes to the asker and the question closes."""
+    if not actor:
+        raise RiverError("answering needs an agent name: set RIVER_AGENT or pass --as <name>")
+    if not body or not body.strip():
+        raise RiverError("an answer needs text")
+    with tx(conn):
+        q = _message(conn, msg_id)
+        if q["kind"] != "question":
+            raise RiverError(f"message {msg_id} is {'an' if q['kind'][0] in 'aeiou' else 'a'} {q['kind']}, not a question; "
+                             f"reply with: river send note --reply {msg_id} \"...\"")
+        if q["state"] != "open":
+            raise RiverError(f"question {msg_id} is already {q['state']}; see: river thread {msg_id}")
+        if q["from_agent"] == actor:
+            raise RiverError(f"you asked question {msg_id}; add to it with: river send note --reply {msg_id} \"...\"")
+        t = iso(now())
+        mid = _send(conn, "answer", actor, body.strip(), to=q["from_agent"], item_id=q["item_id"], reply_to=q["id"])
+        conn.execute("UPDATE messages SET state='answered', closed_at=?, read_at=COALESCE(read_at, ?), "
+                     "to_agent=COALESCE(to_agent, ?) WHERE id=?", (t, t, actor, q["id"]))
+        if q["item_id"] is not None:
+            _event(conn, q["item_id"], actor, f"answered question #{q['id']}")
+    return message_show(conn, mid)
+
+
+def _mark_read(conn, ids):
+    t = iso(now())
+    for i in ids:
+        # Questions and offers stay open until someone answers, accepts, or declines them.
+        conn.execute("UPDATE messages SET read_at=COALESCE(read_at, ?), "
+                     "state=CASE WHEN kind IN ('question','offer') THEN state ELSE 'read' END WHERE id=?", (t, i))
+
+
+def inbox(conn, actor, include_read=False, mark_read=True):
+    """Messages for the actor: unread ones, and questions still waiting for an answer."""
+    if not actor:
+        raise RiverError("the inbox needs an agent name: set RIVER_AGENT or pass --as <name>")
+    _agent(conn, actor)
+    where = f"{_TO_ME} AND m.from_agent<>?"
+    if not include_read:
+        where += " AND (m.read_at IS NULL OR (m.kind IN ('question','offer') AND m.state='open'))"
+    with tx(conn):
+        rows = [_msg_dict(r) for r in conn.execute(
+            f"SELECT m.*, i.title item_title FROM messages m LEFT JOIN items i ON i.id=m.item_id "
+            f"WHERE {where} ORDER BY m.id", (actor, actor, actor))]
+        if mark_read:
+            _mark_read(conn, [m["id"] for m in rows if m["unread"]])
+    return rows
+
+
+def unread(conn, actor):
+    """Counts for the line every command prints: unread messages and open questions to the actor."""
+    if not actor:
+        return {"unread": 0, "alerts": 0, "questions": 0}
+    r = conn.execute(
+        f"SELECT SUM(m.read_at IS NULL) unread, SUM(m.read_at IS NULL AND m.kind='alert') alerts, "
+        f"SUM(m.kind='question' AND m.state='open') questions FROM messages m WHERE {_TO_ME} AND m.from_agent<>?",
+        (actor, actor, actor)).fetchone()
+    return {"unread": r["unread"] or 0, "alerts": r["alerts"] or 0, "questions": r["questions"] or 0}
+
+
+def message_show(conn, msg_id):
+    r = conn.execute("SELECT m.*, i.title item_title FROM messages m LEFT JOIN items i ON i.id=m.item_id "
+                     "WHERE m.id=?", (int(msg_id),)).fetchone()
+    if not r:
+        raise RiverError(f"no message {msg_id}")
+    return _msg_dict(r)
+
+
+def thread(conn, msg_id, actor=None):
+    """A message with everything before and after it in the same conversation."""
+    root = _message(conn, msg_id)["thread_id"]
+    with tx(conn):
+        rows = [_msg_dict(r) for r in conn.execute(
+            "SELECT m.*, i.title item_title FROM messages m LEFT JOIN items i ON i.id=m.item_id "
+            "WHERE m.thread_id=? ORDER BY m.id", (root,))]
+        if actor:
+            mine = {r["id"] for r in conn.execute(
+                f"SELECT m.id FROM messages m WHERE m.thread_id=? AND m.read_at IS NULL AND m.from_agent<>? AND {_TO_ME}",
+                (root, actor, actor, actor))}
+            _mark_read(conn, mine)
+    return {"thread_id": root, "messages": rows}
+
+
+def item_messages(conn, item_id):
+    _item(conn, item_id)
+    return [_msg_dict(r) for r in conn.execute(
+        "SELECT m.*, NULL item_title FROM messages m WHERE m.item_id=? ORDER BY m.id", (int(item_id),))]
 
 
 # ---------------------------------------------------------------- capacity
@@ -1051,7 +1238,8 @@ def go(conn, cwd, actor=None, project=None, role=None):
     open_in_area = [a for a in in_area if a["status"] in OPEN_STATES]
     human_ready = sorted((a for a in in_area if a["ready"] and a["doer"] == "human"), key=lambda a: a["sort_key"])
     brief = {"agent": actor, "new_name": new_name, "projects": names, "descriptions": descs,
-             "human_waiting": [{"id": a["id"], "title": a["title"]} for a in human_ready]}
+             "human_waiting": [{"id": a["id"], "title": a["title"]} for a in human_ready],
+             "messages": unread(conn, actor)}
 
     # Resume: an item already held.
     held = conn.execute("SELECT id FROM items WHERE assignee=? AND status IN ('in_progress','held') ORDER BY id",

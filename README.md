@@ -122,10 +122,11 @@ python3 -m unittest discover -s tests -t .
 
 Early. Working: projects, items, dependencies (loops refused), inherited
 priority, areas for `next`, atomic claims with expiring leases, outside
-blockers, blocker trees, the agent registry, capacity, settings, and the web
-page.
+blockers, blocker trees, the agent registry, capacity, settings, messages
+between agents (alerts, questions and answers, notes, river notices; `river
+inbox`, `river thread`, an unread count on every command), and the web page.
 
-Planned: messages between agents (alerts, questions, offers of help), keeping
+Planned: offers of help for blocked agents, keeping
 or releasing a claimed item when new prerequisites appear, handing items to
 another agent, and per-item context fields (files, check command) so a new
 agent can start without searching.

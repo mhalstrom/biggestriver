@@ -249,5 +249,74 @@ class Capacity(Base):
             core.config_set(self.c, "lease_ttl", "soon")
 
 
+class Messages(Base):
+    def setUp(self):
+        super().setUp()
+        core.project_add(self.c, "a")
+        core.register(self.c, "alice")
+        core.register(self.c, "bob")
+        self.x = self.add("a", "x")
+
+    def test_question_to_item_reaches_next_holder_and_answer_closes_it(self):
+        q = core.send(self.c, "question", "why?", item=self.x, actor="bob")
+        self.assertIsNone(q["to_agent"])
+        self.assertEqual(core.unread(self.c, "alice")["unread"], 0)
+        core.claim(self.c, self.x, "alice")
+        self.assertEqual(core.unread(self.c, "alice"), {"unread": 1, "alerts": 0, "questions": 1})
+        self.assertEqual([m["id"] for m in core.inbox(self.c, "alice")], [q["id"]])
+        # Read, but still waiting for an answer, so it stays in the inbox.
+        self.assertEqual(core.unread(self.c, "alice"), {"unread": 0, "alerts": 0, "questions": 1})
+        self.assertEqual(len(core.inbox(self.c, "alice")), 1)
+        a = core.answer(self.c, q["id"], "because", actor="alice")
+        self.assertEqual(a["to_agent"], "bob")
+        self.assertEqual(core.message_show(self.c, q["id"])["state"], "answered")
+        self.assertEqual(core.inbox(self.c, "alice"), [])
+        self.assertEqual(core.unread(self.c, "bob")["unread"], 1)
+        with self.assertRaises(RiverError):
+            core.answer(self.c, q["id"], "again", actor="alice")
+
+    def test_send_to_held_item_goes_to_holder(self):
+        core.claim(self.c, self.x, "alice")
+        m = core.send(self.c, "alert", "stop", item=self.x, actor="bob")
+        self.assertEqual(m["to_agent"], "alice")
+        self.assertEqual(core.unread(self.c, "alice")["alerts"], 1)
+        inbox = core.inbox(self.c, "alice")
+        self.assertEqual(core.message_show(self.c, inbox[0]["id"])["state"], "read")
+        self.assertEqual(core.inbox(self.c, "alice"), [])
+        self.assertEqual(len(core.inbox(self.c, "alice", include_read=True)), 1)
+
+    def test_reply_goes_to_sender_and_joins_thread(self):
+        n = core.send(self.c, "note", "fyi", to="alice", actor="bob")
+        r = core.send(self.c, "note", "thanks", reply_to=n["id"], actor="alice")
+        self.assertEqual(r["to_agent"], "bob")
+        self.assertEqual(r["thread_id"], n["id"])
+        self.assertEqual(core.unread(self.c, "alice")["unread"], 0)  # replying reads it
+        t = core.thread(self.c, r["id"], "bob")
+        self.assertEqual([m["id"] for m in t["messages"]], [n["id"], r["id"]])
+        self.assertEqual(core.unread(self.c, "bob")["unread"], 0)
+
+    def test_refusals(self):
+        with self.assertRaises(RiverError):
+            core.send(self.c, "note", "hi", actor="bob")  # no recipient
+        with self.assertRaises(RiverError):
+            core.send(self.c, "note", "hi", to="nobody", actor="bob")
+        with self.assertRaises(RiverError):
+            core.send(self.c, "answer", "hi", to="alice", actor="bob")
+        n = core.send(self.c, "note", "hi", to="alice", actor="bob")
+        with self.assertRaises(RiverError):
+            core.answer(self.c, n["id"], "no", actor="alice")
+        q = core.send(self.c, "question", "?", to="alice", actor="bob")
+        with self.assertRaises(RiverError):
+            core.answer(self.c, q["id"], "self", actor="bob")
+
+    def test_lease_expiry_sends_notice(self):
+        core.claim(self.c, self.x, "alice")
+        past = core.iso(core.now() - timedelta(minutes=1))
+        self.c.execute("UPDATE items SET lease_expires_at=? WHERE id=?", (past, self.x))
+        core.activity(self.c, "bob")
+        box = core.inbox(self.c, "alice")
+        self.assertEqual([(m["kind"], m["from_agent"], m["item_id"]) for m in box], [("notice", "river", self.x)])
+
+
 if __name__ == "__main__":
     unittest.main()
