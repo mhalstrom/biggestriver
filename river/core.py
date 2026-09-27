@@ -1089,10 +1089,11 @@ def annotate(conn):
 def _reason(a):
     parts = [f"P{a['effective_priority']}"]
     if a["priority_from"] is not None:
-        parts[0] += f" from #{a['priority_from']} (own P{a['priority']})"
+        parts[0] += f" inherited from #{a['priority_from']} (own P{a['priority']})"
     parts.append(f"project {a['project']} (rank {a['project_rank']})")
     if a["unblocks_count"]:
-        parts.append(f"unblocks {a['unblocks_count']}")
+        n = a["unblocks_count"]
+        parts.append(f"unblocks {n} item{'s' if n != 1 else ''}")
     return ", ".join(parts)
 
 
@@ -1634,8 +1635,9 @@ def item_show(conn, item_id, ann=None):
     if iid not in ann:
         raise RiverError(f"no item {item_id}")
     a = {k: v for k, v in ann[iid].items() if k != "sort_key"}
-    a["waits_on_detail"] = [{"id": b, "title": ann[b]["title"], "status": ann[b]["status"]} for b in a["waits_on"]]
-    a["unblocks_detail"] = [{"id": d, "title": ann[d]["title"], "status": ann[d]["status"]} for d in a["unblocks"]]
+    label = lambda x: "ready" if ann[x]["ready"] else ann[x]["status"]
+    a["waits_on_detail"] = [{"id": b, "title": ann[b]["title"], "status": label(b)} for b in a["waits_on"]]
+    a["unblocks_detail"] = [{"id": d, "title": ann[d]["title"], "status": label(d)} for d in a["unblocks"]]
     a["fed_by_detail"] = [{"id": d, "title": ann[d]["title"], "status": ann[d]["status"], "output": ann[d]["output"]}
                           for d in a["fed_by"]]
     a["conflicts_detail"] = [{"id": d, "title": ann[d]["title"], "status": ann[d]["status"],
@@ -1646,8 +1648,8 @@ def item_show(conn, item_id, ann=None):
         r = conn.execute("SELECT owner FROM targets WHERE name=?", (a["target"],)).fetchone()
         a["target_owner"] = r["owner"] if r else None
         a["ships"] = a["waits_on_detail"]
-    a["found_here"] = [{"id": r["id"], "title": r["title"], "status": r["status"]} for r in conn.execute(
-        "SELECT id, title, status FROM items WHERE found_during=? ORDER BY id", (iid,))]
+    a["found_here"] = [{"id": r["id"], "title": ann[r["id"]]["title"], "status": label(r["id"])} for r in conn.execute(
+        "SELECT id FROM items WHERE found_during=? ORDER BY id", (iid,))]
     a["message_count"] = conn.execute("SELECT COUNT(*) FROM messages WHERE item_id=?", (iid,)).fetchone()[0]
     return a
 
@@ -2049,7 +2051,11 @@ def go(conn, cwd, actor=None, project=None, role=None):
     open_in_area = [a for a in in_area if a["status"] in OPEN_STATES]
     human_ready = sorted((a for a in in_area if a["ready"] and a["doer"] == "human"), key=lambda a: a["sort_key"])
     brief = {"agent": actor, "new_name": new_name, "projects": names, "descriptions": descs,
-             "human_waiting": [{"id": a["id"], "title": a["title"]} for a in human_ready],
+             "human_waiting": [{"id": a["id"], "title": a["title"],
+                                "blocks": [{"id": d, "title": ann[d]["title"], "priority": ann[d]["effective_priority"]}
+                                           for d in a["unblocks"] if ann[d]["status"] in OPEN_STATES]}
+                               for a in human_ready],
+             "has_history": bool(history(conn, actor, limit=1)),
              "messages": unread(conn, actor),
              "humans": [r["name"] for r in conn.execute("SELECT name FROM agents WHERE kind='human' ORDER BY name")]}
 

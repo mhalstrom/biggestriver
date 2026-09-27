@@ -482,6 +482,10 @@ def _hint(a, res, actor):
     c = a.cmd
     if c in ("go", "plan"):
         return None
+    if actor and c == "done":
+        return f"next: river --as {actor} go"
+    if actor and c == "release":
+        return f"next: river --as {actor} go"
     if c == "register":
         return HINTS["register"].format(name=res["name"])
     if c == "next":
@@ -788,11 +792,13 @@ def render_go(b):
         out.append(f"Your shell may not keep environment variables, so pass --as {me} on every river command.")
     for n in b["projects"]:
         d = b["descriptions"].get(n)
-        out.append(f"Project {n}: {d}" if d else f"Project {n} (no description: {r} project describe {n} \"...\")")
+        out.append(f"Project {n}: {d}" if d else f"Project {n}.")
     out.append("")
     it = b.get("item")
     if it:
         out.append(f"YOUR ITEM #{it['id']}: {it['title']}")
+        if it.get("found_during"):
+            out.append(f"  (found during #{it['found_during']}; now it is the most important ready item)")
         if it["notes"]:
             out.append(f"  notes: {it['notes']}")
         out += _context_lines(it)
@@ -816,19 +822,34 @@ def render_go(b):
             out += ["",
                     "Deploy as the target description says, run its checks, then put the release id or",
                     f"deployed commit in the output: {r} done {it['id']} --output \"<release id, checks passed>\""]
+        if b.get("has_history") and not b.get("new_name"):
+            out += [
+                "",
+                "Rules as before. Short form:",
+                f"  needs something first: {r} add \"<title>\" --blocks {it['id']} --keep|--release",
+                f"  other work found:      {r} add \"<title>\" --found-during {it['id']}",
+                f"  a step for the user:   {r} add \"...\" --doer human --context \"...\" --blocks {it['id']}",
+                f"  vague item: make a reasonable choice and say what you chose in --output.",
+                "",
+            ]
+        else:
+            out += [
+                "",
+                "Rules:",
+                f"  - Do this item only. Read `{r} show {it['id']}` again if you need the links.",
+                f"  - The item is vague: make a reasonable choice and say what you chose in --output. Ask the user",
+                f"    (a human item, below) only when a wrong guess would be costly.",
+                f"  - It needs something first: {r} add \"<title>\" --blocks {it['id']} --keep   (small; you do it now)",
+                f"    or ... --blocks {it['id']} --release   (large or better for someone else; then run go again).",
+                f"  - You find other work: {r} add \"<title>\" --found-during {it['id']}. Do not do it now.",
+                f"  - Waiting on something outside the queue: {r} blocked {it['id']} --reason \"<what>\", release, run go again.",
+                f"  - You need the user (a decision, an approval, an account or payment step): put it in the queue, not only in chat:",
+                f"    {r} add \"<what to decide or do>\" --doer human --context \"<exactly what, where the material is>\" --blocks {it['id']}",
+                f"    That is what notifies them. A quick question instead: {r} send question --to "
+                + ("|".join(b.get("humans") or []) or "<person>") + " \"...\" --item " + str(it["id"]),
+                "",
+            ]
         out += [
-            "",
-            "Rules:",
-            f"  - Do this item only. Read `{r} show {it['id']}` again if you need the links.",
-            f"  - It needs something first: {r} add \"<title>\" --blocks {it['id']} --keep   (small; you do it now)",
-            f"    or ... --blocks {it['id']} --release   (large or better for someone else; then run go again).",
-            f"  - You find other work: {r} add \"<title>\" --found-during {it['id']}. Do not do it now.",
-            f"  - Waiting on something outside the queue: {r} blocked {it['id']} --reason \"<what>\", release, run go again.",
-            f"  - You need the user (a decision, an approval, an account or payment step): put it in the queue, not only in chat:",
-            f"    {r} add \"<what to decide or do>\" --doer human --context \"<exactly what, where the material is>\" --blocks {it['id']}",
-            f"    That is what notifies them. A quick question instead: {r} send question --to "
-            + ("|".join(b.get("humans") or []) or "<person>") + " \"...\" --item " + str(it["id"]),
-            "",
             f"When finished:  {r} done {it['id']} --output \"<what changed, commit id>\"",
             f"Then continue:  {r} go",
         ]
@@ -868,7 +889,8 @@ def render_go(b):
         out.append("")
         out.append("Waiting on the user (tell them):")
         for h in b["human_waiting"]:
-            out.append(f"  #{h['id']} {h['title']}")
+            blocks = "; ".join(f"blocks #{d['id']} {d['title']} (P{d['priority']})" for d in h.get("blocks", [])[:2])
+            out.append(f"  #{h['id']} {h['title']}" + (f"  ({blocks})" if blocks else ""))
     print("\n".join(out))
 
 

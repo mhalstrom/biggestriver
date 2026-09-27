@@ -8,9 +8,9 @@ $R project add website
 $R project add backend
 
 a() { $R add "$@" >/dev/null; }
-a backend "Design the orders API" --doer ai                          # 1
+a backend "Design the orders API" --doer ai --context "Write api/orders.md: endpoints, fields, status values"  # 1
 a backend "Build the orders API" --doer ai --after 1                 # 2
 a website "Write the pricing page copy" --doer human                 # 3
 a website "Build the checkout page" -p 0 --doer ai --after 2 3       # 4
-a website "Fix footer links" -p 3                                    # 5
+a website "Fix footer links" -p 3 --context "/help and /terms links 404 since docs moved to /docs/"  # 5
 echo "Loaded. Try: river next, river blockers 4, river serve --open"
