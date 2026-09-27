@@ -644,5 +644,69 @@ class Plan(Base):
             core.plan(self.c, self.dir.name, "ag")
 
 
+class KeepRelease(Base):
+    def setUp(self):
+        super().setUp()
+        core.project_add(self.c, "a", path=self.dir.name)
+        core.register(self.c, "ag")
+        core.register(self.c, "bo")
+        self.p = self.add("a", "parent")
+        core.claim(self.c, self.p, "ag")
+
+    def test_keep_reserves_and_resumes(self):
+        n = core.item_add(self.c, "a", "fix", actor="ag", blocks=self.p, mode="keep")["id"]
+        st = core._item(self.c, self.p)
+        self.assertEqual((st["status"], st["assignee"]), ("held", "ag"))
+        self.assertEqual(core._item(self.c, n)["reserved_for"], "ag")
+        self.assertEqual(core.next_item(self.c, actor="bo"), [])
+        with self.assertRaises(RiverError):
+            core.claim(self.c, n, "bo")
+        g = core.go(self.c, self.dir.name, "ag")  # max_leases 1: the hold does not use it up
+        self.assertEqual(g["item"]["id"], n)
+        res = core.done(self.c, n, "ok", "ag")
+        self.assertEqual(res["resumed"], [self.p])
+        st = core._item(self.c, self.p)
+        self.assertEqual((st["status"], st["assignee"]), ("in_progress", "ag"))
+        self.assertIsNotNone(st["lease_expires_at"])
+
+    def test_default_mode_releases(self):
+        n = core.item_add(self.c, "a", "big", actor="ag", blocks=self.p)["id"]
+        st = core._item(self.c, self.p)
+        self.assertEqual((st["status"], st["assignee"]), ("open", None))
+        self.assertIsNone(core._item(self.c, n)["reserved_for"])
+        self.assertEqual([x["id"] for x in core.next_item(self.c, actor="bo")], [n])
+
+    def test_keep_over_limit_releases_and_marks_replan(self):
+        core.config_set(self.c, "keep_prereq_limit", "1")
+        core.item_add(self.c, "a", "one", actor="ag", blocks=self.p, mode="keep")
+        core.item_add(self.c, "a", "two", actor="ag", blocks=self.p, mode="keep")
+        st = core._item(self.c, self.p)
+        self.assertEqual((st["status"], st["replan"]), ("open", 1))
+        self.assertEqual([r for r in self.c.execute("SELECT id FROM items WHERE reserved_for IS NOT NULL")], [])
+
+    def test_hold_expiry_releases_with_notice_and_keep_restores(self):
+        n = core.item_add(self.c, "a", "fix", actor="ag", blocks=self.p, mode="keep")["id"]
+        self.c.execute("UPDATE items SET hold_expires_at=? WHERE id=?", (core.iso(core.now() - timedelta(minutes=1)), self.p))
+        core.activity(self.c, "bo")
+        self.assertEqual(core._item(self.c, self.p)["status"], "open")
+        self.assertIsNone(core._item(self.c, n)["reserved_for"])
+        self.assertEqual([m["kind"] for m in core.inbox(self.c, "ag")], ["notice"])
+        core.keep(self.c, self.p, "ag")
+        self.assertEqual(core._item(self.c, self.p)["status"], "held")
+        self.assertEqual(core._item(self.c, n)["reserved_for"], "ag")
+        core.release(self.c, self.p, actor="ag")
+        self.assertIsNone(core._item(self.c, n)["reserved_for"])
+        core.claim(self.c, n, "bo")
+        with self.assertRaises(RiverError):
+            core.keep(self.c, self.p, "ag")  # bo holds the prerequisite now
+
+    def test_dep_with_mode_and_without(self):
+        other = self.add("a", "existing")
+        core.dep_add(self.c, self.p, [other], "ag")  # no mode: the parent stays as it was
+        self.assertEqual(core._item(self.c, self.p)["status"], "in_progress")
+        core.dep_add(self.c, self.p, [other], "ag", mode="release")
+        self.assertEqual(core._item(self.c, self.p)["status"], "open")
+
+
 if __name__ == "__main__":
     unittest.main()

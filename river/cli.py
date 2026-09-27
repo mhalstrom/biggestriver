@@ -96,6 +96,10 @@ def _fmt_item(a, show_reason=True):
         flags.append("ready")
     if a["doer"] != "any":
         flags.append(a["doer"])
+    if a.get("reserved_for") and a["status"] == "open":
+        flags.append(f"reserved for {a['reserved_for']}")
+    if a.get("replan"):
+        flags.append("replan")
     if a.get("same_project"):
         flags.append("same project as your earlier work")
     elif a.get("distance") is not None:
@@ -147,6 +151,8 @@ def _print_show(a):
             for d in a["conflicts_detail"]))
     if a.get("lease_expires_at"):
         print("  lease until:", a["lease_expires_at"])
+    if a.get("hold_expires_at"):
+        print("  held until:", a["hold_expires_at"], "(renewed by your commands; river release ends it)")
     if a.get("output"):
         print("  output:", a["output"])
     if a.get("message_count"):
@@ -155,6 +161,8 @@ def _print_show(a):
         print(f"  ship requested: joins deploy item #{a['shipped_in']}")
     if a.get("now_ready"):
         print("  now ready:", ", ".join(f"#{i}" for i in a["now_ready"]))
+    if a.get("resumed"):
+        print("  back in progress for its holder:", ", ".join(f"#{i}" for i in a["resumed"]))
     for e in a.get("events", [])[:8]:
         print(f"  {e['at']} {e['actor']}: {e['change']}")
 
@@ -205,6 +213,8 @@ def _footer(conn, actor):
             if h["lease_expires_at"]:
                 mins = int((core.parse_iso(h["lease_expires_at"]) - core.now()).total_seconds() // 60)
                 parts.append(f"#{h['id']} {mins}m left")
+            elif h.get("hold_expires_at"):
+                parts.append(f"#{h['id']} held {core._short(core.parse_iso(h['hold_expires_at']) - core.now())} left")
             else:
                 parts.append(f"#{h['id']}")
         bits.append(f"holds {', '.join(parts)}")
@@ -278,6 +288,12 @@ def build_parser():
     x.add_argument("--context", default="", help="what a new agent must know to start: why, where, decisions made")
     x.add_argument("--touches", nargs="*", default=[], help="files or directories it changes")
     x.add_argument("--check", default="", help="command that shows it works (tests, a build)")
+    x.add_argument("--blocks", type=int, help="item that must wait on this new one (usually the one you hold)")
+    g = x.add_mutually_exclusive_group()
+    g.add_argument("--keep", dest="mode", action="store_const", const="keep",
+                   help="with --blocks: keep holding that item and do this one yourself now")
+    g.add_argument("--release", dest="mode", action="store_const", const="release",
+                   help="with --blocks: give that item back; anyone can do this one (the default)")
 
     x = sub.add_parser("edit", help="change title, notes, doer, or project")
     x.add_argument("id", type=int); x.add_argument("--title"); x.add_argument("--notes")
@@ -331,6 +347,12 @@ def build_parser():
     x.add_argument("--kind", default="blocks", choices=core.DEP_KINDS,
                    help="blocks: wait for it (default); feeds: wait, then read its output; "
                         "conflicts: no order, never in progress together")
+    g = x.add_mutually_exclusive_group()
+    g.add_argument("--keep", dest="mode", action="store_const", const="keep",
+                   help="you hold <id>: keep it and do the prerequisites yourself")
+    g.add_argument("--release", dest="mode", action="store_const", const="release",
+                   help="you hold <id>: give it back while the prerequisites wait")
+    x = sub.add_parser("keep", help="hold an item again while you do its open prerequisites"); x.add_argument("id", type=int)
     x = sub.add_parser("undep", help="remove waits or conflict links"); x.add_argument("id", type=int); x.add_argument("--on", type=int, nargs="+", required=True)
     x = sub.add_parser("blocked", help="record a blocker outside the queue"); x.add_argument("id", type=int); x.add_argument("--reason", required=True)
     x = sub.add_parser("unblock", help="clear an outside blocker"); x.add_argument("id", type=int)
@@ -530,8 +552,10 @@ def dispatch(conn, a, actor):
             return core.target_give(conn, a.name, a.to, actor)
         return core.target_list(conn)
     if c == "add":
+        if a.mode and a.blocks is None:
+            raise RiverError("--keep and --release go with --blocks <id>")
         return core.item_add(conn, a.project, a.title, a.priority, a.notes, a.doer, a.after, actor,
-                             a.context, a.touches, a.check)
+                             a.context, a.touches, a.check, a.blocks, a.mode)
     if c == "edit":
         return core.item_edit(conn, a.id, a.title, a.notes, a.doer, a.project, actor, a.context, a.touches, a.check)
     if c == "list":
@@ -565,7 +589,9 @@ def dispatch(conn, a, actor):
     if c == "move":
         return core.item_move(conn, a.id, a.before, a.after, actor)
     if c == "dep":
-        return core.dep_add(conn, a.id, a.on, actor, a.kind)
+        return core.dep_add(conn, a.id, a.on, actor, a.kind, a.mode)
+    if c == "keep":
+        return core.keep(conn, a.id, actor)
     if c == "undep":
         return core.dep_remove(conn, a.id, a.on, actor)
     if c == "blocked":
@@ -715,8 +741,8 @@ def render_go(b):
             "",
             "Rules:",
             f"  - Do this item only. Read `{r} show {it['id']}` again if you need the links.",
-            f"  - It needs something first: {r} add <project> \"<title>\" --doer ai|human, then {r} dep {it['id']} --on <new-id>;",
-            f"    if you will not do that yourself now: {r} release {it['id']} --note \"<why>\" and run go again.",
+            f"  - It needs something first: {r} add <project> \"<title>\" --blocks {it['id']} --keep   (small; you do it now)",
+            f"    or ... --blocks {it['id']} --release   (large or better for someone else; then run go again).",
             f"  - You find other work: {r} add <project> \"<title>\" --notes \"found during #{it['id']}\". Do not do it now.",
             f"  - Waiting on something outside the queue: {r} blocked {it['id']} --reason \"<what>\", release, run go again.",
             f"  - The user must do a step: add it with --doer human and tell the user.",

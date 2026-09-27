@@ -83,6 +83,9 @@ CREATE TABLE IF NOT EXISTS items (
   "check"           TEXT NOT NULL DEFAULT '',
   kind              TEXT NOT NULL DEFAULT 'work',
   target            TEXT,
+  reserved_for      TEXT,
+  hold_expires_at   TEXT,
+  replan            INTEGER NOT NULL DEFAULT 0,
   created_at        TEXT NOT NULL,
   closed_at         TEXT
 );
@@ -213,6 +216,10 @@ def _migrate(conn):
         conn.execute("ALTER TABLE items ADD COLUMN kind TEXT NOT NULL DEFAULT 'work'")
     if "target" not in icols:
         conn.execute("ALTER TABLE items ADD COLUMN target TEXT")
+    if "reserved_for" not in icols:
+        conn.execute("ALTER TABLE items ADD COLUMN reserved_for TEXT")
+        conn.execute("ALTER TABLE items ADD COLUMN hold_expires_at TEXT")
+        conn.execute("ALTER TABLE items ADD COLUMN replan INTEGER NOT NULL DEFAULT 0")
 
 
 class tx:
@@ -558,7 +565,7 @@ def touches_list(text):
 
 
 def item_add(conn, project, title, priority=2, notes="", doer="any", after=(), actor=None,
-             context="", touches=None, check=""):
+             context="", touches=None, check="", blocks=None, mode=None):
     if doer not in DOERS:
         raise RiverError(f"doer is one of {', '.join(DOERS)}")
     if not (0 <= int(priority) <= 4):
@@ -576,6 +583,9 @@ def item_add(conn, project, title, priority=2, notes="", doer="any", after=(), a
         for b in after:
             _dep_add(conn, iid, int(b), actor)
         _sync_conflicts(conn, iid, actor)
+        if blocks is not None:
+            _dep_add(conn, int(blocks), iid, actor)
+            _prereq_mode(conn, int(blocks), [iid], actor, mode)
     return item_show(conn, iid)
 
 
@@ -693,10 +703,13 @@ def _dep_add(conn, item_id, blocked_by, actor, kind="blocks", auto=False):
     _event(conn, item_id, actor, f"waits on {blocked_by}" + (" (feeds)" if kind == "feeds" else ""))
 
 
-def dep_add(conn, item_id, on, actor=None, kind="blocks"):
+def dep_add(conn, item_id, on, actor=None, kind="blocks", mode=None):
+    """Link items. With mode keep or release, also hold or release the parent (design 7.3)."""
     with tx(conn):
         for b in on:
             _dep_add(conn, int(item_id), int(b), actor, kind)
+        if mode and kind != "conflicts":
+            _prereq_mode(conn, int(item_id), [int(b) for b in on], actor, mode)
     return item_show(conn, item_id)
 
 
@@ -735,6 +748,98 @@ def _sync_conflicts(conn, item_id, actor):
         _event(conn, it["id"], actor, f"no longer conflicts with {other} (touches no longer overlap)")
     for other in sorted(want - have):
         _dep_add(conn, it["id"], other, actor, "conflicts", auto=True)
+
+
+def _open_prereqs(conn, item_id):
+    return [r["id"] for r in conn.execute(
+        "SELECT i.id FROM deps d JOIN items i ON i.id=d.blocked_by "
+        f"WHERE d.item_id=? AND d.kind<>'conflicts' AND i.status IN {OPEN_STATES}", (item_id,))]
+
+
+def _hold(conn, parent, actor, reserve):
+    ttl = parse_duration(setting(conn, "hold_ttl", item_id=parent, agent=actor))
+    conn.execute("UPDATE items SET status='held', assignee=?, lease_expires_at=NULL, hold_expires_at=? WHERE id=?",
+                 (actor, iso(now() + ttl), parent))
+    for r in reserve:
+        conn.execute("UPDATE items SET reserved_for=? WHERE id=? AND status='open' AND reserved_for IS NULL", (actor, r))
+    _event(conn, parent, actor, f"held by {actor} while it does " + ", ".join(f"#{r}" for r in reserve))
+
+
+def _unhold(conn, parent, actor, why):
+    """Turn a hold into a release: the parent is open to everyone and its reservations end."""
+    it = _item(conn, parent)
+    conn.execute("UPDATE items SET status='open', assignee=NULL, claimed_at=NULL, lease_expires_at=NULL, "
+                 "hold_expires_at=NULL WHERE id=?", (parent,))
+    if it["assignee"]:
+        for r in _open_prereqs(conn, parent):
+            conn.execute("UPDATE items SET reserved_for=NULL WHERE id=? AND reserved_for=?", (r, it["assignee"]))
+    _event(conn, parent, actor, why)
+
+
+def _prereq_mode(conn, parent, new, actor, mode):
+    """After prerequisites land on a parent: keep it (hold) or release it, per design 7.3."""
+    p = _item(conn, parent)
+    if p["status"] not in ("in_progress", "held") or p["assignee"] != actor:
+        if mode == "keep":
+            raise RiverError(f"--keep needs you to hold #{parent}; it is {p['status']}"
+                             + (f" (held by {p['assignee']})" if p["assignee"] else ""))
+        return
+    mode = mode or setting(conn, "default_prerequisite_mode", item_id=parent, agent=actor)
+    if mode == "keep":
+        limit = int(setting(conn, "keep_prereq_limit", item_id=parent, agent=actor))
+        n = len(_open_prereqs(conn, parent))
+        if n > limit:
+            conn.execute("UPDATE items SET replan=1 WHERE id=?", (parent,))
+            _unhold(conn, parent, actor, f"released, not kept: {n} open prerequisites is more than "
+                    f"keep_prereq_limit {limit}; marked replan")
+            return
+        _hold(conn, parent, actor, new)
+    else:
+        _unhold(conn, parent, actor, "released: new prerequisites " + ", ".join(f"#{r}" for r in new))
+
+
+def keep(conn, item_id, actor=None):
+    """Turn a release back into a hold: own the parent again and reserve its free open prerequisites."""
+    if not actor:
+        raise RiverError("keeping needs an agent name: set RIVER_AGENT or pass --as <name>")
+    with tx(conn):
+        _sweep(conn)
+        p = _item(conn, item_id)
+        if p["status"] == "held" and p["assignee"] == actor:
+            return item_show(conn, item_id)
+        if p["status"] not in ("open", "in_progress") or (p["assignee"] and p["assignee"] != actor):
+            raise RiverError(f"#{item_id} is {p['status']}" + (f" by {p['assignee']}" if p["assignee"] else "")
+                             + "; only an open item, or one you hold, can be kept")
+        prereqs = _open_prereqs(conn, item_id)
+        if not prereqs:
+            raise RiverError(f"#{item_id} waits on nothing open; claim it instead: river claim {item_id}")
+        taken = [r for r in conn.execute(
+            f"SELECT id, assignee, reserved_for FROM items WHERE id IN ({','.join('?' * len(prereqs))})", prereqs)
+            if (r["assignee"] and r["assignee"] != actor) or (r["reserved_for"] and r["reserved_for"] != actor)]
+        if taken:
+            raise RiverError("refused: " + ", ".join(f"#{r['id']} is taken by {r['assignee'] or r['reserved_for']}"
+                                                    for r in taken) + f"; #{item_id} stays open")
+        limit = int(setting(conn, "keep_prereq_limit", item_id=item_id, agent=actor))
+        if len(prereqs) > limit:
+            raise RiverError(f"refused: #{item_id} has {len(prereqs)} open prerequisites, more than keep_prereq_limit "
+                             f"{limit}. Plan it instead: split the work, or let other agents take the prerequisites")
+        _agent(conn, actor)
+        _hold(conn, item_id, actor, prereqs)
+    return item_show(conn, item_id)
+
+
+def _resume_holds(conn, closed_id):
+    """A prerequisite closed: every held parent with nothing left open goes back to its holder, in progress."""
+    back = []
+    for r in conn.execute("SELECT i.id, i.assignee FROM deps d JOIN items i ON i.id=d.item_id "
+                          "WHERE d.blocked_by=? AND d.kind<>'conflicts' AND i.status='held'", (closed_id,)).fetchall():
+        if not _open_prereqs(conn, r["id"]):
+            ttl = parse_duration(setting(conn, "lease_ttl", item_id=r["id"], agent=r["assignee"]))
+            conn.execute("UPDATE items SET status='in_progress', hold_expires_at=NULL, claimed_at=?, lease_expires_at=? "
+                         "WHERE id=?", (iso(now()), iso(now() + ttl), r["id"]))
+            _event(conn, r["id"], "river", f"prerequisites done; back in progress for {r['assignee']}")
+            back.append(r["id"])
+    return back
 
 
 def block(conn, item_id, reason, actor=None):
@@ -956,6 +1061,9 @@ def _touch_agent(conn, actor):
         return
     t = now()
     conn.execute("UPDATE agents SET last_seen=? WHERE name=?", (iso(t), actor))
+    for r in conn.execute("SELECT id FROM items WHERE assignee=? AND status='held'", (actor,)).fetchall():
+        ttl = parse_duration(setting(conn, "hold_ttl", item_id=r["id"], agent=actor))
+        conn.execute("UPDATE items SET hold_expires_at=? WHERE id=?", (iso(t + ttl), r["id"]))
     owner_ttl = parse_duration(setting(conn, "owner_ttl", agent=actor))
     conn.execute("UPDATE targets SET owner_expires_at=? WHERE owner=?", (iso(t + owner_ttl), actor))
     for r in conn.execute("SELECT id FROM items WHERE assignee=? AND status='in_progress'", (actor,)).fetchall():
@@ -973,6 +1081,11 @@ def _sweep(conn):
         _event(conn, r["id"], "river", f"lease expired (was {r['assignee']}); back to open")
         _send(conn, "notice", "river", f"your lease on #{r['id']} expired; the item is open again. "
               f"Claim it again if you still work on it: river claim {r['id']}", to=r["assignee"], item_id=r["id"])
+    for r in conn.execute("SELECT id, assignee FROM items WHERE status='held' AND hold_expires_at < ?", (t,)).fetchall():
+        _unhold(conn, r["id"], "river", f"hold expired (was {r['assignee']}); released")
+        _send(conn, "notice", "river", f"your hold on #{r['id']} expired, so it is open to every agent now, and its "
+              f"prerequisites are no longer reserved for you. Hold it again: river keep {r['id']}",
+              to=r["assignee"], item_id=r["id"])
     for r in conn.execute("SELECT name, owner FROM targets WHERE owner IS NOT NULL AND owner_expires_at < ?",
                           (t,)).fetchall():
         conn.execute("UPDATE targets SET owner=NULL, owner_expires_at=NULL WHERE name=?", (r["name"],))
@@ -1046,7 +1159,8 @@ def agent_status(conn, name):
     a = dict(_agent(conn, name))
     a["state"] = _agent_state(conn, a)
     a["holds"] = [dict(r) for r in conn.execute(
-        "SELECT id, title, status, lease_expires_at FROM items WHERE assignee=? AND status IN ('in_progress','held') ORDER BY id",
+        "SELECT id, title, status, lease_expires_at, hold_expires_at FROM items WHERE assignee=? "
+        "AND status IN ('in_progress','held') ORDER BY id",
         (name,))]
     a["owns"] = [dict(r) for r in conn.execute(
         "SELECT name, owner_expires_at FROM targets WHERE owner=? ORDER BY name", (name,))]
@@ -1072,9 +1186,15 @@ def _claim_row(conn, item_id, actor):
     if ag["role"] == "planner":
         raise RiverError(f"refused: {actor} is a planner session; planners change the plan and do not take work. "
                          f"To work instead, run: river --as {actor} go")
+    it0 = _item(conn, item_id)
+    if it0["reserved_for"] and it0["reserved_for"] != actor:
+        raise RiverError(f"refused: #{item_id} is reserved for {it0['reserved_for']}, who holds the item it unblocks")
     limit = int(setting(conn, "max_leases", agent=actor))
-    held = conn.execute("SELECT COUNT(*) c FROM items WHERE assignee=? AND status IN ('in_progress','held')",
-                        (actor,)).fetchone()["c"]
+    # A hold does not use up a lease when the agent takes one of its own reserved prerequisites.
+    count_sql = ("SELECT COUNT(*) c FROM items WHERE assignee=? AND status='in_progress'"
+                 if it0["reserved_for"] == actor else
+                 "SELECT COUNT(*) c FROM items WHERE assignee=? AND status IN ('in_progress','held')")
+    held = conn.execute(count_sql, (actor,)).fetchone()["c"]
     if held >= limit:
         raise RiverError(f"refused: {actor} already holds {held} item(s) (max_leases {limit}). "
                          f"Finish one (river done <id>), release one (river release <id>), "
@@ -1111,7 +1231,8 @@ def next_item(conn, project=None, unblocks=None, claim=False, actor=None, limit=
         if not actor:
             return pool
         owned = {r["name"] for r in conn.execute("SELECT name FROM targets WHERE owner=?", (actor,))}
-        return [a for a in pool if a["kind"] != "deploy" or a["target"] in owned]
+        return [a for a in pool if (a["kind"] != "deploy" or a["target"] in owned)
+                and a["reserved_for"] in (None, actor)]
 
     if not claim:
         return [{k: v for k, v in a.items() if k != 'sort_key'}
@@ -1147,15 +1268,18 @@ def _close(conn, item_id, status, actor, output=None):
             raise RiverError(f"item {item_id} is already {it['status']}")
         if it["assignee"] and actor and it["assignee"] != actor:
             raise RiverError(f"item {item_id} is held by {it['assignee']}; ask them, or release it first")
-        conn.execute("UPDATE items SET status=?, closed_at=?, lease_expires_at=NULL, output=COALESCE(?, output) WHERE id=?",
+        conn.execute("UPDATE items SET status=?, closed_at=?, lease_expires_at=NULL, hold_expires_at=NULL, "
+                     "reserved_for=NULL, output=COALESCE(?, output) WHERE id=?",
                      (status, iso(now()), output, it["id"]))
         _event(conn, it["id"], actor, status + (f": {output}" if output else ""))
-        newly = []
+        newly, resumed = [], []
         if status in CLOSED_STATES:
+            resumed = _resume_holds(conn, it["id"])
             ann = annotate(conn)
             newly = [d for d in ann[it["id"]]["unblocks"] if ann[d]["ready"]]
     res = item_show(conn, item_id)
     res["now_ready"] = newly
+    res["resumed"] = resumed
     return res
 
 
@@ -1225,9 +1349,7 @@ def release(conn, item_id, note=None, actor=None):
             raise RiverError(f"item {item_id} is {it['status']}; only a claimed item can be released")
         if actor and it["assignee"] != actor:
             raise RiverError(f"item {item_id} is held by {it['assignee']}, not {actor}")
-        conn.execute("UPDATE items SET status='open', assignee=NULL, claimed_at=NULL, lease_expires_at=NULL WHERE id=?",
-                     (it["id"],))
-        _event(conn, it["id"], actor, "released" + (f": {note}" if note else ""))
+        _unhold(conn, it["id"], actor, "released" + (f": {note}" if note else ""))
     return item_show(conn, item_id)
 
 
@@ -1663,9 +1785,24 @@ def go(conn, cwd, actor=None, project=None, role=None):
              "messages": unread(conn, actor)}
 
     # Resume: an item already held.
-    held = conn.execute("SELECT id FROM items WHERE assignee=? AND status IN ('in_progress','held') ORDER BY id",
-                        (actor,)).fetchall()
+    held = conn.execute("SELECT id FROM items WHERE assignee=? AND status IN ('in_progress','held') "
+                        "ORDER BY status='held', id", (actor,)).fetchall()
     if held and role in (None, "worker", "unblocker"):
+        parent = _item(conn, held[0]["id"])
+        if parent["status"] == "held":
+            ann = annotate(conn)
+            mine = sorted((ann[b] for b in _open_prereqs(conn, parent["id"])
+                           if ann[b]["ready"] and ann[b]["reserved_for"] == actor), key=lambda a: a["sort_key"])
+            if mine:
+                try:
+                    item = claim(conn, mine[0]["id"], actor)
+                except RiverError as e:
+                    brief["claim_refused"] = str(e)
+                else:
+                    brief.update(role="worker", item=item,
+                                 why=f"you hold #{parent['id']}; #{item['id']} is a prerequisite reserved for you")
+                    _set_role_note(conn, actor, "worker", item["id"])
+                    return brief
         item = item_show(conn, held[0]["id"])
         brief.update(role="worker", resumed=True, item=item,
                      why=f"you already hold #{item['id']}; finish or release it first")
