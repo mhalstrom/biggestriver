@@ -410,5 +410,80 @@ class Context(Base):
         self.assertTrue({"context", "touches", "check"} <= cols)
 
 
+class Kinds(Base):
+    def setUp(self):
+        super().setUp()
+        core.project_add(self.c, "a")
+        core.register(self.c, "ag")
+        core.register(self.c, "bo")
+
+    def test_overlapping_touches_conflict_automatically(self):
+        api = core.item_add(self.c, "a", "api", touches=["src/api.py"])["id"]
+        whole = core.item_add(self.c, "a", "src dir", touches=["src/"])["id"]
+        docs = core.item_add(self.c, "a", "docs", touches=["README.md"])["id"]
+        ann = core.annotate(self.c)
+        self.assertEqual(ann[whole]["conflicts"], [api])
+        self.assertEqual(ann[docs]["conflicts"], [])
+        core.claim(self.c, api, "ag")
+        ann = core.annotate(self.c)
+        self.assertFalse(ann[whole]["ready"])
+        self.assertEqual(ann[whole]["busy_conflicts"], [api])
+        self.assertTrue(ann[docs]["ready"])
+        with self.assertRaises(RiverError):
+            core.claim(self.c, whole, "bo")
+        self.assertEqual([a["id"] for a in core.ready_list(self.c)], [docs])
+        core.done(self.c, api, "ok", "ag")
+        self.assertTrue(core.annotate(self.c)[whole]["ready"])
+
+    def test_touch_edit_adds_and_removes_auto_conflicts(self):
+        x = core.item_add(self.c, "a", "x", touches=["a.py"])["id"]
+        y = core.item_add(self.c, "a", "y", touches=["b.py"])["id"]
+        self.assertEqual(core.annotate(self.c)[x]["conflicts"], [])
+        core.item_edit(self.c, y, touches=["a.py"])
+        self.assertEqual(core.annotate(self.c)[x]["conflicts"], [y])
+        core.item_edit(self.c, y, touches=["c.py"])
+        self.assertEqual(core.annotate(self.c)[x]["conflicts"], [])
+
+    def test_manual_conflict_and_order_replaces_it(self):
+        x, y = self.add("a", "x"), self.add("a", "y")
+        core.dep_add(self.c, x, [y], kind="conflicts")
+        self.assertEqual(core.annotate(self.c)[y]["conflicts"], [x])
+        self.assertEqual(core.annotate(self.c)[y]["waits_on"], [])
+        core.dep_add(self.c, y, [x])  # an order between them replaces the conflict link
+        ann = core.annotate(self.c)
+        self.assertEqual((ann[y]["conflicts"], ann[y]["waits_on"]), ([], [x]))
+        with self.assertRaises(RiverError):
+            core.dep_add(self.c, x, [y], kind="conflicts")
+        core.dep_remove(self.c, y, [x])
+        core.dep_add(self.c, y, [x], kind="conflicts")
+        core.dep_remove(self.c, x, [y])  # either side removes a conflict
+        self.assertEqual(core.annotate(self.c)[y]["conflicts"], [])
+
+    def test_feeds_waits_then_shows_output(self):
+        up = self.add("a", "up")
+        down = self.add("a", "down")
+        core.dep_add(self.c, down, [up], kind="feeds")
+        self.assertFalse(core.annotate(self.c)[down]["ready"])
+        core.done(self.c, up, "made get_user(id)", "t")
+        got = core.item_show(self.c, down)
+        self.assertTrue(got["ready"])
+        self.assertEqual([(f["id"], f["output"]) for f in got["fed_by_detail"]], [(up, "made get_user(id)")])
+
+    def test_conflicting_ready_items_are_one_slot(self):
+        core.item_add(self.c, "a", "x", touches=["f.py"])
+        core.item_add(self.c, "a", "y", touches=["f.py"])
+        core.item_add(self.c, "a", "z", touches=["g.py"])
+        cap = core.capacity(self.c)  # setUp registers two idle agents
+        self.assertEqual(cap["spare_slots"] + len(cap["agents_idle"]) - cap["excess_sessions"], 2)
+        self.assertEqual(len(cap["ready_for_agents"]), 3)
+
+    def test_conflicts_do_not_count_as_cycles(self):
+        x, y = self.add("a", "x"), self.add("a", "y")
+        z = self.add("a", "z", after=[x])
+        core.dep_add(self.c, z, [y], kind="conflicts")
+        core.dep_add(self.c, x, [y])  # no loop: conflicts have no direction
+        self.assertEqual(core.annotate(self.c)[x]["waits_on"], [y])
+
+
 if __name__ == "__main__":
     unittest.main()

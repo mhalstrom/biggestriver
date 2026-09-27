@@ -17,6 +17,9 @@ DEFAULT_DB = Path(__file__).resolve().parent.parent / "data" / "river.db"
 OPEN_STATES = ("open", "in_progress", "held")
 CLOSED_STATES = ("done", "dropped")
 DOERS = ("any", "ai", "human")
+# blocks: wait for it. feeds: wait for it, then read its output. conflicts: no
+# order, but never in progress at the same time (both edit the same files).
+DEP_KINDS = ("blocks", "feeds", "conflicts")
 
 # Messages. An alert asks for attention now, a question waits for an answer,
 # a note is for information, a notice comes from river itself, and an offer
@@ -85,6 +88,7 @@ CREATE TABLE IF NOT EXISTS deps (
   item_id     INTEGER NOT NULL REFERENCES items(id),
   blocked_by  INTEGER NOT NULL REFERENCES items(id),
   kind        TEXT NOT NULL DEFAULT 'blocks',
+  auto        INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (item_id, blocked_by),
   CHECK (item_id <> blocked_by)
 );
@@ -193,6 +197,8 @@ def _migrate(conn):
         conn.execute("ALTER TABLE projects ADD COLUMN path TEXT")
     if "target" not in cols:
         conn.execute("ALTER TABLE projects ADD COLUMN target TEXT")
+    if "auto" not in {r["name"] for r in conn.execute("PRAGMA table_info(deps)")}:
+        conn.execute("ALTER TABLE deps ADD COLUMN auto INTEGER NOT NULL DEFAULT 0")
     icols = {r["name"] for r in conn.execute("PRAGMA table_info(items)")}
     for col in ("context", "touches", "check"):
         if col not in icols:
@@ -503,6 +509,7 @@ def item_add(conn, project, title, priority=2, notes="", doer="any", after=(), a
         _event(conn, iid, actor, f"added to {project} at P{priority}")
         for b in after:
             _dep_add(conn, iid, int(b), actor)
+        _sync_conflicts(conn, iid, actor)
     return item_show(conn, iid)
 
 
@@ -529,6 +536,8 @@ def item_edit(conn, item_id, title=None, notes=None, doer=None, project=None, ac
             if val is not None and val != it[col]:
                 conn.execute(f'UPDATE items SET "{col}"=? WHERE id=?', (val, it["id"]))
                 _event(conn, it["id"], actor, f"{col} changed")
+                if col == "touches":
+                    _sync_conflicts(conn, it["id"], actor)
     return item_show(conn, item_id)
 
 
@@ -577,33 +586,89 @@ def _reachable(conn, start, edges_sql):
     return seen
 
 
-def _dep_add(conn, item_id, blocked_by, actor):
+def _link(conn, a, b):
+    """Any dependency row between two items, in either direction."""
+    return conn.execute("SELECT * FROM deps WHERE (item_id=? AND blocked_by=?) OR (item_id=? AND blocked_by=?)",
+                        (a, b, b, a)).fetchone()
+
+
+def _dep_add(conn, item_id, blocked_by, actor, kind="blocks", auto=False):
+    if kind not in DEP_KINDS:
+        raise RiverError(f"dependency kind is one of {', '.join(DEP_KINDS)}")
     _item(conn, item_id)
     _item(conn, blocked_by)
     if item_id == blocked_by:
         raise RiverError("an item cannot wait on itself")
+    if kind == "conflicts":
+        # Symmetric and without order. An order between the two already keeps them apart.
+        lo, hi = sorted((item_id, blocked_by))
+        link = _link(conn, lo, hi)
+        if link and link["kind"] != "conflicts":
+            if auto:
+                return
+            raise RiverError(f"#{link['item_id']} already waits on #{link['blocked_by']} ({link['kind']}), "
+                             f"so they never run at the same time; no conflict link needed")
+        if link:
+            return
+        conn.execute("INSERT INTO deps(item_id,blocked_by,kind,auto) VALUES (?,?,?,?)", (lo, hi, kind, int(auto)))
+        _event(conn, lo, actor, f"conflicts with {hi}" + (" (touches overlap)" if auto else ""))
+        _event(conn, hi, actor, f"conflicts with {lo}" + (" (touches overlap)" if auto else ""))
+        return
     # Adding item -> blocked_by makes a cycle when item is already a prerequisite of blocked_by.
-    upstream_of_blocker = _reachable(conn, blocked_by, "SELECT blocked_by FROM deps WHERE item_id=?")
+    upstream_of_blocker = _reachable(conn, blocked_by, "SELECT blocked_by FROM deps WHERE item_id=? AND kind<>'conflicts'")
     if item_id in upstream_of_blocker:
         raise RiverError(f"refused: item {blocked_by} already waits on item {item_id} (directly or through other items); "
                          f"this dependency would make a loop")
-    conn.execute("INSERT OR IGNORE INTO deps(item_id,blocked_by) VALUES (?,?)", (item_id, blocked_by))
-    _event(conn, item_id, actor, f"waits on {blocked_by}")
+    # An order replaces a conflict link between the same two items.
+    conn.execute("DELETE FROM deps WHERE kind='conflicts' AND ((item_id=? AND blocked_by=?) OR (item_id=? AND blocked_by=?))",
+                 (item_id, blocked_by, blocked_by, item_id))
+    conn.execute("INSERT INTO deps(item_id,blocked_by,kind) VALUES (?,?,?) "
+                 "ON CONFLICT(item_id,blocked_by) DO UPDATE SET kind=excluded.kind, auto=0", (item_id, blocked_by, kind))
+    _event(conn, item_id, actor, f"waits on {blocked_by}" + (" (feeds)" if kind == "feeds" else ""))
 
 
-def dep_add(conn, item_id, on, actor=None):
+def dep_add(conn, item_id, on, actor=None, kind="blocks"):
     with tx(conn):
         for b in on:
-            _dep_add(conn, int(item_id), int(b), actor)
+            _dep_add(conn, int(item_id), int(b), actor, kind)
     return item_show(conn, item_id)
 
 
 def dep_remove(conn, item_id, on, actor=None):
     with tx(conn):
         for b in on:
-            conn.execute("DELETE FROM deps WHERE item_id=? AND blocked_by=?", (int(item_id), int(b)))
-            _event(conn, int(item_id), actor, f"no longer waits on {b}")
+            i, b = int(item_id), int(b)
+            conn.execute("DELETE FROM deps WHERE (item_id=? AND blocked_by=?) "
+                         "OR (kind='conflicts' AND item_id=? AND blocked_by=?)", (i, b, b, i))
+            _event(conn, i, actor, f"no longer linked to {b}")
     return item_show(conn, item_id)
+
+
+def _paths_overlap(a, b):
+    """Same file, or one path is a directory that holds the other."""
+    a, b = a.rstrip("/"), b.rstrip("/")
+    return a == b or b.startswith(a + "/") or a.startswith(b + "/")
+
+
+def _sync_conflicts(conn, item_id, actor):
+    """Keep automatic conflict links equal to the open items whose touches overlap this item's."""
+    it = _item(conn, item_id)
+    mine = touches_list(it["touches"])
+    want = set()
+    if it["status"] in OPEN_STATES and mine:
+        for r in conn.execute(f"SELECT id, touches FROM items WHERE id<>? AND status IN {OPEN_STATES} AND touches<>''",
+                              (it["id"],)):
+            if any(_paths_overlap(x, y) for x in mine for y in touches_list(r["touches"])):
+                want.add(r["id"])
+    have = {r["item_id"] if r["blocked_by"] == it["id"] else r["blocked_by"] for r in conn.execute(
+        "SELECT item_id, blocked_by FROM deps WHERE kind='conflicts' AND auto=1 AND (item_id=? OR blocked_by=?)",
+        (it["id"], it["id"]))}
+    for other in have - want:
+        lo, hi = sorted((it["id"], other))
+        conn.execute("DELETE FROM deps WHERE item_id=? AND blocked_by=? AND kind='conflicts'", (lo, hi))
+        _event(conn, it["id"], actor, f"no longer conflicts with {other} (touches no longer overlap)")
+    for other in sorted(want - have):
+        _dep_add(conn, it["id"], other, actor, "conflicts", auto=True)
 
 
 def block(conn, item_id, reason, actor=None):
@@ -630,15 +695,23 @@ def _load_graph(conn):
     items = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM items")}
     waits_on = {i: [] for i in items}     # item -> prerequisites
     waited_by = {i: [] for i in items}    # item -> dependents
-    for r in conn.execute("SELECT item_id, blocked_by FROM deps"):
+    conflicts = {i: [] for i in items}   # item -> items it must not run beside
+    feeds = {i: [] for i in items}       # item -> prerequisites whose output it reads
+    for r in conn.execute("SELECT item_id, blocked_by, kind FROM deps"):
+        if r["kind"] == "conflicts":
+            conflicts[r["item_id"]].append(r["blocked_by"])
+            conflicts[r["blocked_by"]].append(r["item_id"])
+            continue
         waits_on[r["item_id"]].append(r["blocked_by"])
         waited_by[r["blocked_by"]].append(r["item_id"])
-    return projects, items, waits_on, waited_by
+        if r["kind"] == "feeds":
+            feeds[r["item_id"]].append(r["blocked_by"])
+    return projects, items, waits_on, waited_by, conflicts, feeds
 
 
 def annotate(conn):
     """Compute readiness, effective priority, unblock counts, and sort keys for every item."""
-    projects, items, waits_on, waited_by = _load_graph(conn)
+    projects, items, waits_on, waited_by, conflicts, feeds = _load_graph(conn)
     is_open = {i: items[i]["status"] in OPEN_STATES for i in items}
 
     # Open dependents, transitive, of each open item.
@@ -675,7 +748,8 @@ def annotate(conn):
         for d in deps_i:
             if items[d]["priority"] < eff:
                 eff, source = items[d]["priority"], d
-        ready = it["status"] == "open" and not open_blockers and not it["blocked_reason"]
+        busy = [c for c in conflicts[i] if items[c]["status"] in ("in_progress", "held")]
+        ready = it["status"] == "open" and not open_blockers and not it["blocked_reason"] and not busy
         a = dict(it)
         a.update(
             touches=touches_list(it["touches"]),
@@ -685,6 +759,9 @@ def annotate(conn):
             waits_on=sorted(waits_on[i]),
             open_blockers=sorted(open_blockers),
             unblocks=sorted(waited_by[i]),
+            fed_by=sorted(feeds[i]),
+            conflicts=sorted(c for c in conflicts[i] if is_open[c]),
+            busy_conflicts=sorted(busy),
             unblocks_count=len(deps_i),
             effective_priority=eff,
             priority_from=source,
@@ -958,6 +1035,8 @@ def claim(conn, item_id, actor=None):
         if not a["ready"]:
             why = (f"waits on {', '.join('#' + str(b) for b in a['open_blockers'])}" if a["open_blockers"]
                    else f"blocked: {a['blocked_reason']}" if a["blocked_reason"]
+                   else f"conflicts with {', '.join('#' + str(b) for b in a['busy_conflicts'])}, which is in progress "
+                        f"(both edit the same files)" if a["busy_conflicts"] and a["status"] == "open"
                    else f"status is {a['status']}" + (f" (held by {a['assignee']})" if a["assignee"] else ""))
             raise RiverError(f"item {item_id} is not ready: {why}. See: river blockers {item_id}")
         _claim_row(conn, a["id"], actor)
@@ -1024,6 +1103,10 @@ def item_show(conn, item_id, ann=None):
     a = {k: v for k, v in ann[iid].items() if k != "sort_key"}
     a["waits_on_detail"] = [{"id": b, "title": ann[b]["title"], "status": ann[b]["status"]} for b in a["waits_on"]]
     a["unblocks_detail"] = [{"id": d, "title": ann[d]["title"], "status": ann[d]["status"]} for d in a["unblocks"]]
+    a["fed_by_detail"] = [{"id": d, "title": ann[d]["title"], "status": ann[d]["status"], "output": ann[d]["output"]}
+                          for d in a["fed_by"]]
+    a["conflicts_detail"] = [{"id": d, "title": ann[d]["title"], "status": ann[d]["status"],
+                              "assignee": ann[d]["assignee"]} for d in a["conflicts"]]
     a["events"] = [dict(r) for r in conn.execute(
         "SELECT at, actor, change FROM events WHERE item_id=? ORDER BY id DESC LIMIT 50", (iid,))]
     a["message_count"] = conn.execute("SELECT COUNT(*) FROM messages WHERE item_id=?", (iid,)).fetchone()[0]
@@ -1057,6 +1140,8 @@ def blockers(conn, item_id):
         return {
             "id": i, "title": a["title"], "status": a["status"], "assignee": a["assignee"],
             "ready": a["ready"], "blocked_reason": a["blocked_reason"], "lease_seconds_left": left,
+            "busy_conflicts": [{"id": c, "title": ann[c]["title"], "assignee": ann[c]["assignee"]}
+                               for c in a["busy_conflicts"]],
             "children": [node(b, trail | {i}) for b in a["waits_on"]
                          if ann[b]["status"] in OPEN_STATES and b not in trail],
         }
@@ -1227,12 +1312,18 @@ def capacity(conn, ann=None):
     """How many agent sessions the graph can use now, and whether too many are running.
 
     Ready items never wait on each other (a ready item has no open prerequisite),
-    so every ready item nobody holds is an independent slot for one session.
+    so every ready item nobody holds is a slot for one session, except that of
+    two ready items that conflict (same files) only one can run.
     """
     ann = ann or annotate(conn)
     live = [a for a in ann.values() if not a["project_archived"]]
     ready = [a for a in live if a["ready"]]
     ready_ai = [a for a in ready if a["doer"] in ("any", "ai")]
+    runnable, taken = 0, set()
+    for a in sorted(ready_ai, key=lambda a: a["sort_key"]):
+        if not taken & set(a["conflicts"]):
+            runnable += 1
+            taken.add(a["id"])
     ready_human = [a for a in ready if a["doer"] == "human"]
     agents = [agent_status(conn, r["name"]) for r in conn.execute("SELECT name FROM agents")]
     ai_active = [a for a in agents if a["kind"] == "ai" and a["state"] == "active"]
@@ -1248,14 +1339,14 @@ def capacity(conn, ann=None):
             layer["human" if a["doer"] == "human" else "ai"] += 1
     layer_list = [layers[k] for k in sorted(layers)]
 
-    spare = len(ready_ai) - len(ai_idle)
+    spare = runnable - len(ai_idle)
     advice = []
     if spare > 0:
-        advice.append({"kind": "launch", "text": f"{spare} ready item(s) for agents have nobody on them: "
+        advice.append({"kind": "launch", "text": f"{spare} ready item(s) for agents can run and have nobody on them: "
                        f"you can start up to {spare} more agent session(s)."})
     if spare < 0:
         advice.append({"kind": "too_many", "text": f"{len(ai_idle)} active agent session(s) hold nothing, "
-                       f"but only {len(ready_ai)} ready item(s) are free for them. "
+                       f"but only {runnable} ready item(s) can run for them now. "
                        f"{-spare} session(s) have no work; stop them or give them other work."})
     if ready_human:
         advice.append({"kind": "human", "text": f"{len(ready_human)} ready item(s) wait on a human."})

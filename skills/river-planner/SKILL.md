@@ -28,6 +28,8 @@ helps. Agents read `river project list` to pick an area.
 river add <project> "<title>" [-p 0-4] [--doer any|ai|human] [--after <id> ...] [--notes "..."]
           [--context "..."] [--touches <file> ...] [--check "<command>"]
 river dep <id> --on <id> ...        # <id> waits on the others
+river dep <id> --on <id> --kind feeds      # waits, then reads their output in its context
+river dep <id> --on <id> --kind conflicts  # no order, never in progress together
 river undep <id> --on <id> ...
 river prio <id> <0-4>               # 0 is most important
 river move <id> --before|--after <id>   # manual order inside a project
@@ -38,8 +40,13 @@ river drop <id> / river reopen <id>
 
 ## How the order works
 
-An item is ready when it is open, has no outside blocker, and everything it
-waits on is done or dropped. Ready items sort by:
+An item is ready when it is open, has no outside blocker, everything it
+waits on is done or dropped, and no item it conflicts with is in progress.
+River adds a conflict by itself when two open items' `--touches` overlap (the
+same file, or a directory and a file in it); change the touches and river
+removes it. Use `feeds` when the later item needs a name, path, or signature
+that the earlier item creates: the earlier item's `--output` shows in the
+later item's briefing. Ready items sort by:
 
 1. Effective priority: the best priority of the item and of every open item
    that waits on it, directly or indirectly. A P3 task that blocks a P0 task

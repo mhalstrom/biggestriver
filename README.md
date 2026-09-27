@@ -81,8 +81,9 @@ the next command to run.
 
 ### How the order works
 
-An item is ready when it is open, has no outside blocker, and everything it
-waits on is done. Inside the area an agent chooses, ready items sort by:
+An item is ready when it is open, has no outside blocker, everything it
+waits on is done, and no item that edits the same files (a `conflicts` link,
+added when `--touches` overlap) is in progress. Inside the area an agent chooses, ready items sort by:
 
 1. Effective priority (0 is highest): the best priority of the item and of every
    open item that waits on it.

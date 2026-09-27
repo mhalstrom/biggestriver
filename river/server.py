@@ -41,7 +41,7 @@ OPS = {
                                                   a.get("check")),
     "prio": lambda c, a, who: core.item_prio(c, a["id"], a["priority"], who),
     "move": lambda c, a, who: core.item_move(c, a["id"], a.get("before"), a.get("after"), who),
-    "dep_add": lambda c, a, who: core.dep_add(c, a["id"], [int(x) for x in a["on"]], who),
+    "dep_add": lambda c, a, who: core.dep_add(c, a["id"], [int(x) for x in a["on"]], who, a.get("kind", "blocks")),
     "dep_remove": lambda c, a, who: core.dep_remove(c, a["id"], [int(x) for x in a["on"]], who),
     "claim": lambda c, a, who: core.claim(c, a["id"], who),
     "next_claim": lambda c, a, who: core.next_item(c, a.get("project"), a.get("unblocks"), True, who, 1, a.get("near"),

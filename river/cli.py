@@ -89,6 +89,8 @@ def _fmt_item(a, show_reason=True):
         flags.append("waits on " + ",".join(f"#{b}" for b in a["open_blockers"]))
     elif a["blocked_reason"]:
         flags.append(f"blocked: {a['blocked_reason']}")
+    elif a.get("busy_conflicts"):
+        flags.append("conflicts with " + ",".join(f"#{b}" for b in a["busy_conflicts"]) + " (in progress)")
     else:
         flags.append("ready")
     if a["doer"] != "any":
@@ -114,6 +116,9 @@ def _context_lines(a, indent="  "):
         out.append(f"{indent}touches: {', '.join(a['touches'])}")
     if a.get("check"):
         out.append(f"{indent}check:   {a['check']}")
+    for f in a.get("fed_by_detail", []):
+        if f["output"]:
+            out.append(f"{indent}from #{f['id']}: {f['output']}")
     return out
 
 
@@ -127,6 +132,10 @@ def _print_show(a):
         print("  waits on:", ", ".join(f"#{d['id']} {d['title']} ({d['status']})" for d in a["waits_on_detail"]))
     if a["unblocks_detail"]:
         print("  unblocks:", ", ".join(f"#{d['id']} {d['title']} ({d['status']})" for d in a["unblocks_detail"]))
+    if a.get("conflicts_detail"):
+        print("  conflicts with (never in progress together):", ", ".join(
+            f"#{d['id']} {d['title']} ({d['status']}" + (f" by {d['assignee']}" if d["assignee"] else "") + ")"
+            for d in a["conflicts_detail"]))
     if a.get("lease_expires_at"):
         print("  lease until:", a["lease_expires_at"])
     if a.get("output"):
@@ -145,6 +154,8 @@ def _print_tree(n, prefix="", last=True, root=True):
     state = "ready" if n["ready"] else n["status"]
     if n["blocked_reason"]:
         state += f', blocked: "{n["blocked_reason"]}"'
+    for c in n.get("busy_conflicts", []):
+        state += f", conflicts with #{c['id']} held by {c['assignee']}"
     label = f"#{n['id']} {n['title']}  ({state}{who})"
     if root:
         print(label)
@@ -288,8 +299,12 @@ def build_parser():
     x = sub.add_parser("move", help="manual order inside a project")
     x.add_argument("id", type=int); g = x.add_mutually_exclusive_group(required=True)
     g.add_argument("--before", type=int); g.add_argument("--after", type=int)
-    x = sub.add_parser("dep", help="make an item wait on others"); x.add_argument("id", type=int); x.add_argument("--on", type=int, nargs="+", required=True)
-    x = sub.add_parser("undep", help="remove waits"); x.add_argument("id", type=int); x.add_argument("--on", type=int, nargs="+", required=True)
+    x = sub.add_parser("dep", help="make an item wait on others, or mark items that must not run together")
+    x.add_argument("id", type=int); x.add_argument("--on", type=int, nargs="+", required=True)
+    x.add_argument("--kind", default="blocks", choices=core.DEP_KINDS,
+                   help="blocks: wait for it (default); feeds: wait, then read its output; "
+                        "conflicts: no order, never in progress together")
+    x = sub.add_parser("undep", help="remove waits or conflict links"); x.add_argument("id", type=int); x.add_argument("--on", type=int, nargs="+", required=True)
     x = sub.add_parser("blocked", help="record a blocker outside the queue"); x.add_argument("id", type=int); x.add_argument("--reason", required=True)
     x = sub.add_parser("unblock", help="clear an outside blocker"); x.add_argument("id", type=int)
     x = sub.add_parser("blockers", help="tree of what an item waits on"); x.add_argument("id", type=int)
@@ -511,7 +526,7 @@ def dispatch(conn, a, actor):
     if c == "move":
         return core.item_move(conn, a.id, a.before, a.after, actor)
     if c == "dep":
-        return core.dep_add(conn, a.id, a.on, actor)
+        return core.dep_add(conn, a.id, a.on, actor, a.kind)
     if c == "undep":
         return core.dep_remove(conn, a.id, a.on, actor)
     if c == "blocked":
