@@ -96,6 +96,8 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; padding
 .agent:first-child { border-top: none; }
 .agent .nm { font-weight: 600; }
 .agent .st { font-size: 12px; color: var(--muted); }
+.agent.drop { outline: 2px dashed var(--accent); outline-offset: 2px; border-radius: 6px; }
+.row[draggable="true"] { cursor: grab; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
 .dot.active { background: var(--ready); } .dot.away { background: var(--prog); } .dot.gone { background: var(--done); }
 .form { display: grid; gap: 8px; }
@@ -284,6 +286,10 @@ async function act(op, args) {
 }
 
 function statusChip(it) {
+  const pushed = it.status === "open" && it.reserved_until ? `<span class="chip c-human" title="pushed by ${esc(it.reserved_by || "?")}">pushed · ${esc(it.reserved_for)}</span>` : "";
+  return pushed + baseStatusChip(it);
+}
+function baseStatusChip(it) {
   if (it.status === "open") {
     if (it.ready) return `<span class="chip c-ready">ready</span>`;
     if (it.blocked_reason) return `<span class="chip c-blocked" title="${esc(it.blocked_reason)}">blocked</span>`;
@@ -299,7 +305,7 @@ function prioChip(it) {
 function doerChip(it) { return it.doer === "any" ? "" : `<span class="chip c-${it.doer}">${it.doer === "human" ? "human" : "agent"}</span>`; }
 
 function rowHtml(it, why) {
-  return `<div class="row" data-id="${it.id}">
+  return `<div class="row" data-id="${it.id}"${it.status === "open" ? ' draggable="true"' : ""}>
     <div class="id">#${it.id}</div>
     <div class="t"><div class="title">${esc(it.title)}</div>${why ? `<div class="why">${esc(why)}</div>` : ""}</div>
     <div class="chips">${prioChip(it)}${doerChip(it)}${statusChip(it)}</div></div>`;
@@ -359,10 +365,11 @@ function ago(iso) {
 function left(iso) { const m = Math.round((Date.parse(iso) - Date.now()) / 60000); return m >= 60 * 24 ? Math.round(m / 1440) + "d" : m >= 60 ? Math.round(m / 60) + "h" : m + "m"; }
 
 function renderAgents() {
-  $("#agents").innerHTML = S.agents.map(a => `<div class="agent">
+  $("#agents").innerHTML = S.agents.map(a => `<div class="agent" data-agent="${esc(a.name)}">
       <div><span class="dot ${a.state}"></span><span class="nm">${esc(a.name)}</span> <span class="chip ${a.kind === "human" ? "c-human" : "c-ai"}">${a.kind === "human" ? "human" : "agent"}</span></div>
       <div class="st">${a.state}, seen ${ago(a.last_seen)}${a.note ? " · " + esc(a.note) : ""}</div>
       ${a.holds.map(h => `<div class="st">holds <span class="link" data-open="${h.id}">#${h.id} ${esc(h.title)}</span>${h.lease_expires_at ? " · " + left(h.lease_expires_at) + " left" : ""}</div>`).join("") || '<div class="st">holds nothing</div>'}
+      ${S.items.filter(i => i.status === "open" && i.reserved_until && i.reserved_for === a.name).map(i => `<div class="st">pushed <span class="link" data-open="${i.id}">#${i.id} ${esc(i.title)}</span> · ${left(i.reserved_until)} left · <span class="link" data-unpush="${i.id}">cancel</span></div>`).join("")}
     </div>`).join("") || `<div class="muted">No agents registered.</div>`;
 }
 
@@ -504,6 +511,12 @@ async function openDrawer(id) {
     </div>
     <div class="sec"><h4>Blocker tree</h4><div class="tree">${esc(treeText(it.tree))}</div></div>
     <div class="sec"><h4>Unblocks</h4>${it.unblocks_detail.map(w => `<div><span class="link" data-open="${w.id}">#${w.id} ${esc(w.title)}</span> <span class="muted">(${w.status})</span></div>`).join("") || '<div class="muted">nothing</div>'}</div>
+    ${it.status === "open" ? `<div class="sec"><h4>Push to agent</h4>
+      ${it.reserved_until ? `<div>Pushed to <b>${esc(it.reserved_for)}</b> by ${esc(it.reserved_by || "?")} · ${left(it.reserved_until)} left · <span class="link" data-unpush="${it.id}">cancel</span></div>`
+        : `<div class="actions"><select id="dPushTo">${S.agents.filter(a => a.name !== actor()).map(a => `<option>${esc(a.name)}</option>`).join("")}</select>
+           <input id="dPushNote" placeholder="note (optional)" style="flex:1"><button class="btn" data-do="push">Push</button></div>
+           <div class="muted" style="font-size:12px;margin-top:4px">Or drag the item row onto an agent. It is reserved for them for a while; their river go takes it first.</div>`}
+    </div>` : ""}
     <div class="sec"><h4>Outside blocker</h4>
       ${it.blocked_reason ? `<div>${esc(it.blocked_reason)} <span class="link" data-do="unblock">clear</span></div>` : `<div class="actions"><input id="dBlock" placeholder="waiting on …" style="flex:1"><button class="btn" data-do="block">Set</button></div>`}
     </div>
@@ -521,6 +534,7 @@ async function drawerAction(what) {
     if (what === "drop") await act("drop", { id });
     if (what === "reopen") await act("reopen", { id });
     if (what === "unblock") await act("unblock", { id });
+    if (what === "push") { const to = $("#dPushTo").value; if (to) { await act("push", { id, to, note: $("#dPushNote").value.trim() || undefined }); toast(`Pushed #${id} to ${to}`); } }
     if (what === "block") { const r = $("#dBlock").value.trim(); if (r) await act("block", { id, reason: r }); }
     if (what === "dep") { const on = $("#dDep").value.split(/[\s,]+/).filter(Boolean).map(Number); if (on.length) await act("dep_add", { id, on }); }
     if (what === "save") {
@@ -621,6 +635,7 @@ document.addEventListener("click", async (e) => {
   if (t.dataset.do) return drawerAction(t.dataset.do);
   if (t.dataset.ny) return needsYouAction(t);
   if (t.id === "notifyOn") { await Notification.requestPermission(); return renderNeedsYou(); }
+  if (t.dataset.unpush) { await act("push_cancel", { id: +t.dataset.unpush }).then(() => toast("Push cancelled")).catch(() => {}); return; }
   if (t.dataset.undep) { await act("dep_remove", { id: openItem, on: [+t.dataset.undep] }).catch(() => {}); return openDrawer(openItem); }
   if (t.dataset.describe) { const p = S.projects.find(x => x.name === t.dataset.describe); const text = prompt(`What does "${p.name}" cover, and what context helps an agent work on it?`, p.notes || ""); if (text !== null) await act("project_describe", { name: p.name, text }).catch(() => {}); return; }
   if (t.dataset.rank) { const to = +t.dataset.to; if (to >= 1) await act("project_rank", { name: t.dataset.rank, rank: to }).catch(() => {}); return; }
@@ -668,6 +683,17 @@ $("#setGo").addEventListener("click", async () => {
 });
 
 if (window.mermaid) mermaid.initialize({ startOnLoad: false, securityLevel: "loose", theme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "default", flowchart: { useMaxWidth: true } });
+// Drag an item row onto an agent to push it there.
+document.addEventListener("dragstart", (e) => { const r = e.target.closest && e.target.closest(".row[draggable]"); if (r) e.dataTransfer.setData("text/river-item", r.dataset.id); });
+document.addEventListener("dragover", (e) => { const a = e.target.closest && e.target.closest("[data-agent]"); if (a && e.dataTransfer.types.includes("text/river-item")) { e.preventDefault(); a.classList.add("drop"); } });
+document.addEventListener("dragleave", (e) => { const a = e.target.closest && e.target.closest("[data-agent]"); if (a) a.classList.remove("drop"); });
+document.addEventListener("drop", async (e) => {
+  const a = e.target.closest && e.target.closest("[data-agent]"); if (!a) return;
+  e.preventDefault(); a.classList.remove("drop");
+  const id = +e.dataTransfer.getData("text/river-item"); if (!id) return;
+  await act("push", { id, to: a.dataset.agent }).then(() => toast(`Pushed #${id} to ${a.dataset.agent}`)).catch(() => {});
+});
+
 function openFromHash() { const m = location.hash.match(/^#item-(\d+)$/); if (m) openDrawer(+m[1]); }
 window.addEventListener("hashchange", openFromHash);
 refresh().then(openFromHash); setInterval(() => { if (!document.hidden) refresh().catch(() => {}); }, 3000);

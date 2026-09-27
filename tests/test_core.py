@@ -1082,6 +1082,14 @@ class Push(Base):
         with self.assertRaises(RiverError):
             core.accept(self.c, self.x, "aa")
 
+    def test_cancel_push_tells_the_agent(self):
+        core.push(self.c, self.x, "aa", None, "boss")
+        core.cancel_push(self.c, self.x, "boss")
+        self.assertIsNone(core._item(self.c, self.x)["reserved_for"])
+        self.assertTrue(any("cancelled" in m["body"] for m in core.inbox(self.c, "aa")))
+        with self.assertRaises(RiverError):
+            core.cancel_push(self.c, self.x, "boss")
+
     def test_push_refusals(self):
         core.claim(self.c, self.first, "bb")
         with self.assertRaises(RiverError):

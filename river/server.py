@@ -46,6 +46,7 @@ OPS = {
     "dep_remove": lambda c, a, who: core.dep_remove(c, a["id"], [int(x) for x in a["on"]], who),
     "claim": lambda c, a, who: core.claim(c, a["id"], who),
     "push": lambda c, a, who: core.push(c, a["id"], a["to"], a.get("note"), who),
+    "push_cancel": lambda c, a, who: core.cancel_push(c, a["id"], who),
     "accept": lambda c, a, who: core.accept(c, a["id"], who),
     "decline": lambda c, a, who: core.decline(c, a["id"], a.get("note"), who),
     "next_claim": lambda c, a, who: core.next_item(c, a.get("project"), a.get("unblocks"), True, who, 1, a.get("near"),

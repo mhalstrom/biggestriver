@@ -969,6 +969,23 @@ def decline(conn, item_id, note=None, actor=None):
     return item_show(conn, item_id)
 
 
+def cancel_push(conn, item_id, actor=None):
+    """Take a push back before it is answered; the agent it went to hears about it."""
+    with tx(conn):
+        it = _item(conn, item_id)
+        if not it["reserved_until"] or it["status"] != "open":
+            raise RiverError(f"#{item_id} has no open push")
+        to = it["reserved_for"]
+        conn.execute("UPDATE items SET reserved_for=NULL, reserved_until=NULL, reserved_by=NULL WHERE id=?", (it["id"],))
+        conn.execute("UPDATE messages SET state='declined', read_at=COALESCE(read_at, ?) "
+                     "WHERE kind='alert' AND item_id=? AND to_agent=? AND state='open'", (iso(now()), it["id"], to))
+        _event(conn, it["id"], actor, f"push to {to} cancelled")
+        if to != actor:
+            _send(conn, "notice", actor or "river", f"the push of #{it['id']} {it['title']} to you was cancelled",
+                  to=to, item_id=it["id"])
+    return item_show(conn, item_id)
+
+
 def _resume_holds(conn, closed_id):
     """A prerequisite closed: every held parent with nothing left open goes back to its holder, in progress."""
     back = []
