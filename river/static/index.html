@@ -88,6 +88,7 @@ main { padding: 16px; max-width: 1500px; margin: 0 auto; }
 .proj-h { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
 .proj-h b { font-size: 15px; }
 .proj-h .counts { color: var(--muted); font-size: 12px; }
+.pdesc { font-size: 12px; color: var(--muted); margin: 0 0 6px 22px; }
 .proj-h .rk { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .iconbtn { background: none; border: 1px solid var(--line); border-radius: 5px; cursor: pointer; padding: 0 6px; color: var(--muted); }
 details summary { cursor: pointer; color: var(--muted); font-size: 12px; padding: 4px 6px; }
@@ -144,7 +145,7 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
         <div class="panel">
           <h2>Next up
             <span class="spacer"></span>
-            <select id="area"><option value="">All projects</option></select>
+            <select id="area"><option value="">All projects</option><option value="__mine">Near my earlier work</option></select>
             <button class="btn primary" id="claimNext">Claim next</button>
           </h2>
           <div id="next"></div>
@@ -286,6 +287,7 @@ function renderCapacity() {
 
 function renderNext() {
   const area = $("#area").value;
+  if (area === "__mine") { $("#next").innerHTML = `<div class="muted">Use <b>Claim next</b>: the server picks the ready item closest to what "${esc(actor() || "(choose Acting as)")}" claimed or finished before.</div>`; return; }
   const ready = S.items.filter(i => i.ready && (!area || i.project === area));
   $("#next").innerHTML = ready.slice(0, 10).map(i => rowHtml(i, i.reason)).join("") || `<div class="muted">Nothing is ready${area ? " in " + esc(area) : ""}.</div>`;
 }
@@ -303,6 +305,7 @@ function renderProjects() {
         <button class="iconbtn" data-rank="${esc(p.name)}" data-to="${p.rank - 1}" title="more important">↑</button>
         <button class="iconbtn" data-rank="${esc(p.name)}" data-to="${p.rank + 1}" title="less important">↓</button>
         <span class="counts">${open.length} open · ${ready} ready · ${prog} in progress · ${closed.length} done</span></div>
+      <div class="pdesc">${p.notes ? esc(p.notes) : '<span class="muted">No description.</span>'} <span class="link" data-describe="${esc(p.name)}">edit</span></div>
       ${open.sort(order).map(i => rowHtml(i, i.notes)).join("")}
       ${showDone && closed.length ? closed.map(i => rowHtml(i, i.output)).join("") : ""}
     </div>`;
@@ -338,7 +341,7 @@ function fillSelect(sel, values, keepFirst) {
 
 function renderSelects() {
   const names = S.projects.map(p => p.name);
-  fillSelect("#area", names, true); fillSelect("#graphProject", names, true); fillSelect("#addProject", names, false);
+  { const el = $("#area"), cur = el.value; el.innerHTML = `<option value="">All projects</option><option value="__mine">Near my earlier work</option>` + names.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join(""); if ([...el.options].some(o => o.value === cur)) el.value = cur; } fillSelect("#graphProject", names, true); fillSelect("#addProject", names, false);
   const a = $("#actor"), cur = a.value || store("river.actor") || "";
   a.innerHTML = `<option value="">(nobody)</option>` + S.agents.map(x => `<option value="${esc(x.name)}">${esc(x.name)}${x.kind === "human" ? " (human)" : ""}</option>`).join("");
   if ([...a.options].some(o => o.value === cur)) a.value = cur;
@@ -481,6 +484,7 @@ document.addEventListener("click", async (e) => {
   if (t.id === "dClose") { $("#drawer").classList.remove("open"); openItem = null; return; }
   if (t.dataset.do) return drawerAction(t.dataset.do);
   if (t.dataset.undep) { await act("dep_remove", { id: openItem, on: [+t.dataset.undep] }).catch(() => {}); return openDrawer(openItem); }
+  if (t.dataset.describe) { const p = S.projects.find(x => x.name === t.dataset.describe); const text = prompt(`What does "${p.name}" cover, and what context helps an agent work on it?`, p.notes || ""); if (text !== null) await act("project_describe", { name: p.name, text }).catch(() => {}); return; }
   if (t.dataset.rank) { const to = +t.dataset.to; if (to >= 1) await act("project_rank", { name: t.dataset.rank, rank: to }).catch(() => {}); return; }
   if (t.dataset.unset) { const sc = t.dataset.scope, [kind, name] = sc.includes(":") ? [sc.split(":")[0], sc.slice(sc.indexOf(":") + 1)] : ["global", null];
     const args = { key: t.dataset.unset }; if (kind !== "global") args[kind] = kind === "item" ? +name : name;
@@ -499,7 +503,8 @@ $("#graphProject").addEventListener("change", () => renderGraph(true));
 $("#graphDone").addEventListener("change", () => renderGraph(true));
 $("#claimNext").addEventListener("click", async () => {
   if (!actor()) return toast("Choose who you are in 'Acting as' first", true);
-  const res = await act("next_claim", { project: $("#area").value || undefined }).catch(() => null);
+  const area = $("#area").value;
+  const res = await act("next_claim", area === "__mine" ? { mine: true } : { project: area || undefined }).catch(() => null);
   if (res && res.length) { toast(`Claimed #${res[0].id}`); openDrawer(res[0].id); } else if (res) toast("Nothing is ready in that area");
 });
 $("#addGo").addEventListener("click", async () => {

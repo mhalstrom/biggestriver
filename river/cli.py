@@ -21,9 +21,11 @@ most important ready item in the area you choose; `--claim` takes it.
 First time:
   river register <your-name> [--human] --note "what you work on"
   export RIVER_AGENT=<your-name>
+  river project list                      what each project covers; pick the one you know
 
 Work loop:
   river next --project <name> --claim     take the next item where you have context
+  river next --mine --claim               or: next to what you did before (after your first item)
   river show <id>                         read it
   river done <id> --output "what changed" finish it   (or: river release <id>)
 
@@ -68,9 +70,9 @@ SETUP = """Setting up agents to use river
 """
 
 HINTS = {
-    "register": "next: export RIVER_AGENT={name}  then  river next --claim  (river guide for the full loop)",
+    "register": "next: export RIVER_AGENT={name}, read river project list, then river next --project <name> --claim  (river guide for the full loop)",
     "claim": "when finished: river done {id} --output \"what changed\"   cannot finish: river release {id} --note \"why\"   work found: river add <project> \"title\"",
-    "done": "next: river next --claim (same area: --project/--near {id})",
+    "done": "next: river next --mine --claim (work next to what you just did)  or  river next --project <name> --claim",
     "release": "next: river next --claim",
     "empty": "nothing ready here. Try: river next (all projects), river next --unblocks <id>, river blockers <id>, river list",
     "no_actor": "tip: river register <name> and export RIVER_AGENT=<name> so claims and history carry your name",
@@ -89,7 +91,9 @@ def _fmt_item(a, show_reason=True):
         flags.append("ready")
     if a["doer"] != "any":
         flags.append(a["doer"])
-    if "distance" in a:
+    if a.get("same_project"):
+        flags.append("same project as your earlier work")
+    elif a.get("distance") is not None:
         flags.append(f"{a['distance']} link(s) away")
     line = f"#{a['id']:<4} [{a['project']}] {a['title']}  ({'; '.join(flags)})"
     if show_reason:
@@ -161,7 +165,11 @@ def build_parser():
 
     pr = sub.add_parser("project", help="add, rank, list, or archive projects")
     prs = pr.add_subparsers(dest="pcmd", required=True)
-    x = prs.add_parser("add"); x.add_argument("name"); x.add_argument("--rank", type=int); x.add_argument("--notes", default="")
+    x = prs.add_parser("add"); x.add_argument("name"); x.add_argument("--rank", type=int)
+    x.add_argument("--description", "--notes", dest="notes", default="",
+                   help="what the project covers and what context helps (agents read this to pick an area)")
+    x = prs.add_parser("describe", help="set a project's description"); x.add_argument("name"); x.add_argument("text")
+    x = prs.add_parser("show", help="a project's description, who works on it, and its ready items"); x.add_argument("name")
     x = prs.add_parser("rank"); x.add_argument("name"); x.add_argument("rank", type=int)
     x = prs.add_parser("archive"); x.add_argument("name")
     prs.add_parser("list")
@@ -186,6 +194,7 @@ def build_parser():
     x.add_argument("--project", help="one project, or a comma list")
     x.add_argument("--unblocks", help="prerequisites of this item id or project")
     x.add_argument("--near", help="items linked to these item ids (comma list), closest first")
+    x.add_argument("--mine", action="store_true", help="items linked to what you claimed or finished before, then your projects")
     x.add_argument("--claim", action="store_true", help="take it")
     x.add_argument("--limit", "-n", type=int, default=1)
 
@@ -308,6 +317,10 @@ def dispatch(conn, a, actor):
             return core.project_add(conn, a.name, a.rank, a.notes, actor)
         if a.pcmd == "rank":
             return core.project_rank(conn, a.name, a.rank, actor)
+        if a.pcmd == "describe":
+            return core.project_describe(conn, a.name, a.text, actor)
+        if a.pcmd == "show":
+            return core.project_show(conn, a.name)
         if a.pcmd == "archive":
             return core.project_archive(conn, a.name, actor)
         return core.project_list(conn)
@@ -320,7 +333,7 @@ def dispatch(conn, a, actor):
     if c == "show":
         return core.item_show(conn, a.id)
     if c == "next":
-        return core.next_item(conn, a.project, a.unblocks, a.claim, actor, a.limit, a.near)
+        return core.next_item(conn, a.project, a.unblocks, a.claim, actor, a.limit, a.near, a.mine)
     if c == "claim":
         return core.claim(conn, a.id, actor)
     if c == "done":
@@ -375,9 +388,22 @@ def dispatch(conn, a, actor):
 def render(a, res):
     c = a.cmd
     if c == "project":
+        if isinstance(res, dict) and "ready_count" in res:
+            print(f"{res['name']} (rank {res['rank']})")
+            print("  " + (res["description"] or "(no description: river project describe " + res["name"] + " \"...\")"))
+            print("  items: " + ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in res["counts"].items() if v))
+            print("  working now: " + (", ".join(res["working_now"]) or "nobody"))
+            if res["worked_recently"]:
+                print("  worked here recently: " + ", ".join(res["worked_recently"]))
+            print(f"  ready ({res['ready_count']}):")
+            for it in res["ready"]:
+                print("    " + _fmt_item(it, show_reason=False))
+            return
         rows = res if isinstance(res, list) else [res]
         for p in rows:
             print(f"{p['rank']:>2}. {p['name']}" + (f"  ({p['open_items']} open)" if "open_items" in p else ""))
+            if p.get("notes"):
+                print(f"    {p['notes']}")
         return
     if c in ("list",):
         if not res:

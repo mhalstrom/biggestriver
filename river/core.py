@@ -285,6 +285,36 @@ def project_archive(conn, name, actor=None):
     return project_list(conn)
 
 
+def project_describe(conn, name, text, actor=None):
+    """The project description tells an agent what the project covers and what context helps."""
+    with tx(conn):
+        _project(conn, name)
+        conn.execute("UPDATE projects SET notes=? WHERE name=?", (text, name))
+        _event(conn, None, actor, f"project {name} description changed")
+    return project_show(conn, name)
+
+
+def project_show(conn, name):
+    p = dict(_project(conn, name))
+    ann = annotate(conn)
+    mine = [a for a in ann.values() if a["project"] == name]
+    ready = sorted((a for a in mine if a["ready"]), key=lambda a: a["sort_key"])
+    holders = sorted({a["assignee"] for a in mine if a["status"] in ("in_progress", "held") and a["assignee"]})
+    recent = sorted({r["actor"] for r in conn.execute(
+        "SELECT DISTINCT e.actor FROM events e JOIN items i ON i.id=e.item_id "
+        "WHERE i.project_id=? AND (e.change LIKE 'claimed%' OR e.change LIKE 'done%') "
+        "ORDER BY e.id DESC LIMIT 20", (p["id"],))})
+    p.update(
+        description=p.pop("notes"),
+        counts={s: sum(1 for a in mine if a["status"] == s) for s in ("open", "in_progress", "held", "done", "dropped")},
+        ready=[{k: v for k, v in a.items() if k != "sort_key"} for a in ready[:5]],
+        ready_count=len(ready),
+        working_now=holders,
+        worked_recently=recent,
+    )
+    return p
+
+
 def project_list(conn):
     return [dict(r) for r in conn.execute(
         "SELECT p.*, (SELECT COUNT(*) FROM items i WHERE i.project_id=p.id AND i.status IN ('open','in_progress','held')) open_items "
@@ -539,7 +569,21 @@ def _graph_distances(ann, starts):
     return dist
 
 
-def ready_list(conn, project=None, unblocks=None, doer_for=None, ann=None, near=None):
+def history(conn, actor, limit=20):
+    """Items the agent claimed or finished, most recent first."""
+    seen, out = set(), []
+    for r in conn.execute(
+            "SELECT item_id FROM events WHERE actor=? AND item_id IS NOT NULL "
+            "AND (change LIKE 'claimed%' OR change LIKE 'done%') ORDER BY id DESC", (actor,)):
+        if r["item_id"] not in seen:
+            seen.add(r["item_id"])
+            out.append(r["item_id"])
+            if len(out) >= limit:
+                break
+    return out
+
+
+def ready_list(conn, project=None, unblocks=None, doer_for=None, ann=None, near=None, mine=None):
     """Ready items drawn from the area the agent chooses.
 
     The agent picks the area where it holds context: one or more projects
@@ -568,6 +612,21 @@ def ready_list(conn, project=None, unblocks=None, doer_for=None, ann=None, near=
         pool = [a for a in pool if a["id"] in closure]
     if doer_for is not None:
         pool = [a for a in pool if a["doer"] in ("any", doer_for)]
+    if mine:
+        hist = [i for i in history(conn, mine) if i in ann]
+        if not hist:
+            raise RiverError(f"{mine} has no claimed or finished items yet, so there is no history to work near. "
+                             f"Pick an area instead: river project list, then river next --project <name>")
+        dist = _graph_distances(ann, hist)
+        hist_projects = {ann[i]["project"] for i in hist}
+        far = 10 ** 6
+        pool = [a for a in pool if a["id"] in dist or a["project"] in hist_projects]
+        for a in pool:
+            a["distance"] = dist.get(a["id"])
+            if a["id"] not in dist:
+                a["same_project"] = True
+        pool.sort(key=lambda a: (dist.get(a["id"], far), a["sort_key"]))
+        return pool
     if near:
         starts = [int(x) for x in (near if isinstance(near, (list, tuple)) else str(near).split(","))]
         for x in starts:
@@ -705,17 +764,21 @@ def _claim_row(conn, item_id, actor):
     return ag
 
 
-def next_item(conn, project=None, unblocks=None, claim=False, actor=None, limit=1, near=None):
+def next_item(conn, project=None, unblocks=None, claim=False, actor=None, limit=1, near=None, mine=False):
     """Show, or claim, the first ready item from the area the agent chose."""
     doer_for = None
     if actor:
         r = conn.execute("SELECT kind FROM agents WHERE name=?", (actor,)).fetchone()
         doer_for = r["kind"] if r else None
+    if mine and not actor:
+        raise RiverError("--mine needs an agent name: set RIVER_AGENT or pass --as <name>")
+    who_mine = actor if mine else None
     if not claim:
-        return [{k: v for k, v in a.items() if k != 'sort_key'} for a in ready_list(conn, project, unblocks, doer_for, near=near)[:limit]]
+        return [{k: v for k, v in a.items() if k != 'sort_key'}
+                for a in ready_list(conn, project, unblocks, doer_for, near=near, mine=who_mine)[:limit]]
     with tx(conn):
         _sweep(conn)
-        pool = ready_list(conn, project, unblocks, doer_for, near=near)
+        pool = ready_list(conn, project, unblocks, doer_for, near=near, mine=who_mine)
         if not pool:
             return []
         _claim_row(conn, pool[0]["id"], actor)

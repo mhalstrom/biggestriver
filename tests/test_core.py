@@ -148,6 +148,34 @@ class Claims(Base):
         self.assertEqual(len(set(got)), 6)
 
 
+class Areas(Base):
+    def test_mine_uses_history(self):
+        core.project_add(self.c, "a")
+        core.project_add(self.c, "b")
+        core.register(self.c, "ag")
+        x = self.add("a", "x")
+        linked = self.add("b", "linked", 3, after=[x])
+        same = self.add("a", "same project", 3)
+        other = self.add("b", "unrelated", 0)
+        with self.assertRaises(RiverError):
+            core.next_item(self.c, actor="ag", mine=True)
+        core.claim(self.c, x, "ag")
+        core.done(self.c, x, "ok", "ag")
+        got = [a["id"] for a in core.next_item(self.c, actor="ag", mine=True, limit=5)]
+        self.assertEqual(got, [linked, same])
+        self.assertNotIn(other, got)
+
+    def test_project_describe_and_show(self):
+        core.project_add(self.c, "a", notes="old")
+        core.register(self.c, "ag")
+        x = self.add("a", "x")
+        core.project_describe(self.c, "a", "Checkout pages in web/; know React")
+        core.claim(self.c, x, "ag")
+        p = core.project_show(self.c, "a")
+        self.assertEqual(p["description"], "Checkout pages in web/; know React")
+        self.assertEqual(p["working_now"], ["ag"])
+
+
 class Capacity(Base):
     def test_slots_and_excess(self):
         core.project_add(self.c, "a")

@@ -22,8 +22,12 @@ A person registers with `--human`.
 
 ## Work loop
 
-1. Choose your area and take an item:
+1. Choose your area and take an item. `river project list` shows what each
+   project covers; `river project show <name>` shows who works there and what
+   is ready.
    - `river next --project <name> --claim`: the project you know
+   - `river next --mine --claim`: next to what you claimed or finished before
+     (linked items first, then the same projects)
    - `river next --near <id> --claim`: items linked to one you just worked on, closest first
    - `river next --unblocks <id> --claim`: something that unblocks your blocked item
    - `river next --claim`: anything, most important first

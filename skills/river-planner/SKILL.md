@@ -8,10 +8,16 @@ description: Split work into Biggest River queue items with dependencies and pri
 ## Projects
 
 ```
-river project add <name> [--rank N] [--notes "..."]   # lower-case name
+river project add <name> [--rank N] --description "..."   # lower-case name
+river project describe <name> "..."
+river project show <name>
 river project rank <name> <N>                          # 1 = most important overall
 river project list
 ```
+
+Write the description for an agent that must decide whether it fits: what the
+project covers, where it lives (repository, directories), and what knowledge
+helps. Agents read `river project list` to pick an area.
 
 ## Items
 

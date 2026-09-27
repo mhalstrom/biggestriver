@@ -16,6 +16,7 @@ STATIC = Path(__file__).resolve().parent / "static"
 OPS = {
     "project_add": lambda c, a, who: core.project_add(c, a["name"], a.get("rank"), a.get("notes", ""), who),
     "project_rank": lambda c, a, who: core.project_rank(c, a["name"], a["rank"], who),
+    "project_describe": lambda c, a, who: core.project_describe(c, a["name"], a["text"], who),
     "item_add": lambda c, a, who: core.item_add(c, a["project"], a["title"], int(a.get("priority", 2)),
                                                 a.get("notes", ""), a.get("doer", "any"),
                                                 [int(x) for x in a.get("after", [])], who),
@@ -26,7 +27,8 @@ OPS = {
     "dep_add": lambda c, a, who: core.dep_add(c, a["id"], [int(x) for x in a["on"]], who),
     "dep_remove": lambda c, a, who: core.dep_remove(c, a["id"], [int(x) for x in a["on"]], who),
     "claim": lambda c, a, who: core.claim(c, a["id"], who),
-    "next_claim": lambda c, a, who: core.next_item(c, a.get("project"), a.get("unblocks"), True, who, 1, a.get("near")),
+    "next_claim": lambda c, a, who: core.next_item(c, a.get("project"), a.get("unblocks"), True, who, 1, a.get("near"),
+                                                   bool(a.get("mine"))),
     "done": lambda c, a, who: core.done(c, a["id"], a.get("output"), who),
     "release": lambda c, a, who: core.release(c, a["id"], a.get("note"), who),
     "drop": lambda c, a, who: core.drop(c, a["id"], who),
