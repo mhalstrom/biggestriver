@@ -41,6 +41,8 @@ DEFAULT_SETTINGS = {
     "question_nudge_after": "30m",
     "serve_port": "8765",
     "notify_channels": "",
+    "notify_interval": "30s",
+    "notify_batch_window": "60s",
 }
 
 SCHEMA = """
@@ -314,7 +316,7 @@ def _scope(conn, project=None, item=None, agent=None) -> str:
 def config_set(conn, key, value, project=None, item=None, agent=None, actor=None):
     if key not in DEFAULT_SETTINGS:
         raise RiverError(f"unknown setting {key!r}; known: {', '.join(sorted(DEFAULT_SETTINGS))}")
-    if key.endswith(("_ttl", "_after")):
+    if key.endswith(("_ttl", "_after", "_interval", "_window")):
         parse_duration(value)
     elif key in ("keep_prereq_limit", "replan_threshold", "max_leases", "serve_port"):
         if not value.isdigit():

@@ -305,6 +305,13 @@ def build_parser():
     x.add_argument("--project"); x.add_argument("--status"); x.add_argument("--all", action="store_true")
 
     x = sub.add_parser("show", help="one item with its links and history"); x.add_argument("id", type=int)
+    nt = sub.add_parser("notify", help="send needs-you notifications: run, test a channel, status")
+    nts = nt.add_subparsers(dest="ncmd", required=True)
+    x = nts.add_parser("run", help="send what is due (loops every notify_interval unless --once)")
+    x.add_argument("--once", action="store_true", help="one pass, for launchd or cron")
+    x.add_argument("--now", action="store_true", help="do not wait for the batch window")
+    x = nts.add_parser("test", help="send a test message on one channel"); x.add_argument("channel")
+    nts.add_parser("status", help="per channel: configured, pending, last send, last error")
     x = sub.add_parser("needs-you", help="what waits on a person: ready human items, questions and alerts to people")
     x.add_argument("--human", help="only this person's (and those for anyone)"); x.add_argument("--all", action="store_true", help="closed ones too")
     x = sub.add_parser("status", help="overview: every project's counts, recent completions, who is working, open slots")
@@ -570,6 +577,21 @@ def dispatch(conn, a, actor):
         return core.status(conn, a.recent)
     if c == "needs-you":
         return core.needs_you(conn, a.human, a.all)
+    if c == "notify":
+        from . import notify
+        if a.ncmd == "test":
+            return notify.test(conn, a.channel)
+        if a.ncmd == "status":
+            return notify.status(conn)
+        if a.once or a.now:
+            return {"results": notify.run(conn, now_=a.now)}
+        import threading
+        print(f"river notify: sending every {core.setting(conn, 'notify_interval')} (ctrl-c stops)", flush=True)
+        try:
+            notify.loop(threading.Event())
+        except KeyboardInterrupt:
+            pass
+        return {"results": []}
     if c == "log":
         return core.completed(conn, a.project, None if a.since == "all" else a.since)
     if c == "go":
@@ -869,6 +891,31 @@ def render(a, res):
         return
     if c == "status":
         return render_status(res)
+    if c == "notify":
+        if "results" in res:
+            if not res["results"]:
+                print("(nothing to send)")
+            for r in res["results"]:
+                if r["sent"]:
+                    print(f"{r['channel']}: sent {r['rows']} in one message ({r['title']})")
+                elif r.get("error"):
+                    print(f"{r['channel']}: failed for {r['rows']}: {r['error']} (retries on the next run)")
+                else:
+                    print(f"{r['channel']}: {r['rows']} waiting for the batch window ({r['waiting']} left; --now sends them)")
+        elif "channels" in res:
+            print(f"interval {res['interval']}, batch window {res['batch_window']}")
+            if not res["channels"]:
+                print("(no channels: river config set notify_channels log)")
+            for ch in res["channels"]:
+                notes = [] if ch["adapter"] else ["no adapter"]
+                if not ch["configured"]:
+                    notes.append("not in notify_channels")
+                print(f"{ch['channel']}: {ch['pending']} pending, last sent {ch['last_sent'] or 'never'}"
+                      + (f", last error: {ch['last_error']}" if ch["last_error"] else "")
+                      + (f" ({'; '.join(notes)})" if notes else ""))
+        else:
+            print(f"{res['channel']}: " + ("test sent" if res["ok"] else f"failed: {res['error']}"))
+        return
     if c == "needs-you":
         if not res:
             print("(nothing needs a person now)")

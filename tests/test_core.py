@@ -775,5 +775,64 @@ class NeedsYou(Base):
         self.assertEqual(core.outbox(self.c), [])
 
 
+class Dispatch(Base):
+    def setUp(self):
+        super().setUp()
+        from river import notify
+        self.notify = notify
+        self.sent, self.fail = [], []
+        notify.register_channel("fake", lambda conn: self._send)
+        core.project_add(self.c, "a")
+        core.config_set(self.c, "notify_channels", "fake")
+
+    def tearDown(self):
+        self.notify.ADAPTERS.pop("fake", None)
+        super().tearDown()
+
+    def _send(self, title, body, url):
+        if self.fail:
+            raise OSError(self.fail[0])
+        self.sent.append((title, body, url))
+
+    def age_outbox(self, seconds):
+        self.c.execute("UPDATE notifications SET created_at=?", (core.iso(core.now() - timedelta(seconds=seconds)),))
+
+    def test_batches_after_window_and_sends_once(self):
+        i = self.add("a", "sign", doer="human")
+        self.add("a", "pay", doer="human")
+        res = self.notify.run(self.c)
+        self.assertEqual((res[0]["sent"], res[0]["rows"]), (False, 2))  # inside the batch window
+        self.assertEqual(self.sent, [])
+        self.age_outbox(61)
+        res = self.notify.run(self.c)
+        self.assertTrue(res[0]["sent"])
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn("2 things need you", self.sent[0][0])
+        self.assertEqual(self.notify.run(self.c, now_=True), [])  # nothing left
+        self.assertEqual(len(self.sent), 1)
+        self.assertNotEqual(i, None)
+
+    def test_single_links_to_item_and_failures_retry(self):
+        i = self.add("a", "sign", doer="human")
+        self.fail.append("network down")
+        res = self.notify.run(self.c, now_=True)
+        self.assertIn("network down", res[0]["error"])
+        st = self.notify.status(self.c)["channels"][0]
+        self.assertEqual((st["channel"], st["pending"]), ("fake", 1))
+        self.assertIn("network down", st["last_error"])
+        self.fail.clear()
+        self.notify.run(self.c, now_=True)
+        self.assertEqual(self.sent[0][2], f"http://127.0.0.1:8765/#item-{i}")
+        self.assertEqual(self.notify.status(self.c)["channels"][0]["pending"], 0)
+
+    def test_test_and_unknown_channel(self):
+        self.assertTrue(self.notify.test(self.c, "fake")["ok"])
+        with self.assertRaises(RiverError):
+            self.notify.test(self.c, "nope")
+        core.config_set(self.c, "notify_batch_window", "0s")
+        with self.assertRaises(RiverError):
+            core.config_set(self.c, "notify_interval", "often")
+
+
 if __name__ == "__main__":
     unittest.main()

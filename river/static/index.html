@@ -590,7 +590,9 @@ $("#setGo").addEventListener("click", async () => {
 });
 
 if (window.mermaid) mermaid.initialize({ startOnLoad: false, securityLevel: "loose", theme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "default", flowchart: { useMaxWidth: true } });
-refresh(); setInterval(() => { if (!document.hidden) refresh().catch(() => {}); }, 3000);
+function openFromHash() { const m = location.hash.match(/^#item-(\d+)$/); if (m) openDrawer(+m[1]); }
+window.addEventListener("hashchange", openFromHash);
+refresh().then(openFromHash); setInterval(() => { if (!document.hidden) refresh().catch(() => {}); }, 3000);
 </script>
 </body>
 </html>

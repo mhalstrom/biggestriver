@@ -162,9 +162,15 @@ def serve(port: int, open_browser=False, dev=False):
           flush=True)
     if dev:
         threading.Thread(target=_restart_on_change, args=(httpd,), daemon=True).start()
+    from . import notify
+    notify.SERVE_PORT["port"] = port
+    stop = threading.Event()
+    threading.Thread(target=notify.loop, args=(stop,), daemon=True, name="river-notify").start()
     if open_browser:
         webbrowser.open(url)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        stop.set()
