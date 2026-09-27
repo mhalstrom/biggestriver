@@ -1102,5 +1102,37 @@ class HumanSteps(Base):
         self.assertEqual(b["humans"], ["mark"])
 
 
+class NeedsYouPage(Base):
+    """The page's needs-you list and its two message actions (river/server.py)."""
+
+    def setUp(self):
+        super().setUp()
+        from river import server
+        self.server = server
+        core.register(self.c, "mark", human=True)
+        core.register(self.c, "bot")
+        core.project_add(self.c, "a")
+
+    def test_item_events_carry_context_and_close_when_done(self):
+        iid = core.item_add(self.c, "a", "approve policy", 2, "notes here", "human", (), "bot",
+                            "decide the five points at the end of the draft")["id"]
+        (ev,) = self.server.needs_you_view(self.c, "mark")
+        self.assertEqual((ev["item_id"], ev["item_context"], ev["item_notes"]),
+                         (iid, "decide the five points at the end of the draft", "notes here"))
+        core.done(self.c, iid, "approved", "mark")
+        self.assertEqual(self.server.needs_you_view(self.c, "mark"), [])
+
+    def test_answer_and_read_close_message_events(self):
+        q = core.send(self.c, "question", "which server?", to="mark", actor="bot")
+        a = core.send(self.c, "alert", "look at #3", to="mark", actor="bot")
+        kinds = sorted(e["message_kind"] for e in self.server.needs_you_view(self.c, "mark"))
+        self.assertEqual(kinds, ["alert", "question"])
+        self.server.OPS["answer"](self.c, {"msg": q["id"], "body": "OVH"}, "mark")
+        self.server.OPS["message_read"](self.c, {"msg": a["id"]}, "mark")
+        self.assertEqual(self.server.needs_you_view(self.c, "mark"), [])
+        with self.assertRaises(RiverError):
+            self.server.OPS["message_read"](self.c, {"msg": 9999}, "mark")
+
+
 if __name__ == "__main__":
     unittest.main()

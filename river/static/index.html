@@ -133,6 +133,12 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
 .prog-h .muted { font-variant-numeric: tabular-nums; }
 .bar { height: 8px; border-radius: 4px; background: var(--wait-bg); overflow: hidden; margin-top: 4px; }
 .bar > div { height: 100%; background: var(--ready); }
+#needsYouPanel { border-color: var(--human); }
+#needsYouPanel h2 { color: var(--human); }
+.ny { padding: 8px 0; border-top: 1px solid var(--line); }
+.ny:first-child { border-top: none; }
+.ny-h { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.ny-c { color: var(--muted); font-size: 12px; margin: 4px 0 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .hidden { display: none !important; }
 </style>
 </head>
@@ -154,6 +160,10 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
 
 <main>
   <section id="tab-board">
+    <div class="panel hidden" id="needsYouPanel">
+      <h2>Needs you <span class="spacer"></span><button class="btn hidden" id="notifyOn">Turn on browser notifications</button></h2>
+      <div id="needsYou"></div>
+    </div>
     <div class="panel" id="capacity"></div>
     <div class="grid">
       <div>
@@ -528,11 +538,77 @@ async function drawerAction(what) {
   } catch (e) { /* toast shown */ }
 }
 
+// ---- Needs you: decisions and steps waiting for a person, with browser notifications.
+let NY = [], nySig = "";
+function humanActor() { const a = S && S.agents.find(x => x.name === actor()); return a && a.kind === "human" ? a.name : null; }
+function clip(s, n) { s = String(s || "").trim(); return s.length > n ? s.slice(0, n) + "…" : s; }
+
+async function pollNeedsYou() {
+  const h = humanActor();
+  const r = await fetch("/api/needs-you" + (h ? "?human=" + encodeURIComponent(h) : "")); if (!r.ok) return;
+  NY = (await r.json()).events;
+  renderNeedsYou(); notifyNew();
+}
+
+function renderNeedsYou() {
+  document.title = NY.length ? `(${NY.length}) Biggest River` : "Biggest River";
+  $("#notifyOn").classList.toggle("hidden", !("Notification" in window) || Notification.permission !== "default");
+  $("#needsYouPanel").classList.toggle("hidden", !NY.length);
+  const sig = JSON.stringify(NY.map(e => [e.id, e.summary, e.item_status]));
+  if (sig === nySig) return;
+  nySig = sig;
+  $("#needsYou").innerHTML = NY.map(e => {
+    const isItem = e.kind === "item";
+    const detail = isItem ? (e.item_context || e.item_notes) : e.body;
+    const buttons = isItem
+      ? `<button class="btn" data-open="${e.item_id}">Open</button><button class="btn" data-ny="claim" data-id="${e.item_id}">Claim</button><button class="btn primary" data-ny="done" data-id="${e.item_id}">Done</button>`
+      : (e.message_kind === "question"
+          ? `<button class="btn primary" data-ny="answer" data-msg="${e.message_id}">Answer</button>`
+          : `<button class="btn" data-ny="read" data-msg="${e.message_id}">Mark read</button>`)
+        + (e.item_id ? `<button class="btn" data-open="${e.item_id}">Open #${e.item_id}</button>` : "");
+    return `<div class="ny">
+      <div class="ny-h"><b>${esc(isItem ? `#${e.item_id} ${e.item_title}` : `${e.message_kind} from ${e.from_agent}`)}</b>
+        ${e.project ? `<span class="chip c-p">${esc(e.project)}</span>` : ""}<span class="muted" style="font-size:12px">${ago(e.opened_at)}</span></div>
+      ${detail ? `<div class="ny-c">${esc(clip(detail, 500))}</div>` : ""}
+      <div class="actions">${buttons}</div></div>`;
+  }).join("");
+}
+
+// One browser notification per event, once: seen ids live in localStorage. The first
+// load only records what is already open, so opening the page does not fire a burst.
+function notifyNew() {
+  let seen = null;
+  try { seen = JSON.parse(store("river.ny.seen") || "null"); } catch (e) { seen = null; }
+  const first = !Array.isArray(seen);
+  const known = new Set(first ? [] : seen);
+  const fresh = NY.filter(e => !known.has(e.id));
+  if (!first && "Notification" in window && Notification.permission === "granted") {
+    for (const e of fresh.slice(0, 5)) {
+      const n = new Notification("River: needs you", { body: e.summary, tag: "river-" + e.id });
+      n.onclick = () => { window.focus(); if (e.item_id) openDrawer(e.item_id); n.close(); };
+    }
+  }
+  store("river.ny.seen", JSON.stringify([...known, ...fresh.map(e => e.id)].slice(-500)));
+}
+
+async function needsYouAction(t) {
+  const what = t.dataset.ny, id = +t.dataset.id, msg = +t.dataset.msg;
+  try {
+    if (what === "claim") { if (!actor()) return toast("Choose who you are in 'Acting as' first", true); await act("claim", { id }); }
+    if (what === "done") { const out = prompt("What did you decide or do? (saved as the item's output)"); if (out === null) return; await act("done", { id, output: out || undefined }); }
+    if (what === "answer") {
+      if (!actor()) return toast("Choose who you are in 'Acting as' first", true);
+      const body = prompt("Your answer"); if (!body) return; await act("answer", { msg, body });
+    }
+    if (what === "read") await act("message_read", { msg });
+  } catch (e) { /* toast shown */ }
+}
+
 async function refresh() {
   const r = await fetch("/api/state"); S = await r.json();
   if (S.dev_build) { if (window._build && window._build !== S.dev_build) return location.reload(); window._build = S.dev_build; }
   renderSelects(); renderCapacity(); renderNext(); renderProjects(); renderAgents(); renderEvents(); renderSettings();
-  renderGraph(false); renderLog(false);
+  renderGraph(false); renderLog(false); pollNeedsYou().catch(() => {});
   $("#stamp").textContent = "updated " + new Date().toLocaleTimeString();
   if (openItem != null && $("#drawer").classList.contains("open")) openDrawer(openItem);
 }
@@ -543,6 +619,8 @@ document.addEventListener("click", async (e) => {
   const row = t.closest(".row"); if (row) return openDrawer(+row.dataset.id);
   if (t.id === "dClose") { $("#drawer").classList.remove("open"); openItem = null; return; }
   if (t.dataset.do) return drawerAction(t.dataset.do);
+  if (t.dataset.ny) return needsYouAction(t);
+  if (t.id === "notifyOn") { await Notification.requestPermission(); return renderNeedsYou(); }
   if (t.dataset.undep) { await act("dep_remove", { id: openItem, on: [+t.dataset.undep] }).catch(() => {}); return openDrawer(openItem); }
   if (t.dataset.describe) { const p = S.projects.find(x => x.name === t.dataset.describe); const text = prompt(`What does "${p.name}" cover, and what context helps an agent work on it?`, p.notes || ""); if (text !== null) await act("project_describe", { name: p.name, text }).catch(() => {}); return; }
   if (t.dataset.rank) { const to = +t.dataset.to; if (to >= 1) await act("project_rank", { name: t.dataset.rank, rank: to }).catch(() => {}); return; }
@@ -593,6 +671,8 @@ if (window.mermaid) mermaid.initialize({ startOnLoad: false, securityLevel: "loo
 function openFromHash() { const m = location.hash.match(/^#item-(\d+)$/); if (m) openDrawer(+m[1]); }
 window.addEventListener("hashchange", openFromHash);
 refresh().then(openFromHash); setInterval(() => { if (!document.hidden) refresh().catch(() => {}); }, 3000);
+// A hidden tab stops the full refresh but keeps asking what needs a person, so notifications still arrive.
+setInterval(() => { if (document.hidden) pollNeedsYou().catch(() => {}); }, 15000);
 </script>
 </body>
 </html>
