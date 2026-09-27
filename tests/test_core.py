@@ -1181,5 +1181,25 @@ class Takeover(Base):
         core.done(self.c, self.h, "did it", "mark")  # a person needs no note
 
 
+class Prompts(Base):
+    def test_prompt_for_item_and_all(self):
+        core.project_add(self.c, "a", path=self.dir.name)
+        core.register(self.c, "mark", human=True)
+        h = core.item_add(self.c, "a", "Approve policy", doer="human", context="docs/policy.md, 5 decisions")["id"]
+        self.add("a", "Launch", p=0, after=[h])
+        q = core.send(self.c, "question", "Which plan?", to="mark", actor="ag")
+        p = core.prompt_for(self.c, h)
+        from pathlib import Path
+        folder = Path(self.dir.name).resolve()
+        for part in (f"cd {folder} && river --as mark show {h}", "docs/policy.md", "It blocks: #",
+                     f"river --as mark done {h} --output", "takeover"):
+            self.assertIn(part, p)
+        allp = core.prompt_for_all(self.c, "mark")
+        self.assertIn("1. Item #", allp)
+        self.assertIn(f"river --as mark answer {q['id']}", allp)
+        core.done(self.c, h, "approved", "mark")
+        self.assertIn("Nothing", core.prompt_for_all(self.c, "nobody"))
+
+
 if __name__ == "__main__":
     unittest.main()

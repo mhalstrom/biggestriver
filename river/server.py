@@ -133,6 +133,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"events": needs_you_view(conn, q.get("human"))})
             finally:
                 conn.close()
+        if path == "/api/prompt-all" or (path.startswith("/api/item/") and path.endswith("/prompt")):
+            from urllib.parse import parse_qs, urlsplit
+            q = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+            conn = core.connect()
+            try:
+                if path == "/api/prompt-all":
+                    return self._send(200, {"prompt": core.prompt_for_all(conn, q.get("person") or None)})
+                return self._send(200, {"prompt": core.prompt_for(conn, int(path.split("/")[3]), q.get("person") or None)})
+            except (RiverError, ValueError) as e:
+                return self._send(404, {"error": str(e)})
+            finally:
+                conn.close()
         if path.startswith("/api/item/"):
             conn = core.connect()
             try:

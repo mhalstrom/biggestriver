@@ -2096,6 +2096,74 @@ def status(conn, recent=10):
     }
 
 
+def _person(conn, person=None):
+    if person:
+        return person
+    r = conn.execute("SELECT name FROM agents WHERE kind='human' ORDER BY registered_at, name LIMIT 1").fetchone()
+    return r["name"] if r else "<your-name>"
+
+
+def _item_prompt_section(conn, a, ann, person, n=None):
+    p = conn.execute("SELECT name, path, notes FROM projects WHERE name=?", (a["project"],)).fetchone()
+    blocks = [ann[d] for d in a["unblocks"] if ann[d]["status"] in OPEN_STATES]
+    lines = [f"{'' if n is None else f'{n}. '}Item #{a['id']}: {a['title']}  (project {a['project']}, P{a['effective_priority']})"]
+    if p["path"]:
+        lines.append(f"   Folder: {p['path']}")
+    if blocks:
+        lines.append("   It blocks: " + "; ".join(f"#{b['id']} {b['title']} (P{b['effective_priority']})" for b in blocks[:3]))
+    for label, text in (("Context", a["context"]), ("Notes", a["notes"])):
+        if text.strip():
+            lines.append(f"   {label}: {text.strip()}")
+    cd = f"cd {p['path']} && " if p["path"] else ""
+    lines.append(f"   Read it first: {cd}river --as {person} show {a['id']}")
+    lines.append(f"   Record the result: river --as {person} done {a['id']} --output \"<what was decided or done>\"")
+    return "\n".join(lines)
+
+
+PROMPT_STEPS = """How to help:
+1. Run the "read it first" command. Read the files or links it names.
+2. Explain to {person} in plain words what is needed, why, what the options are, and what you recommend.
+3. Answer their questions. Help them do it: draft the text, check the setting, walk through the steps.
+   Ask before anything that uses their accounts, money, or sends something in their name.
+4. When it is decided or done, record it with the "record the result" command, in their words.
+   If you can do the step yourself without them, say so; with their yes, take it over instead:
+   river register <your-agent-name>, then river --as <your-agent-name> takeover <id> --note "<how>".
+If the river command is not found, ask {person} where Biggest River is installed."""
+
+
+def prompt_for(conn, item_id, person=None):
+    """A paste-ready prompt that lets a fresh agent explain one human item and close it with the person."""
+    ann = annotate(conn)
+    iid = _item(conn, item_id)["id"]
+    person = _person(conn, person)
+    a = ann[iid]
+    head = (f"You are helping {person} with one step in their work queue (Biggest River, the `river` command). "
+            f"It is marked for a person to do or decide.")
+    return "\n\n".join([head, _item_prompt_section(conn, a, ann, person), PROMPT_STEPS.format(person=person)])
+
+
+def prompt_for_all(conn, person=None):
+    """The whole needs-you list for a person as one prompt, most important first."""
+    ann = annotate(conn)
+    person = _person(conn, person)
+    items = sorted((a for a in ann.values() if a["ready"] and a["doer"] == "human" and not a["project_archived"]),
+                   key=lambda a: a["sort_key"])
+    qs = [dict(r) for r in conn.execute(
+        "SELECT id, from_agent, body, item_id FROM messages WHERE kind='question' AND state='open' AND to_agent=? ORDER BY id",
+        (person,))]
+    if not items and not qs:
+        return f"Nothing in the Biggest River queue waits on {person} now."
+    parts = [f"You are helping {person} work through everything that waits on them in their work queue "
+             f"(Biggest River, the `river` command): {len(items)} item(s) and {len(qs)} question(s), most important "
+             f"first. Take them one at a time: finish or park one before you start the next."]
+    parts += [_item_prompt_section(conn, a, ann, person, n) for n, a in enumerate(items, 1)]
+    for n, q in enumerate(qs, len(items) + 1):
+        parts.append(f"{n}. Question #{q['id']} from {q['from_agent']}" + (f" about #{q['item_id']}" if q["item_id"] else "")
+                     + f": {q['body']}\n   Answer it: river --as {person} answer {q['id']} \"<answer>\"")
+    parts.append(PROMPT_STEPS.format(person=person))
+    return "\n\n".join(parts)
+
+
 def recent_events(conn, limit=40):
     return [dict(r) for r in conn.execute(
         "SELECT e.at, e.actor, e.change, e.item_id, i.title FROM events e LEFT JOIN items i ON i.id=e.item_id "

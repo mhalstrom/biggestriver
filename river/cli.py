@@ -326,6 +326,9 @@ def build_parser():
     x = nts.add_parser("setup", help="set up a channel (ntfy: makes a secret topic and prints the phone steps)")
     x.add_argument("channel", choices=["ntfy"]); x.add_argument("--url", help="ntfy server (default https://ntfy.sh)")
     x.add_argument("--token", help="access token for a protected or self-hosted ntfy server")
+    x = sub.add_parser("prompt", help="a paste-ready prompt for an agent that helps a person with a human item")
+    x.add_argument("id", type=int, nargs="?"); x.add_argument("--all", action="store_true", help="every item and question that waits on the person")
+    x.add_argument("--for", dest="person", help="the person (default: you if you are a person, else the first registered person)")
     x = sub.add_parser("needs-you", help="what waits on a person: ready human items, questions and alerts to people")
     x.add_argument("--human", help="only this person's (and those for anyone)"); x.add_argument("--all", action="store_true", help="closed ones too")
     x = sub.add_parser("status", help="overview: every project's counts, recent completions, who is working, open slots")
@@ -615,6 +618,14 @@ def dispatch(conn, a, actor):
         return core.status(conn, a.recent)
     if c == "needs-you":
         return core.needs_you(conn, a.human, a.all)
+    if c == "prompt":
+        person = a.person or (actor if actor and conn.execute(
+            "SELECT 1 FROM agents WHERE name=? AND kind='human'", (actor,)).fetchone() else None)
+        if a.all:
+            return {"prompt": core.prompt_for_all(conn, person)}
+        if a.id is None:
+            raise RiverError("give an item id, or --all")
+        return {"prompt": core.prompt_for(conn, a.id, person)}
     if c == "notify":
         from . import notify
         if a.ncmd == "test":
@@ -1003,6 +1014,9 @@ def render(a, res):
                       + (f" ({'; '.join(notes)})" if notes else ""))
         else:
             print(f"{res['channel']}: " + ("test sent" if res["ok"] else f"failed: {res['error']}"))
+        return
+    if c == "prompt":
+        print(res["prompt"])
         return
     if c == "needs-you":
         if not res:

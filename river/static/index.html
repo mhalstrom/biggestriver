@@ -168,7 +168,7 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
       <div id="takeovers"></div>
     </div>
     <div class="panel hidden" id="needsYouPanel">
-      <h2>Needs you <span class="spacer"></span><button class="btn hidden" id="notifyOn">Turn on browser notifications</button></h2>
+      <h2>Needs you <span class="spacer"></span><button class="btn" id="copyAll" title="One prompt for an agent that walks you through all of these">Copy prompt for all</button><button class="btn hidden" id="notifyOn">Turn on browser notifications</button></h2>
       <div id="needsYou"></div>
     </div>
     <div class="panel" id="capacity"></div>
@@ -590,7 +590,7 @@ function renderNeedsYou() {
     const isItem = e.kind === "item";
     const detail = isItem ? (e.item_context || e.item_notes) : e.body;
     const buttons = isItem
-      ? `<button class="btn" data-open="${e.item_id}">Open</button><button class="btn" data-ny="claim" data-id="${e.item_id}">Claim</button><button class="btn primary" data-ny="done" data-id="${e.item_id}">Done</button>`
+      ? `<button class="btn" data-open="${e.item_id}">Open</button><button class="btn" data-ny="claim" data-id="${e.item_id}">Claim</button><button class="btn" data-copy-prompt="${e.item_id}" title="A prompt for an agent that explains this and helps you do it">Copy prompt</button><button class="btn primary" data-ny="done" data-id="${e.item_id}">Done</button>`
       : (e.message_kind === "question"
           ? `<button class="btn primary" data-ny="answer" data-msg="${e.message_id}">Answer</button>`
           : `<button class="btn" data-ny="read" data-msg="${e.message_id}">Mark read</button>`)
@@ -618,6 +618,19 @@ function notifyNew() {
     }
   }
   store("river.ny.seen", JSON.stringify([...known, ...fresh.map(e => e.id)].slice(-500)));
+}
+
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch (e) { /* fall back below */ }
+  const ta = document.createElement("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.select();
+  let ok = false; try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+  ta.remove(); return ok;
+}
+async function copyPrompt(url) {
+  const h = humanActor(); const r = await fetch(url + (h ? "?person=" + encodeURIComponent(h) : ""));
+  const j = await r.json(); if (!r.ok) return toast(j.error || "failed", true);
+  toast(await copyText(j.prompt) ? "Prompt copied: paste it into a new agent session" : "Could not copy; your browser blocked it", !1);
 }
 
 async function needsYouAction(t) {
@@ -649,6 +662,8 @@ document.addEventListener("click", async (e) => {
   if (t.id === "dClose") { $("#drawer").classList.remove("open"); openItem = null; return; }
   if (t.dataset.do) return drawerAction(t.dataset.do);
   if (t.dataset.ny) return needsYouAction(t);
+  if (t.dataset.copyPrompt) return copyPrompt(`/api/item/${t.dataset.copyPrompt}/prompt`);
+  if (t.id === "copyAll") return copyPrompt("/api/prompt-all");
   if (t.id === "notifyOn") { await Notification.requestPermission(); return renderNeedsYou(); }
   if (t.dataset.undoTakeover) { await act("undo_takeover", { id: +t.dataset.undoTakeover }).then(() => toast("Back on your list")).catch(() => {}); return; }
   if (t.dataset.takeoverOk) { await act("takeover_seen", { id: +t.dataset.takeoverOk }).catch(() => {}); return; }
