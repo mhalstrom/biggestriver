@@ -47,7 +47,12 @@ This project uses Biggest River (`river`) to track work and who is doing it.
 When the user says "go" (or asks you to take work from the queue), run
 `river go` in this folder and follow the briefing it prints: it names you,
 gives you a role and an item, and says what to run when you finish.
+When the user says "plan", run `river plan` instead and ask the user what
+outcome they want before you add items.
 """
+
+# The block before plan mode; river init replaces it with AGENT_SNIPPET.
+OLD_SNIPPETS = [AGENT_SNIPPET.split('When the user says "plan"')[0]]
 
 SETUP = """Setting up agents to use river
 
@@ -499,6 +504,10 @@ def _hint(a, res, actor):
 def _append_block(f):
     old = f.read_text() if f.exists() else ""
     if "Biggest River" in old:
+        for prev in OLD_SNIPPETS:
+            if prev in old and AGENT_SNIPPET not in old:
+                f.write_text(old.replace(prev, AGENT_SNIPPET, 1))
+                return f"{f.name}: updated the work queue block (adds: say plan, run river plan)"
         return f"{f.name}: already has the work queue block"
     f.write_text(old + ("\n" if old and not old.endswith("\n") else "") + ("\n" if old else "") + AGENT_SNIPPET)
     return f"{f.name}: added the work queue block"

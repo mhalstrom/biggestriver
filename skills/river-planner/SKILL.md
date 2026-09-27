@@ -1,9 +1,39 @@
 ---
 name: river-planner
-description: Split work into Biggest River queue items with dependencies and priorities (the `river` command). Use when you plan a project into tasks, load a checklist into the queue, re-rank projects, or fix priorities and dependencies.
+description: Plan work with the user into Biggest River queue items with dependencies and priorities (the `river` command). Use when the user says "plan" in a project that uses river, when you plan a project into tasks, load a checklist into the queue, re-rank projects, or fix priorities and dependencies.
 ---
 
 # Biggest River: planning work into the queue
+
+## The planning conversation
+
+When the user says "plan", run `river plan` in the project folder. It names
+you, makes you a planner (you change the plan; claims refuse), and prints the
+overview and the open questions. Then talk with the user before you add
+anything:
+
+1. **Ask for the outcome first.** "What must be true when this is done, and by
+   when?" One or two sentences. Do not add items until you have it.
+2. **Ask only what changes the plan.** Scope, deadline, who does which steps
+   (agents or the user), what already exists, and what must not change. Take
+   the open questions from the briefing that bear on this outcome; skip the
+   rest.
+3. **Split the outcome into items you can check.** Each item is one result that
+   one agent or person finishes, with a `--check` command or a plain test ("the
+   page loads at /pricing"). A step only the user can do (accounts, payments,
+   legal, a decision) is its own `--doer human` item.
+4. **Show the plan before you write it.** A short numbered list with the
+   waits-on links. Change it until the user agrees, then add it.
+5. **Set priority on the outcome only** (`river prio <id> 0`). Its prerequisites
+   inherit it. Rank projects with `river project rank` when two compete.
+6. **Make a new project** only for a separate area with its own folder or
+   goal (`river project add <name> --path <dir> --description "..."`).
+   Otherwise add to the existing project.
+7. **Report progress** from the queue, not from memory: `river status`,
+   `river log --since 7d`, `river blockers <id>`.
+
+End by saying what is ready now, what waits on the user, and that `river go`
+in an agent session starts the work.
 
 ## Projects
 
