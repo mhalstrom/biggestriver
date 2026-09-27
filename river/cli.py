@@ -824,7 +824,10 @@ def render_go(b):
             f"    or ... --blocks {it['id']} --release   (large or better for someone else; then run go again).",
             f"  - You find other work: {r} add \"<title>\" --found-during {it['id']}. Do not do it now.",
             f"  - Waiting on something outside the queue: {r} blocked {it['id']} --reason \"<what>\", release, run go again.",
-            f"  - The user must do a step: add it with --doer human and tell the user.",
+            f"  - You need the user (a decision, an approval, an account or payment step): put it in the queue, not only in chat:",
+            f"    {r} add \"<what to decide or do>\" --doer human --context \"<exactly what, where the material is>\" --blocks {it['id']}",
+            f"    That is what notifies them. A quick question instead: {r} send question --to "
+            + ("|".join(b.get("humans") or []) or "<person>") + " \"...\" --item " + str(it["id"]),
             "",
             f"When finished:  {r} done {it['id']} --output \"<what changed, commit id>\"",
             f"Then continue:  {r} go",

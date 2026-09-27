@@ -79,6 +79,26 @@ first only when neither applies (`river add <project> "<title>"`).
   Do not do it inside your current item.
 - Waiting on something outside the queue: `river blocked <id> --reason "<what>"`.
 
+## When you need the user
+
+Anything only the user can do or decide (a decision, an approval, an account,
+payment, or legal step) goes in the queue as a human item, not only in chat.
+The queue is what notifies them (`river needs-you`, phone, mail), and it keeps
+the step visible after the chat ends.
+
+```
+river add "Approve the refund policy draft" --doer human --blocks <your-id> \
+  --context "Five decisions at the end of docs/legal/refund-draft.md; answer each yes/no"
+```
+
+- Say exactly what to decide or do and where the material is, so the user can
+  act without asking you.
+- Link it: `--blocks <id>` when your item waits on it (add `--release` and run
+  `river go` again if you cannot continue), `--found-during <id>` otherwise.
+- A short question that needs no item: `river send question --to <person> "..." --item <id>`.
+  The go briefing lists the people by name.
+- Then tell the user in chat too, with the item id.
+
 ## Pushed items
 
 Someone can push an item to you (`river push <id> --to <you> --note "..."`):

@@ -1093,5 +1093,14 @@ class Push(Base):
             core.push(self.c, self.x, "nobody", None, "boss")
 
 
+class HumanSteps(Base):
+    def test_go_brief_names_the_people(self):
+        core.project_add(self.c, "a", path=self.dir.name)
+        core.register(self.c, "mark", human=True)
+        self.add("a", "x")
+        b = core.go(self.c, self.dir.name, "ag")
+        self.assertEqual(b["humans"], ["mark"])
+
+
 if __name__ == "__main__":
     unittest.main()

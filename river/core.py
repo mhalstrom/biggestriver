@@ -2050,7 +2050,8 @@ def go(conn, cwd, actor=None, project=None, role=None):
     human_ready = sorted((a for a in in_area if a["ready"] and a["doer"] == "human"), key=lambda a: a["sort_key"])
     brief = {"agent": actor, "new_name": new_name, "projects": names, "descriptions": descs,
              "human_waiting": [{"id": a["id"], "title": a["title"]} for a in human_ready],
-             "messages": unread(conn, actor)}
+             "messages": unread(conn, actor),
+             "humans": [r["name"] for r in conn.execute("SELECT name FROM agents WHERE kind='human' ORDER BY name")]}
 
     # Resume: an item already held.
     held = conn.execute("SELECT id FROM items WHERE assignee=? AND status IN ('in_progress','held') "
