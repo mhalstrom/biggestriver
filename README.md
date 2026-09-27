@@ -1,5 +1,11 @@
 # Biggest River
 
+**In short:** you put work items into projects and say which items wait on
+which. Each person or agent session registers a name, picks the area it knows,
+and runs `river next --claim` to take the most important item that is ready
+there. When it finishes, it runs `river done`. The web page shows who holds
+what and how many more sessions the ready work could use.
+
 A small work queue for people and AI agent sessions that work on several
 projects at the same time.
 
@@ -72,17 +78,34 @@ river config set lease_ttl 7d --agent alex       # people keep claims longer
 river config set max_leases 3 --agent alex
 ```
 
-## Agent skills
+## Set up your agents
 
-`skills/river` teaches an agent the work loop; `skills/river-planner` teaches how
-to split work into items. For Claude Code:
+Agents learn river from the command itself. Run `river` with no arguments for
+the quick start, `river guide` for the full work loop, and `river guide setup`
+for these steps.
 
-```sh
-ln -s "$PWD/skills/river" ~/.claude/skills/river
-ln -s "$PWD/skills/river-planner" ~/.claude/skills/river-planner
-```
+1. Put `bin/river` on `PATH`.
+2. Add a short block to the instructions file your agent reads (`CLAUDE.md`
+   for Claude Code, `AGENTS.md` for Codex and others):
 
-Other agents can read the same text with `river guide` and `river guide river-planner`.
+   ```sh
+   river setup-agent --append CLAUDE.md     # or: river setup-agent  (prints the block)
+   ```
+
+   The block tells the agent to run `river guide` once and then work from the
+   queue.
+3. Give each agent session its own name: it runs `river register <name>` and
+   sets `RIVER_AGENT`.
+4. Optional, Claude Code: install the skills so they load when needed.
+
+   ```sh
+   ln -s "$PWD/skills/river" ~/.claude/skills/river
+   ln -s "$PWD/skills/river-planner" ~/.claude/skills/river-planner
+   ```
+
+After each command, river prints one hint line with the likely next command
+(for example, how to finish or release the item just claimed). Hints go to
+stderr, never into `--json` output; `-q` or `RIVER_QUIET=1` turns them off.
 
 ## Tests
 

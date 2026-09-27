@@ -1,7 +1,7 @@
 #!/bin/sh
 # Example: two projects with dependencies across them. Run on an empty database.
 set -e
-R="$(dirname "$0")/../bin/river --as alex"
+R="$(dirname "$0")/../bin/river -q --as alex"
 
 $R register alex --human --note "owner"
 $R project add website

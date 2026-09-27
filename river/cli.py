@@ -13,6 +13,69 @@ from .core import RiverError
 
 GUIDES = Path(__file__).resolve().parent.parent / "skills"
 
+QUICKSTART = """Biggest River: a shared work queue for people and agent sessions.
+
+Items live in projects and can wait on other items. `river next` gives the
+most important ready item in the area you choose; `--claim` takes it.
+
+First time:
+  river register <your-name> [--human] --note "what you work on"
+  export RIVER_AGENT=<your-name>
+
+Work loop:
+  river next --project <name> --claim     take the next item where you have context
+  river show <id>                         read it
+  river done <id> --output "what changed" finish it   (or: river release <id>)
+
+More:
+  river guide          how an agent works from the queue (the full loop)
+  river guide planner  how to split work into items and dependencies
+  river guide setup    how to set up your agents to use river
+  river --help         every command
+"""
+
+AGENT_SNIPPET = """## Work queue
+
+This project uses Biggest River (`river`) to track work and who is doing it.
+Before you start work, run `river guide` once and follow it. In short:
+register with `river register <session-name>`, set `RIVER_AGENT`, take work
+with `river next --project <project> --claim`, and finish with
+`river done <id> --output "..."`. Add work you find with `river add`, never
+do it silently.
+"""
+
+SETUP = """Setting up agents to use river
+
+1. Put the command on PATH:
+     ln -s <repo>/bin/river ~/.local/bin/river
+
+2. Tell your agents about it. Add this block to the instructions file your
+   agent reads (CLAUDE.md for Claude Code, AGENTS.md for Codex and others):
+
+""" + "\n".join("     " + line for line in AGENT_SNIPPET.splitlines()) + """
+
+   Or let river add it:  river setup-agent --append CLAUDE.md
+
+3. Claude Code only, optional: install the skills so they load when needed:
+     ln -s <repo>/skills/river ~/.claude/skills/river
+     ln -s <repo>/skills/river-planner ~/.claude/skills/river-planner
+
+4. Give each agent session its own name (river register <name>). A person
+   registers with --human and usually wants longer claims:
+     river config set lease_ttl 7d --agent <person>
+
+5. Watch it:  river serve --open
+"""
+
+HINTS = {
+    "register": "next: export RIVER_AGENT={name}  then  river next --claim  (river guide for the full loop)",
+    "claim": "when finished: river done {id} --output \"what changed\"   cannot finish: river release {id} --note \"why\"   work found: river add <project> \"title\"",
+    "done": "next: river next --claim (same area: --project/--near {id})",
+    "release": "next: river next --claim",
+    "empty": "nothing ready here. Try: river next (all projects), river next --unblocks <id>, river blockers <id>, river list",
+    "no_actor": "tip: river register <name> and export RIVER_AGENT=<name> so claims and history carry your name",
+}
+
 
 def _fmt_item(a, show_reason=True):
     flags = []
@@ -92,7 +155,9 @@ def build_parser():
     p = argparse.ArgumentParser(prog="river", description="Biggest River: a dependency-ordered work queue for agents and people.")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     p.add_argument("--as", dest="actor", default=os.environ.get("RIVER_AGENT"), help="agent name (default $RIVER_AGENT)")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    p.add_argument("--quiet", "-q", action="store_true", default=bool(os.environ.get("RIVER_QUIET")),
+                   help="no hint lines")
+    sub = p.add_subparsers(dest="cmd")
 
     pr = sub.add_parser("project", help="add, rank, list, or archive projects")
     prs = pr.add_subparsers(dest="pcmd", required=True)
@@ -161,14 +226,37 @@ def build_parser():
 
     x = sub.add_parser("serve", help="the web page on 127.0.0.1")
     x.add_argument("--port", type=int); x.add_argument("--open", action="store_true")
-    x = sub.add_parser("guide", help="print the skill text"); x.add_argument("which", nargs="?", default="river", choices=["river", "river-planner"])
+    x = sub.add_parser("guide", help="how to use river: worker loop, planner, or agent setup")
+    x.add_argument("which", nargs="?", default="river", choices=["river", "planner", "river-planner", "setup"])
+    x = sub.add_parser("setup-agent", help="print (or append) the instructions block for CLAUDE.md / AGENTS.md")
+    x.add_argument("--append", metavar="FILE", help="append the block to this file if it is not there yet")
     return p
 
 
 def run(argv=None):
     args = build_parser().parse_args(argv)
+    if args.cmd is None:
+        print(QUICKSTART)
+        return 0
     if args.cmd == "guide":
-        print((GUIDES / args.which / "SKILL.md").read_text())
+        if args.which == "setup":
+            print(SETUP)
+        else:
+            name = "river-planner" if args.which in ("planner", "river-planner") else "river"
+            text = (GUIDES / name / "SKILL.md").read_text()
+            print(text.split("---", 2)[2].strip() if text.startswith("---") else text)
+        return 0
+    if args.cmd == "setup-agent":
+        if not args.append:
+            print(AGENT_SNIPPET)
+            return 0
+        f = Path(args.append)
+        old = f.read_text() if f.exists() else ""
+        if "Biggest River" in old:
+            print(f"{f} already mentions Biggest River; nothing added")
+            return 0
+        f.write_text(old + ("\n" if old and not old.endswith("\n") else "") + ("\n" if old else "") + AGENT_SNIPPET)
+        print(f"added the work queue block to {f}")
         return 0
     conn = core.connect()
     if args.cmd == "serve":
@@ -183,8 +271,34 @@ def run(argv=None):
         print(json.dumps(res, indent=2, default=str))
     else:
         render(args, res)
+    sys.stdout.flush()
     _footer(conn, actor)
+    if not args.quiet and not args.json:
+        h = _hint(args, res, actor)
+        if h:
+            print(h, file=sys.stderr)
     return 0
+
+
+def _hint(a, res, actor):
+    c = a.cmd
+    if c == "register":
+        return HINTS["register"].format(name=res["name"])
+    if c == "next":
+        if not res:
+            return None  # render already says what to try
+        if a.claim:
+            return HINTS["claim"].format(id=res[0]["id"])
+        return f"take it: river claim {res[0]['id']}   (or add --claim to river next)" + ("" if actor else "\n" + HINTS["no_actor"])
+    if c == "claim":
+        return HINTS["claim"].format(id=res["id"])
+    if c == "done":
+        return HINTS["done"].format(id=res["id"])
+    if c == "release":
+        return HINTS["release"]
+    if not actor and c in ("list", "show", "who", "capacity", "blockers"):
+        return HINTS["no_actor"]
+    return None
 
 
 def dispatch(conn, a, actor):
@@ -273,7 +387,7 @@ def render(a, res):
         return
     if c == "next":
         if not res:
-            print("Nothing is ready in that area. Try: river next (all projects), river next --unblocks <id>, or river list")
+            print(HINTS["empty"])
             return
         if a.claim:
             print("Claimed:")
