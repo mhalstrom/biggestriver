@@ -51,9 +51,16 @@ A person registers with `--human`.
 
 ## When you find other work
 
-- Something this item needs first: `river add <project> "<title>" --doer ai|human|any`
-  then `river dep <your-id> --on <new-id>`. Release your item if you will not
-  do the new one now.
+- Something this item needs first: `river add <project> "<title>" --blocks <your-id>`
+  with one of:
+  - `--keep`: it is small and you do it now. Your item becomes `held`, still
+    yours; the new item is reserved for you; when it is done your item goes
+    back to in progress. A hold lasts `hold_ttl` (2h), renewed by your
+    commands. More than `keep_prereq_limit` (3) open prerequisites: river
+    releases instead and marks the item `replan`.
+  - `--release` (the default): it is large or better for someone else. Your
+    item goes back to the queue, waiting on the new one. Run `river go` again.
+  `river keep <id>` holds a released item again; `river release <id>` ends a hold.
 - Something unrelated: `river add <project> "<title>" --notes "found while doing #<id>"`.
   Do not do it inside your current item.
 - Waiting on something outside the queue: `river blocked <id> --reason "<what>"`.
