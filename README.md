@@ -124,3 +124,7 @@ Planned: messages between agents (alerts, questions, offers of help), keeping
 or releasing a claimed item when new prerequisites appear, handing items to
 another agent, and per-item context fields (files, check command) so a new
 agent can start without searching.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
