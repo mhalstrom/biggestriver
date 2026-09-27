@@ -1,0 +1,911 @@
+"""Biggest River core: storage, graph ordering, claims, registry, capacity.
+
+Every public function takes an open connection from `connect()` and returns
+plain dicts and lists, so the CLI and the web server share one code path.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import sqlite3
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+DEFAULT_DB = Path(__file__).resolve().parent.parent / "data" / "river.db"
+
+OPEN_STATES = ("open", "in_progress", "held")
+CLOSED_STATES = ("done", "dropped")
+DOERS = ("any", "ai", "human")
+
+DEFAULT_SETTINGS = {
+    "lease_ttl": "30m",
+    "hold_ttl": "2h",
+    "keep_prereq_limit": "3",
+    "replan_threshold": "3",
+    "default_prerequisite_mode": "release",
+    "max_leases": "1",
+    "away_after": "1h",
+    "gone_after": "24h",
+    "question_nudge_after": "30m",
+    "serve_port": "8765",
+}
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS projects (
+  id          INTEGER PRIMARY KEY,
+  name        TEXT NOT NULL UNIQUE,
+  rank        INTEGER NOT NULL,
+  notes       TEXT NOT NULL DEFAULT '',
+  archived    INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS items (
+  id                INTEGER PRIMARY KEY,
+  project_id        INTEGER NOT NULL REFERENCES projects(id),
+  title             TEXT NOT NULL,
+  notes             TEXT NOT NULL DEFAULT '',
+  priority          INTEGER NOT NULL DEFAULT 2 CHECK (priority BETWEEN 0 AND 4),
+  rank              REAL NOT NULL,
+  doer              TEXT NOT NULL DEFAULT 'any' CHECK (doer IN ('any','ai','human')),
+  status            TEXT NOT NULL DEFAULT 'open'
+                    CHECK (status IN ('open','in_progress','held','done','dropped')),
+  blocked_reason    TEXT,
+  assignee          TEXT,
+  claimed_at        TEXT,
+  lease_expires_at  TEXT,
+  output            TEXT NOT NULL DEFAULT '',
+  created_at        TEXT NOT NULL,
+  closed_at         TEXT
+);
+
+CREATE TABLE IF NOT EXISTS deps (
+  item_id     INTEGER NOT NULL REFERENCES items(id),
+  blocked_by  INTEGER NOT NULL REFERENCES items(id),
+  kind        TEXT NOT NULL DEFAULT 'blocks',
+  PRIMARY KEY (item_id, blocked_by),
+  CHECK (item_id <> blocked_by)
+);
+
+CREATE TABLE IF NOT EXISTS events (
+  id       INTEGER PRIMARY KEY,
+  item_id  INTEGER REFERENCES items(id),
+  at       TEXT NOT NULL,
+  actor    TEXT NOT NULL,
+  change   TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS agents (
+  name           TEXT PRIMARY KEY,
+  kind           TEXT NOT NULL DEFAULT 'ai' CHECK (kind IN ('ai','human')),
+  note           TEXT NOT NULL DEFAULT '',
+  registered_at  TEXT NOT NULL,
+  last_seen      TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+  scope  TEXT NOT NULL,
+  key    TEXT NOT NULL,
+  value  TEXT NOT NULL,
+  PRIMARY KEY (scope, key)
+);
+
+CREATE INDEX IF NOT EXISTS items_status ON items(status);
+CREATE INDEX IF NOT EXISTS deps_blocked_by ON deps(blocked_by);
+CREATE INDEX IF NOT EXISTS events_item ON events(item_id);
+"""
+
+
+class RiverError(Exception):
+    """A refusal. The message names the rule and, where possible, the next command."""
+
+
+# ---------------------------------------------------------------- time
+
+def now() -> datetime:
+    return datetime.now(timezone.utc).replace(microsecond=0)
+
+
+def iso(t: datetime) -> str:
+    return t.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_iso(s: str) -> datetime:
+    return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+
+
+_DURATION = re.compile(r"^\s*(\d+)\s*([smhd])\s*$")
+
+
+def parse_duration(s: str) -> timedelta:
+    m = _DURATION.match(s)
+    if not m:
+        raise RiverError(f"bad duration {s!r}: use a number and s, m, h, or d (for example 30m, 2h, 7d)")
+    n, unit = int(m.group(1)), m.group(2)
+    return {"s": timedelta(seconds=n), "m": timedelta(minutes=n),
+            "h": timedelta(hours=n), "d": timedelta(days=n)}[unit]
+
+
+# ---------------------------------------------------------------- connection
+
+def db_path() -> Path:
+    return Path(os.environ.get("RIVER_DB", DEFAULT_DB)).expanduser()
+
+
+def connect(path: Path | str | None = None) -> sqlite3.Connection:
+    p = Path(path) if path else db_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(p, timeout=10, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=10000")
+    conn.executescript(SCHEMA)
+    return conn
+
+
+class tx:
+    """BEGIN IMMEDIATE ... COMMIT, so two writers never interleave a claim."""
+
+    def __init__(self, conn: sqlite3.Connection):
+        self.conn = conn
+
+    def __enter__(self):
+        self.conn.execute("BEGIN IMMEDIATE")
+        return self.conn
+
+    def __exit__(self, exc_type, exc, tb):
+        self.conn.execute("ROLLBACK" if exc_type else "COMMIT")
+        return False
+
+
+def _event(conn, item_id, actor, change):
+    conn.execute("INSERT INTO events(item_id, at, actor, change) VALUES (?,?,?,?)",
+                 (item_id, iso(now()), actor or "?", change))
+
+
+# ---------------------------------------------------------------- settings
+
+def setting(conn, key: str, item_id: int | None = None, agent: str | None = None,
+            project_id: int | None = None) -> str:
+    """Most specific value wins: item, agent, project, global, built-in."""
+    if key not in DEFAULT_SETTINGS:
+        raise RiverError(f"unknown setting {key!r}; known: {', '.join(sorted(DEFAULT_SETTINGS))}")
+    if item_id is not None and project_id is None:
+        r = conn.execute("SELECT project_id FROM items WHERE id=?", (item_id,)).fetchone()
+        project_id = r["project_id"] if r else None
+    scopes = []
+    if item_id is not None:
+        scopes.append(f"item:{item_id}")
+    if agent:
+        scopes.append(f"agent:{agent}")
+    if project_id is not None:
+        r = conn.execute("SELECT name FROM projects WHERE id=?", (project_id,)).fetchone()
+        if r:
+            scopes.append(f"project:{r['name']}")
+    scopes.append("global")
+    for sc in scopes:
+        r = conn.execute("SELECT value FROM settings WHERE scope=? AND key=?", (sc, key)).fetchone()
+        if r:
+            return r["value"]
+    return DEFAULT_SETTINGS[key]
+
+
+def _scope(conn, project=None, item=None, agent=None) -> str:
+    given = [x for x in (project, item, agent) if x is not None]
+    if len(given) > 1:
+        raise RiverError("give at most one of --project, --item, --agent")
+    if project is not None:
+        _project(conn, project)
+        return f"project:{project}"
+    if item is not None:
+        _item(conn, item)
+        return f"item:{item}"
+    if agent is not None:
+        return f"agent:{agent}"
+    return "global"
+
+
+def config_set(conn, key, value, project=None, item=None, agent=None, actor=None):
+    if key not in DEFAULT_SETTINGS:
+        raise RiverError(f"unknown setting {key!r}; known: {', '.join(sorted(DEFAULT_SETTINGS))}")
+    if key.endswith(("_ttl", "_after")):
+        parse_duration(value)
+    elif key in ("keep_prereq_limit", "replan_threshold", "max_leases", "serve_port"):
+        if not value.isdigit():
+            raise RiverError(f"{key} takes a whole number")
+    elif key == "default_prerequisite_mode" and value not in ("keep", "release"):
+        raise RiverError("default_prerequisite_mode is keep or release")
+    sc = _scope(conn, project, item, agent)
+    with tx(conn):
+        conn.execute("INSERT INTO settings(scope,key,value) VALUES (?,?,?) "
+                     "ON CONFLICT(scope,key) DO UPDATE SET value=excluded.value", (sc, key, value))
+        _event(conn, None, actor, f"setting {sc} {key}={value}")
+    return {"scope": sc, "key": key, "value": value}
+
+
+def config_unset(conn, key, project=None, item=None, agent=None, actor=None):
+    sc = _scope(conn, project, item, agent)
+    with tx(conn):
+        conn.execute("DELETE FROM settings WHERE scope=? AND key=?", (sc, key))
+        _event(conn, None, actor, f"setting {sc} {key} unset")
+    return {"scope": sc, "key": key}
+
+
+def config_list(conn):
+    rows = [dict(r) for r in conn.execute("SELECT scope,key,value FROM settings ORDER BY scope,key")]
+    return {"defaults": DEFAULT_SETTINGS, "overrides": rows}
+
+
+# ---------------------------------------------------------------- projects
+
+def _project(conn, name):
+    r = conn.execute("SELECT * FROM projects WHERE name=?", (name,)).fetchone()
+    if not r:
+        names = [x["name"] for x in conn.execute("SELECT name FROM projects WHERE archived=0 ORDER BY rank")]
+        raise RiverError(f"no project {name!r}; projects: {', '.join(names) or '(none; river project add <name>)'}")
+    return r
+
+
+def project_add(conn, name, rank=None, notes="", actor=None):
+    if not re.match(r"^[a-z0-9][a-z0-9._-]*$", name):
+        raise RiverError("project names use lower-case letters, digits, '.', '_', '-'")
+    with tx(conn):
+        if conn.execute("SELECT 1 FROM projects WHERE name=?", (name,)).fetchone():
+            raise RiverError(f"project {name!r} exists")
+        top = conn.execute("SELECT COALESCE(MAX(rank),0) m FROM projects").fetchone()["m"]
+        conn.execute("INSERT INTO projects(name,rank,notes,created_at) VALUES (?,?,?,?)",
+                     (name, top + 1, notes, iso(now())))
+        _event(conn, None, actor, f"project {name} added")
+    if rank is not None:
+        project_rank(conn, name, rank, actor)
+    return dict(_project(conn, name))
+
+
+def project_rank(conn, name, rank, actor=None):
+    """Move a project to position `rank` (1 = most important) and renumber the rest."""
+    with tx(conn):
+        _project(conn, name)
+        names = [r["name"] for r in conn.execute(
+            "SELECT name FROM projects WHERE archived=0 ORDER BY rank, id") if r["name"] != name]
+        rank = max(1, min(int(rank), len(names) + 1))
+        names.insert(rank - 1, name)
+        for i, n in enumerate(names, 1):
+            conn.execute("UPDATE projects SET rank=? WHERE name=?", (i, n))
+        _event(conn, None, actor, f"project {name} rank {rank}")
+    return project_list(conn)
+
+
+def project_archive(conn, name, actor=None):
+    with tx(conn):
+        _project(conn, name)
+        conn.execute("UPDATE projects SET archived=1, rank=100000 WHERE name=?", (name,))
+        _event(conn, None, actor, f"project {name} archived")
+    return project_list(conn)
+
+
+def project_list(conn):
+    return [dict(r) for r in conn.execute(
+        "SELECT p.*, (SELECT COUNT(*) FROM items i WHERE i.project_id=p.id AND i.status IN ('open','in_progress','held')) open_items "
+        "FROM projects p WHERE archived=0 ORDER BY rank, id")]
+
+
+# ---------------------------------------------------------------- items
+
+def _item(conn, item_id):
+    r = conn.execute("SELECT * FROM items WHERE id=?", (int(item_id),)).fetchone()
+    if not r:
+        raise RiverError(f"no item {item_id}")
+    return r
+
+
+def item_add(conn, project, title, priority=2, notes="", doer="any", after=(), actor=None):
+    if doer not in DOERS:
+        raise RiverError(f"doer is one of {', '.join(DOERS)}")
+    if not (0 <= int(priority) <= 4):
+        raise RiverError("priority is 0 (highest) to 4 (lowest)")
+    with tx(conn):
+        p = _project(conn, project)
+        top = conn.execute("SELECT COALESCE(MAX(rank),0) m FROM items WHERE project_id=?", (p["id"],)).fetchone()["m"]
+        cur = conn.execute(
+            "INSERT INTO items(project_id,title,notes,priority,rank,doer,created_at) VALUES (?,?,?,?,?,?,?)",
+            (p["id"], title, notes, int(priority), top + 1, doer, iso(now())))
+        iid = cur.lastrowid
+        _event(conn, iid, actor, f"added to {project} at P{priority}")
+        for b in after:
+            _dep_add(conn, iid, int(b), actor)
+    return item_show(conn, iid)
+
+
+def item_edit(conn, item_id, title=None, notes=None, doer=None, project=None, actor=None):
+    with tx(conn):
+        it = _item(conn, item_id)
+        if title is not None:
+            conn.execute("UPDATE items SET title=? WHERE id=?", (title, it["id"]))
+            _event(conn, it["id"], actor, "title changed")
+        if notes is not None:
+            conn.execute("UPDATE items SET notes=? WHERE id=?", (notes, it["id"]))
+            _event(conn, it["id"], actor, "notes changed")
+        if doer is not None:
+            if doer not in DOERS:
+                raise RiverError(f"doer is one of {', '.join(DOERS)}")
+            conn.execute("UPDATE items SET doer=? WHERE id=?", (doer, it["id"]))
+            _event(conn, it["id"], actor, f"doer {it['doer']} -> {doer}")
+        if project is not None:
+            p = _project(conn, project)
+            conn.execute("UPDATE items SET project_id=? WHERE id=?", (p["id"], it["id"]))
+            _event(conn, it["id"], actor, f"moved to project {project}")
+    return item_show(conn, item_id)
+
+
+def item_prio(conn, item_id, priority, actor=None):
+    if not (0 <= int(priority) <= 4):
+        raise RiverError("priority is 0 (highest) to 4 (lowest)")
+    with tx(conn):
+        it = _item(conn, item_id)
+        conn.execute("UPDATE items SET priority=? WHERE id=?", (int(priority), it["id"]))
+        _event(conn, it["id"], actor, f"priority P{it['priority']} -> P{priority}")
+    return item_show(conn, item_id)
+
+
+def item_move(conn, item_id, before=None, after=None, actor=None):
+    """Change the manual order inside a project: place the item just before or after another."""
+    if (before is None) == (after is None):
+        raise RiverError("give exactly one of --before or --after")
+    with tx(conn):
+        it = _item(conn, item_id)
+        ref = _item(conn, before if before is not None else after)
+        if ref["project_id"] != it["project_id"]:
+            raise RiverError("manual order applies inside one project; the two items are in different projects")
+        ranks = [r["rank"] for r in conn.execute(
+            "SELECT rank FROM items WHERE project_id=? AND id<>? ORDER BY rank", (it["project_id"], it["id"]))]
+        i = ranks.index(ref["rank"])
+        if before is not None:
+            lo = ranks[i - 1] if i > 0 else ref["rank"] - 1
+            new = (lo + ref["rank"]) / 2
+        else:
+            hi = ranks[i + 1] if i + 1 < len(ranks) else ref["rank"] + 1
+            new = (ref["rank"] + hi) / 2
+        conn.execute("UPDATE items SET rank=? WHERE id=?", (new, it["id"]))
+        _event(conn, it["id"], actor, f"moved {'before' if before is not None else 'after'} {ref['id']}")
+    return item_show(conn, item_id)
+
+
+def _reachable(conn, start, edges_sql):
+    seen, stack = set(), [start]
+    while stack:
+        x = stack.pop()
+        for r in conn.execute(edges_sql, (x,)):
+            y = r[0]
+            if y not in seen:
+                seen.add(y)
+                stack.append(y)
+    return seen
+
+
+def _dep_add(conn, item_id, blocked_by, actor):
+    _item(conn, item_id)
+    _item(conn, blocked_by)
+    if item_id == blocked_by:
+        raise RiverError("an item cannot wait on itself")
+    # Adding item -> blocked_by makes a cycle when item is already a prerequisite of blocked_by.
+    upstream_of_blocker = _reachable(conn, blocked_by, "SELECT blocked_by FROM deps WHERE item_id=?")
+    if item_id in upstream_of_blocker:
+        raise RiverError(f"refused: item {blocked_by} already waits on item {item_id} (directly or through other items); "
+                         f"this dependency would make a loop")
+    conn.execute("INSERT OR IGNORE INTO deps(item_id,blocked_by) VALUES (?,?)", (item_id, blocked_by))
+    _event(conn, item_id, actor, f"waits on {blocked_by}")
+
+
+def dep_add(conn, item_id, on, actor=None):
+    with tx(conn):
+        for b in on:
+            _dep_add(conn, int(item_id), int(b), actor)
+    return item_show(conn, item_id)
+
+
+def dep_remove(conn, item_id, on, actor=None):
+    with tx(conn):
+        for b in on:
+            conn.execute("DELETE FROM deps WHERE item_id=? AND blocked_by=?", (int(item_id), int(b)))
+            _event(conn, int(item_id), actor, f"no longer waits on {b}")
+    return item_show(conn, item_id)
+
+
+def block(conn, item_id, reason, actor=None):
+    """Record a blocker that is not an item in the queue ("waiting on Stripe review")."""
+    with tx(conn):
+        it = _item(conn, item_id)
+        conn.execute("UPDATE items SET blocked_reason=? WHERE id=?", (reason, it["id"]))
+        _event(conn, it["id"], actor, f"blocked: {reason}")
+    return item_show(conn, item_id)
+
+
+def unblock(conn, item_id, actor=None):
+    with tx(conn):
+        it = _item(conn, item_id)
+        conn.execute("UPDATE items SET blocked_reason=NULL WHERE id=?", (it["id"],))
+        _event(conn, it["id"], actor, "outside blocker cleared")
+    return item_show(conn, item_id)
+
+
+# ---------------------------------------------------------------- graph
+
+def _load_graph(conn):
+    projects = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM projects")}
+    items = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM items")}
+    waits_on = {i: [] for i in items}     # item -> prerequisites
+    waited_by = {i: [] for i in items}    # item -> dependents
+    for r in conn.execute("SELECT item_id, blocked_by FROM deps"):
+        waits_on[r["item_id"]].append(r["blocked_by"])
+        waited_by[r["blocked_by"]].append(r["item_id"])
+    return projects, items, waits_on, waited_by
+
+
+def annotate(conn):
+    """Compute readiness, effective priority, unblock counts, and sort keys for every item."""
+    projects, items, waits_on, waited_by = _load_graph(conn)
+    is_open = {i: items[i]["status"] in OPEN_STATES for i in items}
+
+    # Open dependents, transitive, of each open item.
+    memo: dict[int, frozenset] = {}
+
+    def dependents(i, trail=()):
+        if i in memo:
+            return memo[i]
+        acc = set()
+        for d in waited_by[i]:
+            if is_open[d] and d not in trail:
+                acc.add(d)
+                acc |= dependents(d, trail + (i,))
+        memo[i] = frozenset(acc)
+        return memo[i]
+
+    # Depth: 0 when no open prerequisite, else 1 + max depth of open prerequisites.
+    depth_memo: dict[int, int] = {}
+
+    def depth(i, trail=()):
+        if i in depth_memo:
+            return depth_memo[i]
+        ds = [depth(b, trail + (i,)) + 1 for b in waits_on[i] if is_open[b] and b not in trail]
+        depth_memo[i] = max(ds) if ds else 0
+        return depth_memo[i]
+
+    out = {}
+    for i, it in items.items():
+        p = projects[it["project_id"]]
+        open_blockers = [b for b in waits_on[i] if is_open[b]]
+        deps_i = dependents(i) if is_open[i] else frozenset()
+        eff = it["priority"]
+        source = None
+        for d in deps_i:
+            if items[d]["priority"] < eff:
+                eff, source = items[d]["priority"], d
+        ready = it["status"] == "open" and not open_blockers and not it["blocked_reason"]
+        a = dict(it)
+        a.update(
+            project=p["name"],
+            project_rank=p["rank"],
+            project_archived=bool(p["archived"]),
+            waits_on=sorted(waits_on[i]),
+            open_blockers=sorted(open_blockers),
+            unblocks=sorted(waited_by[i]),
+            unblocks_count=len(deps_i),
+            effective_priority=eff,
+            priority_from=source,
+            ready=ready,
+            depth=depth(i) if is_open[i] else None,
+        )
+        a["reason"] = _reason(a)
+        a["sort_key"] = (eff, p["rank"], -len(deps_i), it["rank"], it["created_at"], i)
+        out[i] = a
+    return out
+
+
+def _reason(a):
+    parts = [f"P{a['effective_priority']}"]
+    if a["priority_from"] is not None:
+        parts[0] += f" from #{a['priority_from']} (own P{a['priority']})"
+    parts.append(f"project {a['project']} (rank {a['project_rank']})")
+    if a["unblocks_count"]:
+        parts.append(f"unblocks {a['unblocks_count']}")
+    return ", ".join(parts)
+
+
+def _prereq_closure(ann, root):
+    seen, stack = set(), [root]
+    while stack:
+        x = stack.pop()
+        for b in ann[x]["waits_on"]:
+            if b not in seen and ann[b]["status"] in OPEN_STATES:
+                seen.add(b)
+                stack.append(b)
+    return seen
+
+
+def _graph_distances(ann, starts):
+    """Distance from the start items over dependency links in both directions."""
+    dist = {s: 0 for s in starts}
+    frontier = list(starts)
+    while frontier:
+        nxt = []
+        for x in frontier:
+            for y in ann[x]["waits_on"] + ann[x]["unblocks"]:
+                if y not in dist:
+                    dist[y] = dist[x] + 1
+                    nxt.append(y)
+        frontier = nxt
+    return dist
+
+
+def ready_list(conn, project=None, unblocks=None, doer_for=None, ann=None, near=None):
+    """Ready items drawn from the area the agent chooses.
+
+    The agent picks the area where it holds context: one or more projects
+    (`project`, a name or comma list), the prerequisites of an item or project
+    (`unblocks`), or the items linked to items it knows (`near`, closest
+    first). Inside the area the graph order applies. With no area, the pool
+    is every project.
+    """
+    ann = ann or annotate(conn)
+    pool = [a for a in ann.values() if a["ready"] and not a["project_archived"]]
+    if project:
+        names = [n.strip() for n in str(project).split(",") if n.strip()]
+        for n in names:
+            _project(conn, n)
+        pool = [a for a in pool if a["project"] in names]
+    if unblocks is not None:
+        if str(unblocks).isdigit():
+            _item(conn, unblocks)
+            roots = [int(unblocks)]
+        else:
+            _project(conn, unblocks)
+            roots = [a["id"] for a in ann.values() if a["project"] == unblocks and a["status"] in OPEN_STATES]
+        closure = set()
+        for r in roots:
+            closure |= _prereq_closure(ann, r)
+        pool = [a for a in pool if a["id"] in closure]
+    if doer_for is not None:
+        pool = [a for a in pool if a["doer"] in ("any", doer_for)]
+    if near:
+        starts = [int(x) for x in (near if isinstance(near, (list, tuple)) else str(near).split(","))]
+        for x in starts:
+            _item(conn, x)
+        dist = _graph_distances(ann, starts)
+        pool = [a for a in pool if a["id"] in dist]
+        for a in pool:
+            a["distance"] = dist[a["id"]]
+        pool.sort(key=lambda a: (dist[a["id"]], a["sort_key"]))
+        return pool
+    pool.sort(key=lambda a: a["sort_key"])
+    return pool
+
+
+# ---------------------------------------------------------------- registry and leases
+
+def _touch_agent(conn, actor):
+    """Renew every lease the actor holds and record that it was seen."""
+    if not actor:
+        return
+    t = now()
+    conn.execute("UPDATE agents SET last_seen=? WHERE name=?", (iso(t), actor))
+    for r in conn.execute("SELECT id FROM items WHERE assignee=? AND status='in_progress'", (actor,)).fetchall():
+        ttl = parse_duration(setting(conn, "lease_ttl", item_id=r["id"], agent=actor))
+        conn.execute("UPDATE items SET lease_expires_at=? WHERE id=?", (iso(t + ttl), r["id"]))
+
+
+def _sweep(conn):
+    t = iso(now())
+    expired = conn.execute(
+        "SELECT id, assignee FROM items WHERE status='in_progress' AND lease_expires_at < ?", (t,)).fetchall()
+    for r in expired:
+        conn.execute("UPDATE items SET status='open', assignee=NULL, claimed_at=NULL, lease_expires_at=NULL WHERE id=?",
+                     (r["id"],))
+        _event(conn, r["id"], "river", f"lease expired (was {r['assignee']}); back to open")
+    return [r["id"] for r in expired]
+
+
+def activity(conn, actor):
+    """Run at the start of every command: expire old leases, then renew the actor's own."""
+    with tx(conn):
+        expired = _sweep(conn)
+        _touch_agent(conn, actor)
+    return expired
+
+
+def register(conn, name, human=False, note=""):
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", name):
+        raise RiverError("agent names use letters, digits, '.', '_', '-' (up to 64)")
+    t = iso(now())
+    with tx(conn):
+        conn.execute(
+            "INSERT INTO agents(name,kind,note,registered_at,last_seen) VALUES (?,?,?,?,?) "
+            "ON CONFLICT(name) DO UPDATE SET kind=excluded.kind, note=excluded.note, last_seen=excluded.last_seen",
+            (name, "human" if human else "ai", note, t, t))
+        _event(conn, None, name, f"registered as {'human' if human else 'ai'}")
+    return agent_status(conn, name)
+
+
+def unregister(conn, name, actor=None):
+    with tx(conn):
+        _agent(conn, name)
+        held = conn.execute("SELECT id FROM items WHERE assignee=? AND status IN ('in_progress','held')", (name,)).fetchall()
+        if held:
+            raise RiverError(f"{name} holds {', '.join('#' + str(r['id']) for r in held)}; release those first")
+        conn.execute("DELETE FROM agents WHERE name=?", (name,))
+        conn.execute("DELETE FROM settings WHERE scope=?", (f"agent:{name}",))
+        _event(conn, None, actor or name, f"agent {name} unregistered")
+    return {"unregistered": name}
+
+
+def agent_note(conn, name, note):
+    with tx(conn):
+        _agent(conn, name)
+        conn.execute("UPDATE agents SET note=? WHERE name=?", (note, name))
+    return agent_status(conn, name)
+
+
+def _agent(conn, name):
+    r = conn.execute("SELECT * FROM agents WHERE name=?", (name,)).fetchone()
+    if not r:
+        raise RiverError(f"agent {name!r} is not registered; run: river register {name} [--human] [--note ...]")
+    return r
+
+
+def _agent_state(conn, a):
+    age = now() - parse_iso(a["last_seen"])
+    if age > parse_duration(setting(conn, "gone_after", agent=a["name"])):
+        return "gone"
+    if age > parse_duration(setting(conn, "away_after", agent=a["name"])):
+        return "away"
+    return "active"
+
+
+def agent_status(conn, name):
+    a = dict(_agent(conn, name))
+    a["state"] = _agent_state(conn, a)
+    a["holds"] = [dict(r) for r in conn.execute(
+        "SELECT id, title, status, lease_expires_at FROM items WHERE assignee=? AND status IN ('in_progress','held') ORDER BY id",
+        (name,))]
+    return a
+
+
+def who(conn, item=None, project=None):
+    agents = [agent_status(conn, r["name"]) for r in conn.execute("SELECT name FROM agents ORDER BY name")]
+    if item is not None:
+        it = _item(conn, item)
+        return [a for a in agents if a["name"] == it["assignee"]]
+    if project is not None:
+        p = _project(conn, project)
+        ids = {r["id"] for r in conn.execute("SELECT id FROM items WHERE project_id=?", (p["id"],))}
+        return [a for a in agents if any(h["id"] in ids for h in a["holds"])]
+    return agents
+
+
+def _claim_row(conn, item_id, actor):
+    if not actor:
+        raise RiverError("claiming needs an agent name: set RIVER_AGENT or pass --as <name>")
+    ag = _agent(conn, actor)
+    limit = int(setting(conn, "max_leases", agent=actor))
+    held = conn.execute("SELECT COUNT(*) c FROM items WHERE assignee=? AND status IN ('in_progress','held')",
+                        (actor,)).fetchone()["c"]
+    if held >= limit:
+        raise RiverError(f"refused: {actor} already holds {held} item(s) (max_leases {limit}). "
+                         f"Finish one (river done <id>), release one (river release <id>), "
+                         f"or raise the limit (river config set max_leases <n> --agent {actor})")
+    ttl = parse_duration(setting(conn, "lease_ttl", item_id=item_id, agent=actor))
+    t = now()
+    cur = conn.execute(
+        "UPDATE items SET status='in_progress', assignee=?, claimed_at=?, lease_expires_at=? "
+        "WHERE id=? AND status='open'", (actor, iso(t), iso(t + ttl), item_id))
+    if cur.rowcount != 1:
+        raise RiverError(f"item {item_id} is no longer open")
+    _event(conn, item_id, actor, f"claimed (lease {setting(conn, 'lease_ttl', item_id=item_id, agent=actor)})")
+    return ag
+
+
+def next_item(conn, project=None, unblocks=None, claim=False, actor=None, limit=1, near=None):
+    """Show, or claim, the first ready item from the area the agent chose."""
+    doer_for = None
+    if actor:
+        r = conn.execute("SELECT kind FROM agents WHERE name=?", (actor,)).fetchone()
+        doer_for = r["kind"] if r else None
+    if not claim:
+        return [{k: v for k, v in a.items() if k != 'sort_key'} for a in ready_list(conn, project, unblocks, doer_for, near=near)[:limit]]
+    with tx(conn):
+        _sweep(conn)
+        pool = ready_list(conn, project, unblocks, doer_for, near=near)
+        if not pool:
+            return []
+        _claim_row(conn, pool[0]["id"], actor)
+        return [item_show(conn, pool[0]["id"])]
+
+
+def claim(conn, item_id, actor=None):
+    with tx(conn):
+        _sweep(conn)
+        a = annotate(conn)[_item(conn, item_id)["id"]]
+        if not a["ready"]:
+            why = (f"waits on {', '.join('#' + str(b) for b in a['open_blockers'])}" if a["open_blockers"]
+                   else f"blocked: {a['blocked_reason']}" if a["blocked_reason"]
+                   else f"status is {a['status']}" + (f" (held by {a['assignee']})" if a["assignee"] else ""))
+            raise RiverError(f"item {item_id} is not ready: {why}. See: river blockers {item_id}")
+        _claim_row(conn, a["id"], actor)
+    return item_show(conn, item_id)
+
+
+def _close(conn, item_id, status, actor, output=None):
+    with tx(conn):
+        it = _item(conn, item_id)
+        if it["status"] in CLOSED_STATES:
+            raise RiverError(f"item {item_id} is already {it['status']}")
+        if it["assignee"] and actor and it["assignee"] != actor:
+            raise RiverError(f"item {item_id} is held by {it['assignee']}; ask them, or release it first")
+        conn.execute("UPDATE items SET status=?, closed_at=?, lease_expires_at=NULL, output=COALESCE(?, output) WHERE id=?",
+                     (status, iso(now()), output, it["id"]))
+        _event(conn, it["id"], actor, status + (f": {output}" if output else ""))
+        newly = []
+        if status in CLOSED_STATES:
+            ann = annotate(conn)
+            newly = [d for d in ann[it["id"]]["unblocks"] if ann[d]["ready"]]
+    res = item_show(conn, item_id)
+    res["now_ready"] = newly
+    return res
+
+
+def done(conn, item_id, output=None, actor=None):
+    return _close(conn, item_id, "done", actor, output)
+
+
+def drop(conn, item_id, actor=None):
+    return _close(conn, item_id, "dropped", actor)
+
+
+def release(conn, item_id, note=None, actor=None):
+    with tx(conn):
+        it = _item(conn, item_id)
+        if it["status"] not in ("in_progress", "held"):
+            raise RiverError(f"item {item_id} is {it['status']}; only a claimed item can be released")
+        if actor and it["assignee"] != actor:
+            raise RiverError(f"item {item_id} is held by {it['assignee']}, not {actor}")
+        conn.execute("UPDATE items SET status='open', assignee=NULL, claimed_at=NULL, lease_expires_at=NULL WHERE id=?",
+                     (it["id"],))
+        _event(conn, it["id"], actor, "released" + (f": {note}" if note else ""))
+    return item_show(conn, item_id)
+
+
+def reopen(conn, item_id, actor=None):
+    with tx(conn):
+        it = _item(conn, item_id)
+        if it["status"] not in CLOSED_STATES:
+            raise RiverError(f"item {item_id} is {it['status']}, not closed")
+        conn.execute("UPDATE items SET status='open', closed_at=NULL, assignee=NULL WHERE id=?", (it["id"],))
+        _event(conn, it["id"], actor, "reopened")
+    return item_show(conn, item_id)
+
+
+# ---------------------------------------------------------------- reads
+
+def item_show(conn, item_id, ann=None):
+    ann = ann or annotate(conn)
+    iid = int(item_id)
+    if iid not in ann:
+        raise RiverError(f"no item {item_id}")
+    a = {k: v for k, v in ann[iid].items() if k != "sort_key"}
+    a["waits_on_detail"] = [{"id": b, "title": ann[b]["title"], "status": ann[b]["status"]} for b in a["waits_on"]]
+    a["unblocks_detail"] = [{"id": d, "title": ann[d]["title"], "status": ann[d]["status"]} for d in a["unblocks"]]
+    a["events"] = [dict(r) for r in conn.execute(
+        "SELECT at, actor, change FROM events WHERE item_id=? ORDER BY id DESC LIMIT 50", (iid,))]
+    return a
+
+
+def item_list(conn, project=None, status=None, include_closed=False):
+    ann = annotate(conn)
+    rows = [a for a in ann.values() if not a["project_archived"]]
+    if project is not None:
+        _project(conn, project)
+        rows = [a for a in rows if a["project"] == project]
+    if status is not None:
+        rows = [a for a in rows if a["status"] == status]
+    elif not include_closed:
+        rows = [a for a in rows if a["status"] in OPEN_STATES]
+    rows.sort(key=lambda a: (a["status"] in CLOSED_STATES, not a["ready"], a["sort_key"]))
+    return [{k: v for k, v in a.items() if k != "sort_key"} for a in rows]
+
+
+def blockers(conn, item_id):
+    """Tree of open prerequisites with status and holder."""
+    ann = annotate(conn)
+    root = _item(conn, item_id)["id"]
+
+    def node(i, trail):
+        a = ann[i]
+        left = None
+        if a["lease_expires_at"]:
+            left = int((parse_iso(a["lease_expires_at"]) - now()).total_seconds())
+        return {
+            "id": i, "title": a["title"], "status": a["status"], "assignee": a["assignee"],
+            "ready": a["ready"], "blocked_reason": a["blocked_reason"], "lease_seconds_left": left,
+            "children": [node(b, trail | {i}) for b in a["waits_on"]
+                         if ann[b]["status"] in OPEN_STATES and b not in trail],
+        }
+
+    return node(root, frozenset())
+
+
+# ---------------------------------------------------------------- capacity
+
+def capacity(conn, ann=None):
+    """How many agent sessions the graph can use now, and whether too many are running.
+
+    Ready items never wait on each other (a ready item has no open prerequisite),
+    so every ready item nobody holds is an independent slot for one session.
+    """
+    ann = ann or annotate(conn)
+    live = [a for a in ann.values() if not a["project_archived"]]
+    ready = [a for a in live if a["ready"]]
+    ready_ai = [a for a in ready if a["doer"] in ("any", "ai")]
+    ready_human = [a for a in ready if a["doer"] == "human"]
+    agents = [agent_status(conn, r["name"]) for r in conn.execute("SELECT name FROM agents")]
+    ai_active = [a for a in agents if a["kind"] == "ai" and a["state"] == "active"]
+    ai_busy = [a for a in ai_active if a["holds"]]
+    ai_idle = [a for a in ai_active if not a["holds"]]
+    in_progress = [a for a in live if a["status"] in ("in_progress", "held")]
+
+    # Width by depth: how many open items could run at each step if every earlier step finished.
+    layers: dict[int, dict] = {}
+    for a in live:
+        if a["status"] in OPEN_STATES and a["depth"] is not None:
+            layer = layers.setdefault(a["depth"], {"depth": a["depth"], "ai": 0, "human": 0})
+            layer["human" if a["doer"] == "human" else "ai"] += 1
+    layer_list = [layers[k] for k in sorted(layers)]
+
+    spare = len(ready_ai) - len(ai_idle)
+    advice = []
+    if spare > 0:
+        advice.append({"kind": "launch", "text": f"{spare} ready item(s) for agents have nobody on them: "
+                       f"you can start up to {spare} more agent session(s)."})
+    if spare < 0:
+        advice.append({"kind": "too_many", "text": f"{len(ai_idle)} active agent session(s) hold nothing, "
+                       f"but only {len(ready_ai)} ready item(s) are free for them. "
+                       f"{-spare} session(s) have no work; stop them or give them other work."})
+    if ready_human:
+        advice.append({"kind": "human", "text": f"{len(ready_human)} ready item(s) wait on a human."})
+    if not ready and any(a["status"] == "open" for a in live) and not in_progress:
+        advice.append({"kind": "stuck", "text": "Nothing is ready and nothing is in progress: "
+                       "every open item is blocked. Check outside blockers (river list)."})
+    return {
+        "ready_for_agents": [a["id"] for a in sorted(ready_ai, key=lambda a: a["sort_key"])],
+        "ready_for_humans": [a["id"] for a in sorted(ready_human, key=lambda a: a["sort_key"])],
+        "in_progress": [a["id"] for a in in_progress],
+        "agents_active": len(ai_active),
+        "agents_busy": len(ai_busy),
+        "agents_idle": [a["name"] for a in ai_idle],
+        "spare_slots": max(spare, 0),
+        "excess_sessions": max(-spare, 0),
+        "layers": layer_list,
+        "peak_width": max((l["ai"] for l in layer_list), default=0),
+        "advice": advice,
+    }
+
+
+def recent_events(conn, limit=40):
+    return [dict(r) for r in conn.execute(
+        "SELECT e.at, e.actor, e.change, e.item_id, i.title FROM events e LEFT JOIN items i ON i.id=e.item_id "
+        "ORDER BY e.id DESC LIMIT ?", (limit,))]
+
+
+def state(conn):
+    """Everything the web page shows, in one read."""
+    ann = annotate(conn)
+    items = sorted(ann.values(), key=lambda a: a["sort_key"])
+    return {
+        "now": iso(now()),
+        "projects": project_list(conn),
+        "items": [{k: v for k, v in a.items() if k != "sort_key"} for a in items if not a["project_archived"]],
+        "agents": [agent_status(conn, r["name"]) for r in conn.execute("SELECT name FROM agents ORDER BY name")],
+        "capacity": capacity(conn, ann),
+        "settings": config_list(conn),
+        "events": recent_events(conn),
+    }

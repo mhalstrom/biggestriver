@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Biggest River</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --ink: #1b1f24; --muted: #5f6b7a; --line: #dde2e8;
+  --accent: #1f6feb; --accent-ink: #ffffff;
+  --ready: #1a7f37; --ready-bg: #dcf5e3;
+  --prog: #9a6700; --prog-bg: #fff3c4;
+  --wait: #57606a; --wait-bg: #eceff2;
+  --done: #6e7781; --done-bg: #f0f1f3;
+  --warn: #b42318; --warn-bg: #fde7e6;
+  --human: #8250df; --human-bg: #efe6fd;
+  --shadow: 0 1px 2px rgba(0,0,0,.06), 0 2px 8px rgba(0,0,0,.04);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1216; --panel: #171b21; --ink: #e6e9ee; --muted: #9aa5b1; --line: #2a3139;
+    --accent: #4c8dff; --accent-ink: #0b0d10;
+    --ready: #4ac26b; --ready-bg: #12301c;
+    --prog: #e3b341; --prog-bg: #3a2e0a;
+    --wait: #9aa5b1; --wait-bg: #232a32;
+    --done: #7d8590; --done-bg: #1c2128;
+    --warn: #ff7b72; --warn-bg: #3d1614;
+    --human: #b38cff; --human-bg: #2a1f45;
+    --shadow: none;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+header { position: sticky; top: 0; z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 16px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+header h1 { font-size: 17px; margin: 0; letter-spacing: .2px; }
+header .sub { color: var(--muted); font-size: 12px; }
+nav { display: flex; gap: 4px; }
+nav button { background: none; border: 1px solid transparent; color: var(--muted); padding: 5px 10px; border-radius: 6px; cursor: pointer; font: inherit; }
+nav button.on { color: var(--ink); border-color: var(--line); background: var(--bg); }
+.spacer { flex: 1; }
+select, input, textarea, button { font: inherit; color: var(--ink); }
+select, input, textarea { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+button.btn { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+button.btn:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+main { padding: 16px; max-width: 1500px; margin: 0 auto; }
+.grid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; }
+@media (max-width: 1000px) { .grid { grid-template-columns: 1fr; } }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); padding: 12px 14px; margin-bottom: 16px; }
+.panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+.stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 700px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+.stat { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.stat .n { font-size: 24px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.stat .l { color: var(--muted); font-size: 12px; }
+.stat.good .n { color: var(--ready); } .stat.bad .n { color: var(--warn); } .stat.hum .n { color: var(--human); }
+.advice { margin: 10px 0 0; padding: 0; list-style: none; }
+.advice li { padding: 6px 10px; border-radius: 6px; margin-top: 6px; }
+.advice .launch { background: var(--ready-bg); color: var(--ready); }
+.advice .too_many, .advice .stuck { background: var(--warn-bg); color: var(--warn); }
+.advice .human { background: var(--human-bg); color: var(--human); }
+.layers { display: flex; align-items: flex-end; gap: 6px; height: 70px; margin-top: 12px; }
+.layer { flex: 1; max-width: 60px; display: flex; flex-direction: column-reverse; align-items: stretch; position: relative; }
+.layer .a { background: var(--accent); border-radius: 3px 3px 0 0; }
+.layer .h { background: var(--human); opacity: .75; }
+.layer .cap { position: absolute; bottom: -16px; width: 100%; text-align: center; font-size: 11px; color: var(--muted); }
+.legend { font-size: 11px; color: var(--muted); margin-top: 20px; display: flex; gap: 12px; }
+.sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.row { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 7px 6px; border-top: 1px solid var(--line); cursor: pointer; }
+.row:first-child { border-top: none; }
+.row:hover { background: var(--bg); }
+@media (max-width: 600px) { .row { grid-template-columns: 36px minmax(0, 1fr); } .row .chips { grid-column: 2; justify-content: flex-start; } }
+.row .id { color: var(--muted); font-variant-numeric: tabular-nums; }
+.row .t { overflow: hidden; }
+.row .t .title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .t .why { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chips { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.chip { font-size: 11px; padding: 1px 7px; border-radius: 999px; white-space: nowrap; border: 1px solid transparent; }
+.c-ready { background: var(--ready-bg); color: var(--ready); }
+.c-in_progress, .c-held { background: var(--prog-bg); color: var(--prog); }
+.c-waiting, .c-blocked { background: var(--wait-bg); color: var(--wait); }
+.c-done, .c-dropped { background: var(--done-bg); color: var(--done); text-decoration: line-through; }
+.c-human { background: var(--human-bg); color: var(--human); }
+.c-ai { border-color: var(--line); color: var(--muted); }
+.c-p0 { background: var(--warn-bg); color: var(--warn); font-weight: 600; }
+.c-p { border-color: var(--line); color: var(--muted); }
+.proj { margin-bottom: 14px; }
+.proj-h { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.proj-h b { font-size: 15px; }
+.proj-h .counts { color: var(--muted); font-size: 12px; }
+.proj-h .rk { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.iconbtn { background: none; border: 1px solid var(--line); border-radius: 5px; cursor: pointer; padding: 0 6px; color: var(--muted); }
+details summary { cursor: pointer; color: var(--muted); font-size: 12px; padding: 4px 6px; }
+.agent { padding: 8px 0; border-top: 1px solid var(--line); }
+.agent:first-child { border-top: none; }
+.agent .nm { font-weight: 600; }
+.agent .st { font-size: 12px; color: var(--muted); }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.dot.active { background: var(--ready); } .dot.away { background: var(--prog); } .dot.gone { background: var(--done); }
+.form { display: grid; gap: 8px; }
+.form .two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.form label { font-size: 12px; color: var(--muted); display: grid; gap: 3px; }
+.ev { font-size: 12px; padding: 4px 0; border-top: 1px solid var(--line); color: var(--muted); }
+.ev b { color: var(--ink); font-weight: 500; }
+#drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(520px, 100vw); background: var(--panel); border-left: 1px solid var(--line); box-shadow: -8px 0 24px rgba(0,0,0,.12); transform: translateX(105%); transition: transform .18s ease; z-index: 10; overflow-y: auto; padding: 16px; }
+#drawer.open { transform: none; }
+#drawer h3 { margin: 4px 0 6px; font-size: 18px; }
+#drawer .meta { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+#drawer .sec { margin-top: 14px; }
+#drawer .sec h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+.actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.tree { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: pre; overflow-x: auto; background: var(--bg); border-radius: 6px; padding: 8px; }
+.link { color: var(--accent); cursor: pointer; }
+#toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 8px; display: none; z-index: 20; max-width: 90vw; }
+#toast.err { background: var(--warn); color: #fff; }
+#graph { overflow: auto; }
+#graph svg { height: auto; }
+table.settings { width: 100%; border-collapse: collapse; }
+table.settings td, table.settings th { text-align: left; padding: 6px; border-top: 1px solid var(--line); font-size: 13px; }
+.muted { color: var(--muted); }
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Biggest River</h1>
+  <nav>
+    <button data-tab="board" class="on">Board</button>
+    <button data-tab="graph">Graph</button>
+    <button data-tab="settings">Settings</button>
+  </nav>
+  <span class="spacer"></span>
+  <label class="sub">Acting as
+    <select id="actor"></select>
+  </label>
+  <span class="sub" id="stamp"></span>
+</header>
+
+<main>
+  <section id="tab-board">
+    <div class="panel" id="capacity"></div>
+    <div class="grid">
+      <div>
+        <div class="panel">
+          <h2>Next up
+            <span class="spacer"></span>
+            <select id="area"><option value="">All projects</option></select>
+            <button class="btn primary" id="claimNext">Claim next</button>
+          </h2>
+          <div id="next"></div>
+        </div>
+        <div class="panel">
+          <h2>Projects <span class="spacer"></span><label class="sub"><input type="checkbox" id="showDone"> show done</label></h2>
+          <div id="projects"></div>
+        </div>
+      </div>
+      <div>
+        <div class="panel"><h2>Agents</h2><div id="agents"></div>
+          <details style="margin-top:8px"><summary>Register an agent or person</summary>
+            <div class="form" style="margin-top:8px">
+              <div class="two"><input id="regName" placeholder="name"><label style="flex-direction:row;display:flex;align-items:center;gap:6px"><input type="checkbox" id="regHuman"> human</label></div>
+              <input id="regNote" placeholder="note (optional)">
+              <button class="btn" id="regGo">Register</button>
+            </div>
+          </details>
+        </div>
+        <div class="panel"><h2>Add item</h2>
+          <div class="form">
+            <input id="addTitle" placeholder="Title">
+            <div class="two">
+              <label>Project<select id="addProject"></select></label>
+              <label>Priority<select id="addPrio"><option>0</option><option>1</option><option selected>2</option><option>3</option><option>4</option></select></label>
+            </div>
+            <div class="two">
+              <label>Who can do it<select id="addDoer"><option value="any">anyone</option><option value="ai">agent</option><option value="human">human</option></select></label>
+              <label>Waits on (ids)<input id="addAfter" placeholder="e.g. 3, 7"></label>
+            </div>
+            <textarea id="addNotes" rows="2" placeholder="Notes"></textarea>
+            <button class="btn primary" id="addGo">Add</button>
+          </div>
+          <details style="margin-top:8px"><summary>Add a project</summary>
+            <div class="form" style="margin-top:8px"><input id="projName" placeholder="name (lower-case)"><button class="btn" id="projGo">Add project</button></div>
+          </details>
+        </div>
+        <div class="panel"><h2>Recent</h2><div id="events"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-graph" class="hidden">
+    <div class="panel">
+      <h2>Dependency graph <span class="spacer"></span>
+        <select id="graphProject"><option value="">All projects</option></select>
+        <label class="sub"><input type="checkbox" id="graphDone"> include done</label>
+      </h2>
+      <div class="muted" style="font-size:12px;margin-bottom:8px">Arrows point from a prerequisite to the item that waits on it. Green: ready. Yellow: in progress. Purple border: a human does it. Click a box to open it.</div>
+      <div id="graph"></div>
+    </div>
+  </section>
+
+  <section id="tab-settings" class="hidden">
+    <div class="panel">
+      <h2>Settings</h2>
+      <div class="muted" style="font-size:12px;margin-bottom:8px">The most specific value wins: item, then agent, then project, then global, then the built-in default.</div>
+      <table class="settings" id="settingsTable"></table>
+      <div class="form" style="margin-top:12px;max-width:640px">
+        <div class="two">
+          <label>Key<select id="setKey"></select></label>
+          <label>Value<input id="setValue" placeholder="e.g. 45m, 7d, 2"></label>
+        </div>
+        <div class="two">
+          <label>Scope<select id="setScope"><option value="global">global</option><option value="project">project</option><option value="agent">agent</option><option value="item">item</option></select></label>
+          <label>Scope name or id<input id="setScopeName" placeholder="website / alex / 42"></label>
+        </div>
+        <button class="btn primary" id="setGo">Save setting</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<aside id="drawer"></aside>
+<div id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.min.js" integrity="sha384-EOXBFmc3gx5mb+vn0vPvvGqACToJD24hhacX5Yx+8NUUQrHIle/Qi5Bg9o3zKwW2" crossorigin="anonymous"></script>
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let S = null, openItem = null, tab = "board", graphSig = "";
+
+function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } }
+function actor() { return $("#actor").value || null; }
+
+function toast(msg, err) {
+  const t = $("#toast"); t.textContent = msg; t.className = err ? "err" : ""; t.style.display = "block";
+  clearTimeout(t._h); t._h = setTimeout(() => (t.style.display = "none"), err ? 6000 : 2500);
+}
+
+async function act(op, args) {
+  const r = await fetch("/api/action", { method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ op, args, actor: actor() }) });
+  const j = await r.json();
+  if (!r.ok) { toast(j.error || "failed", true); throw new Error(j.error); }
+  await refresh();
+  return j.result;
+}
+
+function statusChip(it) {
+  if (it.status === "open") {
+    if (it.ready) return `<span class="chip c-ready">ready</span>`;
+    if (it.blocked_reason) return `<span class="chip c-blocked" title="${esc(it.blocked_reason)}">blocked</span>`;
+    return `<span class="chip c-waiting">waits on ${it.open_blockers.map(b => "#" + b).join(",")}</span>`;
+  }
+  const who = it.assignee ? " · " + esc(it.assignee) : "";
+  return `<span class="chip c-${it.status}">${it.status.replace("_", " ")}${who}</span>`;
+}
+function prioChip(it) {
+  const inh = it.priority_from != null ? ` ← #${it.priority_from}` : "";
+  return `<span class="chip ${it.effective_priority === 0 ? "c-p0" : "c-p"}" title="own priority P${it.priority}">P${it.effective_priority}${inh}</span>`;
+}
+function doerChip(it) { return it.doer === "any" ? "" : `<span class="chip c-${it.doer}">${it.doer === "human" ? "human" : "agent"}</span>`; }
+
+function rowHtml(it, why) {
+  return `<div class="row" data-id="${it.id}">
+    <div class="id">#${it.id}</div>
+    <div class="t"><div class="title">${esc(it.title)}</div>${why ? `<div class="why">${esc(why)}</div>` : ""}</div>
+    <div class="chips">${prioChip(it)}${doerChip(it)}${statusChip(it)}</div></div>`;
+}
+
+function renderCapacity() {
+  const c = S.capacity;
+  const maxL = Math.max(1, ...c.layers.map(l => l.ai + l.human));
+  const layers = c.layers.map(l => `<div class="layer" style="height:${Math.round((l.ai + l.human) / maxL * 100)}%" title="step ${l.depth + 1}: ${l.ai} for agents, ${l.human} for humans">
+      <div class="a" style="flex:${l.ai}"></div><div class="h" style="flex:${l.human}"></div><div class="cap">${l.depth + 1}</div></div>`).join("");
+  $("#capacity").innerHTML = `<h2>Parallel work</h2>
+    <div class="stats">
+      <div class="stat ${c.spare_slots ? "good" : ""}"><div class="n">${c.spare_slots}</div><div class="l">open slots: more agent sessions you can start now</div></div>
+      <div class="stat ${c.excess_sessions ? "bad" : ""}"><div class="n">${c.excess_sessions}</div><div class="l">sessions with nothing ready for them</div></div>
+      <div class="stat"><div class="n">${c.agents_active}</div><div class="l">active agent sessions (${c.agents_busy} busy)</div></div>
+      <div class="stat"><div class="n">${c.in_progress.length}</div><div class="l">items in progress</div></div>
+      <div class="stat hum"><div class="n">${c.ready_for_humans.length}</div><div class="l">ready items that wait on a human</div></div>
+    </div>
+    <ul class="advice">${c.advice.map(a => `<li class="${a.kind}">${esc(a.text)}</li>`).join("")}</ul>
+    <div class="layers">${layers || '<span class="muted">No open items.</span>'}</div>
+    <div class="legend"><span><span class="sw" style="background:var(--accent)"></span>open items for agents</span><span><span class="sw" style="background:var(--human)"></span>for humans</span><span>by step: 1 = can start now, 2 = after step 1, …  Peak agent width ${c.peak_width}.</span></div>`;
+}
+
+function renderNext() {
+  const area = $("#area").value;
+  const ready = S.items.filter(i => i.ready && (!area || i.project === area));
+  $("#next").innerHTML = ready.slice(0, 10).map(i => rowHtml(i, i.reason)).join("") || `<div class="muted">Nothing is ready${area ? " in " + esc(area) : ""}.</div>`;
+}
+
+function renderProjects() {
+  const showDone = $("#showDone").checked;
+  const html = S.projects.map(p => {
+    const all = S.items.filter(i => i.project === p.name);
+    const open = all.filter(i => !["done", "dropped"].includes(i.status));
+    const closed = all.filter(i => ["done", "dropped"].includes(i.status));
+    const ready = open.filter(i => i.ready).length, prog = open.filter(i => ["in_progress", "held"].includes(i.status)).length;
+    const order = (a, b) => (b.ready - a.ready) || (a.effective_priority - b.effective_priority) || (b.unblocks_count - a.unblocks_count) || (a.rank - b.rank);
+    return `<div class="proj">
+      <div class="proj-h"><span class="rk">${p.rank}.</span><b>${esc(p.name)}</b>
+        <button class="iconbtn" data-rank="${esc(p.name)}" data-to="${p.rank - 1}" title="more important">↑</button>
+        <button class="iconbtn" data-rank="${esc(p.name)}" data-to="${p.rank + 1}" title="less important">↓</button>
+        <span class="counts">${open.length} open · ${ready} ready · ${prog} in progress · ${closed.length} done</span></div>
+      ${open.sort(order).map(i => rowHtml(i, i.notes)).join("")}
+      ${showDone && closed.length ? closed.map(i => rowHtml(i, i.output)).join("") : ""}
+    </div>`;
+  }).join("");
+  $("#projects").innerHTML = html || `<div class="muted">No projects yet.</div>`;
+}
+
+function ago(iso) {
+  const s = Math.round((Date.now() - Date.parse(iso)) / 1000);
+  if (s < 60) return s + "s ago"; if (s < 3600) return Math.round(s / 60) + "m ago";
+  if (s < 86400) return Math.round(s / 3600) + "h ago"; return Math.round(s / 86400) + "d ago";
+}
+function left(iso) { const m = Math.round((Date.parse(iso) - Date.now()) / 60000); return m >= 60 * 24 ? Math.round(m / 1440) + "d" : m >= 60 ? Math.round(m / 60) + "h" : m + "m"; }
+
+function renderAgents() {
+  $("#agents").innerHTML = S.agents.map(a => `<div class="agent">
+      <div><span class="dot ${a.state}"></span><span class="nm">${esc(a.name)}</span> <span class="chip ${a.kind === "human" ? "c-human" : "c-ai"}">${a.kind === "human" ? "human" : "agent"}</span></div>
+      <div class="st">${a.state}, seen ${ago(a.last_seen)}${a.note ? " · " + esc(a.note) : ""}</div>
+      ${a.holds.map(h => `<div class="st">holds <span class="link" data-open="${h.id}">#${h.id} ${esc(h.title)}</span>${h.lease_expires_at ? " · " + left(h.lease_expires_at) + " left" : ""}</div>`).join("") || '<div class="st">holds nothing</div>'}
+    </div>`).join("") || `<div class="muted">No agents registered.</div>`;
+}
+
+function renderEvents() {
+  $("#events").innerHTML = S.events.slice(0, 15).map(e => `<div class="ev">${ago(e.at)} · <b>${esc(e.actor)}</b> ${esc(e.change)}${e.item_id ? ` <span class="link" data-open="${e.item_id}">#${e.item_id}</span>` : ""}</div>`).join("");
+}
+
+function fillSelect(sel, values, keepFirst) {
+  const el = $(sel), cur = el.value;
+  const first = keepFirst ? el.options[0].outerHTML : "";
+  el.innerHTML = first + values.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join("");
+  if ([...el.options].some(o => o.value === cur)) el.value = cur;
+}
+
+function renderSelects() {
+  const names = S.projects.map(p => p.name);
+  fillSelect("#area", names, true); fillSelect("#graphProject", names, true); fillSelect("#addProject", names, false);
+  const a = $("#actor"), cur = a.value || store("river.actor") || "";
+  a.innerHTML = `<option value="">(nobody)</option>` + S.agents.map(x => `<option value="${esc(x.name)}">${esc(x.name)}${x.kind === "human" ? " (human)" : ""}</option>`).join("");
+  if ([...a.options].some(o => o.value === cur)) a.value = cur;
+  fillSelect("#setKey", Object.keys(S.settings.defaults), false);
+}
+
+function renderSettings() {
+  const d = S.settings.defaults, o = S.settings.overrides;
+  $("#settingsTable").innerHTML = `<tr><th>Key</th><th>Default</th><th>Overrides</th></tr>` + Object.keys(d).map(k => {
+    const ov = o.filter(x => x.key === k).map(x => `<span class="chip c-p">${esc(x.scope)} = ${esc(x.value)} <span class="link" data-unset="${esc(k)}" data-scope="${esc(x.scope)}">×</span></span>`).join(" ");
+    return `<tr><td>${esc(k)}</td><td class="muted">${esc(d[k])}</td><td>${ov}</td></tr>`;
+  }).join("");
+}
+
+async function renderGraph(force) {
+  if (tab !== "graph" || !window.mermaid) return;
+  const proj = $("#graphProject").value, withDone = $("#graphDone").checked;
+  const items = S.items.filter(i => (withDone || !["done", "dropped"].includes(i.status)));
+  const ids = new Set(items.map(i => i.id));
+  const show = proj ? new Set(items.filter(i => i.project === proj).flatMap(i => [i.id, ...i.waits_on, ...i.unblocks]).filter(x => ids.has(x))) : ids;
+  const sig = JSON.stringify([proj, withDone, items.filter(i => show.has(i.id)).map(i => [i.id, i.status, i.ready, i.waits_on])]);
+  if (!force && sig === graphSig) return;
+  graphSig = sig;
+  const lab = (s) => { const t = s.replace(/["<>#|{}\[\]]/g, " "); if (t.length <= 60) return t; const cut = t.slice(0, 60); return cut.slice(0, cut.lastIndexOf(" ") > 30 ? cut.lastIndexOf(" ") : 60) + "…"; };
+  let g = "flowchart LR\n";
+  for (const p of S.projects) {
+    const mine = items.filter(i => i.project === p.name && show.has(i.id));
+    if (!mine.length) continue;
+    g += `subgraph P${p.id}["${lab(p.name)}"]\n`;
+    for (const i of mine) g += `  N${i.id}["#${i.id} ${lab(i.title)}"]\n`;
+    g += "end\n";
+  }
+  for (const i of items) if (show.has(i.id)) for (const b of i.waits_on) if (show.has(b)) g += `N${b} --> N${i.id}\n`;
+  g += "classDef ready fill:#dcf5e3,stroke:#1a7f37,color:#0b3d1b\nclassDef prog fill:#fff3c4,stroke:#9a6700,color:#3d2a00\nclassDef wait fill:#eceff2,stroke:#8c959f,color:#24292f\nclassDef done fill:#f0f1f3,stroke:#c4c9cf,color:#8c959f\nclassDef human stroke:#8250df,stroke-width:3px\n";
+  for (const i of items) if (show.has(i.id)) {
+    const cls = ["done", "dropped"].includes(i.status) ? "done" : ["in_progress", "held"].includes(i.status) ? "prog" : i.ready ? "ready" : "wait";
+    g += `class N${i.id} ${cls}\n`;
+    if (i.doer === "human") g += `class N${i.id} human\n`;
+    g += `click N${i.id} call riverOpen(${i.id})\n`;
+  }
+  try {
+    const { svg, bindFunctions } = await mermaid.render("g" + Date.now(), g);
+    $("#graph").innerHTML = svg; bindFunctions && bindFunctions($("#graph"));
+  } catch (e) { $("#graph").innerHTML = `<div class="muted">Graph failed to draw: ${esc(e.message || e)}</div>`; }
+}
+window.riverOpen = (id) => openDrawer(id);
+
+function treeText(n, prefix = "", last = true, root = true) {
+  const who = n.assignee ? `, ${n.assignee}${n.lease_seconds_left != null ? ", " + Math.floor(n.lease_seconds_left / 60) + "m left" : ""}` : "";
+  const st = (n.ready ? "ready" : n.status) + (n.blocked_reason ? `, blocked: "${n.blocked_reason}"` : "");
+  let out = (root ? "" : prefix + (last ? "└─ " : "├─ ")) + `#${n.id} ${n.title}  (${st}${who})\n`;
+  n.children.forEach((c, i) => { out += treeText(c, prefix + (root ? "" : last ? "   " : "│  "), i === n.children.length - 1, false); });
+  return out;
+}
+
+async function openDrawer(id) {
+  openItem = id;
+  const r = await fetch(`/api/item/${id}`); if (!r.ok) return;
+  const it = await r.json();
+  const d = $("#drawer");
+  const focused = d.contains(document.activeElement) && ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName);
+  if (focused && d.dataset.id == id) return;
+  d.dataset.id = id;
+  const closed = ["done", "dropped"].includes(it.status);
+  d.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px"><span class="muted">#${it.id} · ${esc(it.project)}</span><span class="spacer" style="flex:1"></span><button class="btn" id="dClose">Close</button></div>
+    <h3>${esc(it.title)}</h3>
+    <div class="chips" style="justify-content:flex-start">${prioChip(it)}${doerChip(it)}${statusChip(it)}</div>
+    <div class="meta" style="margin-top:6px">${esc(it.reason)}${it.lease_expires_at ? " · lease " + left(it.lease_expires_at) + " left" : ""}</div>
+    <div class="actions">
+      ${it.status === "open" ? `<button class="btn primary" data-do="claim">Claim</button>` : ""}
+      ${["in_progress", "held"].includes(it.status) ? `<button class="btn primary" data-do="done">Done</button><button class="btn" data-do="release">Release</button>` : ""}
+      ${it.status === "open" ? `<button class="btn" data-do="done">Mark done</button>` : ""}
+      ${!closed ? `<button class="btn" data-do="drop">Drop</button>` : `<button class="btn" data-do="reopen">Reopen</button>`}
+    </div>
+    <div class="sec"><h4>Details</h4><div class="form">
+      <input id="dTitle" value="${esc(it.title)}">
+      <textarea id="dNotes" rows="3" placeholder="Notes">${esc(it.notes)}</textarea>
+      <div class="two">
+        <label>Priority (own)<select id="dPrio">${[0,1,2,3,4].map(p => `<option ${p === it.priority ? "selected" : ""}>${p}</option>`).join("")}</select></label>
+        <label>Who can do it<select id="dDoer">${["any","ai","human"].map(x => `<option value="${x}" ${x === it.doer ? "selected" : ""}>${x === "any" ? "anyone" : x === "ai" ? "agent" : "human"}</option>`).join("")}</select></label>
+      </div>
+      <div class="two"><label>Project<select id="dProject">${S.projects.map(p => `<option ${p.name === it.project ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></label>
+        <label>Order in project<span class="actions"><button class="btn" data-do="up">Up</button><button class="btn" data-do="down">Down</button></span></label></div>
+      <button class="btn" data-do="save">Save details</button>
+    </div></div>
+    ${it.output ? `<div class="sec"><h4>Output</h4><div>${esc(it.output)}</div></div>` : ""}
+    <div class="sec"><h4>Waits on</h4>
+      ${it.waits_on_detail.map(w => `<div><span class="link" data-open="${w.id}">#${w.id} ${esc(w.title)}</span> <span class="muted">(${w.status})</span> <span class="link" data-undep="${w.id}">remove</span></div>`).join("") || '<div class="muted">nothing</div>'}
+      <div class="actions" style="margin-top:6px"><input id="dDep" placeholder="ids, e.g. 4, 9" style="width:140px"><button class="btn" data-do="dep">Add</button></div>
+    </div>
+    <div class="sec"><h4>Blocker tree</h4><div class="tree">${esc(treeText(it.tree))}</div></div>
+    <div class="sec"><h4>Unblocks</h4>${it.unblocks_detail.map(w => `<div><span class="link" data-open="${w.id}">#${w.id} ${esc(w.title)}</span> <span class="muted">(${w.status})</span></div>`).join("") || '<div class="muted">nothing</div>'}</div>
+    <div class="sec"><h4>Outside blocker</h4>
+      ${it.blocked_reason ? `<div>${esc(it.blocked_reason)} <span class="link" data-do="unblock">clear</span></div>` : `<div class="actions"><input id="dBlock" placeholder="waiting on …" style="flex:1"><button class="btn" data-do="block">Set</button></div>`}
+    </div>
+    <div class="sec"><h4>History</h4>${it.events.map(e => `<div class="ev">${ago(e.at)} · <b>${esc(e.actor)}</b> ${esc(e.change)}</div>`).join("")}</div>`;
+  d.classList.add("open");
+}
+
+async function drawerAction(what) {
+  const id = openItem;
+  const it = S.items.find(i => i.id === id);
+  try {
+    if (what === "claim") await act("claim", { id });
+    if (what === "done") { const out = prompt("Output note (optional)") ?? undefined; await act("done", { id, output: out || undefined }); }
+    if (what === "release") await act("release", { id });
+    if (what === "drop") await act("drop", { id });
+    if (what === "reopen") await act("reopen", { id });
+    if (what === "unblock") await act("unblock", { id });
+    if (what === "block") { const r = $("#dBlock").value.trim(); if (r) await act("block", { id, reason: r }); }
+    if (what === "dep") { const on = $("#dDep").value.split(/[\s,]+/).filter(Boolean).map(Number); if (on.length) await act("dep_add", { id, on }); }
+    if (what === "save") {
+      await act("item_edit", { id, title: $("#dTitle").value, notes: $("#dNotes").value, doer: $("#dDoer").value, project: $("#dProject").value !== it.project ? $("#dProject").value : undefined });
+      if (+$("#dPrio").value !== it.priority) await act("prio", { id, priority: +$("#dPrio").value });
+      toast("Saved");
+    }
+    if (what === "up" || what === "down") {
+      const sib = S.items.filter(i => i.project === it.project).sort((a, b) => a.rank - b.rank);
+      const k = sib.findIndex(i => i.id === id), other = sib[what === "up" ? k - 1 : k + 1];
+      if (other) await act("move", what === "up" ? { id, before: other.id } : { id, after: other.id });
+    }
+    document.activeElement && document.activeElement.blur();
+    await openDrawer(id);
+  } catch (e) { /* toast shown */ }
+}
+
+async function refresh() {
+  const r = await fetch("/api/state"); S = await r.json();
+  renderSelects(); renderCapacity(); renderNext(); renderProjects(); renderAgents(); renderEvents(); renderSettings();
+  renderGraph(false);
+  $("#stamp").textContent = "updated " + new Date().toLocaleTimeString();
+  if (openItem != null && $("#drawer").classList.contains("open")) openDrawer(openItem);
+}
+
+document.addEventListener("click", async (e) => {
+  const t = e.target;
+  const open = t.closest("[data-open]"); if (open) return openDrawer(+open.dataset.open);
+  const row = t.closest(".row"); if (row) return openDrawer(+row.dataset.id);
+  if (t.id === "dClose") { $("#drawer").classList.remove("open"); openItem = null; return; }
+  if (t.dataset.do) return drawerAction(t.dataset.do);
+  if (t.dataset.undep) { await act("dep_remove", { id: openItem, on: [+t.dataset.undep] }).catch(() => {}); return openDrawer(openItem); }
+  if (t.dataset.rank) { const to = +t.dataset.to; if (to >= 1) await act("project_rank", { name: t.dataset.rank, rank: to }).catch(() => {}); return; }
+  if (t.dataset.unset) { const sc = t.dataset.scope, [kind, name] = sc.includes(":") ? [sc.split(":")[0], sc.slice(sc.indexOf(":") + 1)] : ["global", null];
+    const args = { key: t.dataset.unset }; if (kind !== "global") args[kind] = kind === "item" ? +name : name;
+    return act("config_unset", args).catch(() => {}); }
+  if (t.dataset.tab) {
+    tab = t.dataset.tab; document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b === t));
+    for (const s of ["board", "graph", "settings"]) $("#tab-" + s).classList.toggle("hidden", s !== tab);
+    return renderGraph(true);
+  }
+});
+
+$("#actor").addEventListener("change", () => store("river.actor", $("#actor").value));
+$("#area").addEventListener("change", renderNext);
+$("#showDone").addEventListener("change", renderProjects);
+$("#graphProject").addEventListener("change", () => renderGraph(true));
+$("#graphDone").addEventListener("change", () => renderGraph(true));
+$("#claimNext").addEventListener("click", async () => {
+  if (!actor()) return toast("Choose who you are in 'Acting as' first", true);
+  const res = await act("next_claim", { project: $("#area").value || undefined }).catch(() => null);
+  if (res && res.length) { toast(`Claimed #${res[0].id}`); openDrawer(res[0].id); } else if (res) toast("Nothing is ready in that area");
+});
+$("#addGo").addEventListener("click", async () => {
+  const title = $("#addTitle").value.trim(); if (!title) return toast("Title is empty", true);
+  const after = $("#addAfter").value.split(/[\s,]+/).filter(Boolean).map(Number);
+  const res = await act("item_add", { project: $("#addProject").value, title, priority: +$("#addPrio").value, doer: $("#addDoer").value, after, notes: $("#addNotes").value }).catch(() => null);
+  if (res) { $("#addTitle").value = ""; $("#addAfter").value = ""; $("#addNotes").value = ""; toast(`Added #${res.id}`); }
+});
+$("#projGo").addEventListener("click", async () => { const n = $("#projName").value.trim(); if (n) { await act("project_add", { name: n }).catch(() => {}); $("#projName").value = ""; } });
+$("#regGo").addEventListener("click", async () => {
+  const n = $("#regName").value.trim(); if (!n) return;
+  await act("register", { name: n, human: $("#regHuman").checked, note: $("#regNote").value }).catch(() => {});
+  store("river.actor", n); $("#regName").value = ""; await refresh(); $("#actor").value = n;
+});
+$("#setGo").addEventListener("click", async () => {
+  const scope = $("#setScope").value, nm = $("#setScopeName").value.trim();
+  const args = { key: $("#setKey").value, value: $("#setValue").value.trim() };
+  if (scope !== "global") { if (!nm) return toast("Give the project, agent, or item", true); args[scope] = scope === "item" ? +nm : nm; }
+  await act("config_set", args).then(() => toast("Saved")).catch(() => {});
+});
+
+if (window.mermaid) mermaid.initialize({ startOnLoad: false, securityLevel: "loose", theme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "default", flowchart: { useMaxWidth: true } });
+refresh(); setInterval(() => { if (!document.hidden) refresh().catch(() => {}); }, 3000);
+</script>
+</body>
+</html>
