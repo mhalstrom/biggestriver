@@ -1245,6 +1245,46 @@ def capacity(conn, ann=None):
     }
 
 
+def completed(conn, project=None, since="7d"):
+    """Done items with their output, who finished them, and when; grouped by day, with progress per project.
+
+    `since` is a duration (7d, 12h) or None for all time. Progress counts every
+    item in the project, so a short window still shows how far the project is.
+    """
+    cutoff = iso(now() - parse_duration(since)) if since else None
+    if project is not None:
+        _project(conn, project)
+    sql = ("SELECT i.id, i.title, i.output, i.closed_at, p.name project, "
+           "(SELECT e.actor FROM events e WHERE e.item_id=i.id AND e.change LIKE 'done%' ORDER BY e.id DESC LIMIT 1) by_agent "
+           "FROM items i JOIN projects p ON p.id=i.project_id WHERE i.status='done' AND p.archived=0")
+    args = []
+    if cutoff:
+        sql += " AND i.closed_at >= ?"
+        args.append(cutoff)
+    if project is not None:
+        sql += " AND p.name = ?"
+        args.append(project)
+    items = [dict(r) for r in conn.execute(sql + " ORDER BY i.closed_at DESC, i.id DESC", args)]
+    days = {}
+    for it in items:
+        days.setdefault(it["closed_at"][:10], []).append(it)
+    progress = []
+    for p in project_list(conn):
+        if project is not None and p["name"] != project:
+            continue
+        counts = {r["status"]: r["n"] for r in conn.execute(
+            "SELECT status, COUNT(*) n FROM items WHERE project_id=? GROUP BY status", (p["id"],))}
+        done_n = counts.get("done", 0)
+        total = sum(n for st, n in counts.items() if st != "dropped")
+        recent = sum(1 for it in items if it["project"] == p["name"])
+        if total or recent:
+            progress.append({"project": p["name"], "done": done_n, "total": total,
+                             "open": total - done_n, "done_in_window": recent})
+    return {"since": since, "cutoff": cutoff, "items": items,
+            "by_day": [{"day": d, "items": days[d]} for d in sorted(days, reverse=True)],
+            "progress": progress}
+
+
 def recent_events(conn, limit=40):
     return [dict(r) for r in conn.execute(
         "SELECT e.at, e.actor, e.change, e.item_id, i.title FROM events e LEFT JOIN items i ON i.id=e.item_id "

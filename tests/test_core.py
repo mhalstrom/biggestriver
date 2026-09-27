@@ -356,5 +356,34 @@ class Targets(Base):
         self.assertTrue({"path", "target"} <= cols)
 
 
+class Log(Base):
+    def test_completed_by_day_with_progress(self):
+        core.project_add(self.c, "a")
+        core.project_add(self.c, "b")
+        core.register(self.c, "ag")
+        x, y, z = self.add("a", "x"), self.add("a", "y"), self.add("b", "z")
+        dropped = self.add("a", "d")
+        core.claim(self.c, x, "ag")
+        core.done(self.c, x, "commit abc", "ag")
+        core.done(self.c, z, None, "t")
+        core.drop(self.c, dropped, "t")
+        old = core.iso(core.now() - timedelta(days=10))
+        self.c.execute("UPDATE items SET closed_at=? WHERE id=?", (old, z))
+        log = core.completed(self.c)
+        self.assertEqual([i["id"] for i in log["items"]], [x])
+        self.assertEqual(log["items"][0]["by_agent"], "ag")
+        self.assertEqual(log["items"][0]["output"], "commit abc")
+        self.assertEqual(log["by_day"][0]["day"], log["items"][0]["closed_at"][:10])
+        prog = {p["project"]: p for p in log["progress"]}
+        self.assertEqual((prog["a"]["done"], prog["a"]["total"], prog["a"]["done_in_window"]), (1, 2, 1))
+        self.assertEqual((prog["b"]["done"], prog["b"]["done_in_window"]), (1, 0))
+        every = core.completed(self.c, since=None)
+        self.assertEqual({i["id"] for i in every["items"]}, {x, z})
+        self.assertEqual([i["id"] for i in core.completed(self.c, "b", None)["items"]], [z])
+        self.assertNotIn(y, {i["id"] for i in every["items"]})
+        with self.assertRaises(RiverError):
+            core.completed(self.c, since="soon")
+
+
 if __name__ == "__main__":
     unittest.main()

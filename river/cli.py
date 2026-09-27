@@ -238,6 +238,8 @@ def build_parser():
     x.add_argument("--project"); x.add_argument("--status"); x.add_argument("--all", action="store_true")
 
     x = sub.add_parser("show", help="one item with its links and history"); x.add_argument("id", type=int)
+    x = sub.add_parser("log", help="completed work: done items with output, who, and when, by day")
+    x.add_argument("--project"); x.add_argument("--since", default="7d", help="how far back (default 7d; all for everything)")
 
     x = sub.add_parser("next", help="the next ready item from the area you choose")
     x.add_argument("--project", help="one project, or a comma list")
@@ -466,6 +468,8 @@ def dispatch(conn, a, actor):
         return core.item_list(conn, a.project, a.status, a.all)
     if c == "show":
         return core.item_show(conn, a.id)
+    if c == "log":
+        return core.completed(conn, a.project, None if a.since == "all" else a.since)
     if c == "go":
         return core.go(conn, os.getcwd(), actor, a.project, a.role)
     if c == "next":
@@ -670,6 +674,26 @@ def render(a, res):
         return
     if c == "blockers":
         _print_tree(res)
+        return
+    if c == "log":
+        window = f"last {res['since']}" if res["since"] else "all time"
+        if not res["items"]:
+            print(f"(nothing done in the {window})" if res["since"] else "(nothing done yet)")
+        for d in res["by_day"]:
+            print(f"{d['day']}  ({len(d['items'])} done)")
+            for it in d["items"]:
+                by = f" by {it['by_agent']}" if it["by_agent"] not in (None, "?") else ""
+                print(f"  #{it['id']:<4} [{it['project']}] {it['title']}  ({it['closed_at'][11:16]}{by})")
+                if it["output"]:
+                    print(f"        {it['output']}")
+        if res["progress"]:
+            print("\nProgress:")
+            w = max(len(p["project"]) for p in res["progress"])
+            for p in res["progress"]:
+                pct = round(100 * p["done"] / p["total"]) if p["total"] else 0
+                bar = "#" * round(pct / 5) + "." * (20 - round(pct / 5))
+                recent = f", +{p['done_in_window']} in the {window}" if res["since"] else ""
+                print(f"  {p['project']:<{w}}  {bar} {pct:>3}%  {p['done']}/{p['total']} done{recent}")
         return
     if c == "send":
         to = res["to_agent"] or f"the next holder of #{res['item_id']} (nobody holds it now)"

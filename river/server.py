@@ -84,6 +84,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, st)
             finally:
                 conn.close()
+        if path == "/api/log":
+            from urllib.parse import parse_qs, urlsplit
+            q = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+            conn = core.connect()
+            try:
+                since = q.get("since", "7d")
+                return self._send(200, core.completed(conn, q.get("project") or None, None if since == "all" else since))
+            except RiverError as e:
+                return self._send(400, {"error": str(e)})
+            finally:
+                conn.close()
         if path.startswith("/api/item/"):
             conn = core.connect()
             try:

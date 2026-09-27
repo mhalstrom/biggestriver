@@ -119,6 +119,20 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; padding
 table.settings { width: 100%; border-collapse: collapse; }
 table.settings td, table.settings th { text-align: left; padding: 6px; border-top: 1px solid var(--line); font-size: 13px; }
 .muted { color: var(--muted); }
+.day { margin-top: 14px; }
+.day:first-child { margin-top: 0; }
+.day-h { display: flex; gap: 8px; align-items: baseline; border-bottom: 1px solid var(--line); padding-bottom: 4px; margin-bottom: 4px; }
+.day-h b { font-variant-numeric: tabular-nums; }
+.done-row { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 8px; padding: 5px 0; cursor: pointer; }
+.done-row:hover .title { color: var(--accent); }
+.done-row .id { color: var(--muted); font-variant-numeric: tabular-nums; }
+.done-row .out { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.done-row .when { color: var(--muted); font-size: 12px; text-align: right; white-space: nowrap; }
+.prog { margin-bottom: 10px; }
+.prog-h { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
+.prog-h .muted { font-variant-numeric: tabular-nums; }
+.bar { height: 8px; border-radius: 4px; background: var(--wait-bg); overflow: hidden; margin-top: 4px; }
+.bar > div { height: 100%; background: var(--ready); }
 .hidden { display: none !important; }
 </style>
 </head>
@@ -128,6 +142,7 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
   <nav>
     <button data-tab="board" class="on">Board</button>
     <button data-tab="graph">Graph</button>
+    <button data-tab="done">Done</button>
     <button data-tab="settings">Settings</button>
   </nav>
   <span class="spacer"></span>
@@ -196,6 +211,19 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
       </h2>
       <div class="muted" style="font-size:12px;margin-bottom:8px">Arrows point from a prerequisite to the item that waits on it. Green: ready. Yellow: in progress. Purple border: a human does it. Click a box to open it.</div>
       <div id="graph"></div>
+    </div>
+  </section>
+
+  <section id="tab-done" class="hidden">
+    <div class="grid">
+      <div class="panel">
+        <h2>Completed work <span class="spacer"></span>
+          <select id="logProject"><option value="">All projects</option></select>
+          <select id="logSince"><option value="1d">last day</option><option value="7d" selected>last 7 days</option><option value="30d">last 30 days</option><option value="all">all time</option></select>
+        </h2>
+        <div id="log"></div>
+      </div>
+      <div class="panel"><h2>Progress per project</h2><div id="progress"></div></div>
     </div>
   </section>
 
@@ -341,7 +369,7 @@ function fillSelect(sel, values, keepFirst) {
 
 function renderSelects() {
   const names = S.projects.map(p => p.name);
-  { const el = $("#area"), cur = el.value; el.innerHTML = `<option value="">All projects</option><option value="__mine">Near my earlier work</option>` + names.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join(""); if ([...el.options].some(o => o.value === cur)) el.value = cur; } fillSelect("#graphProject", names, true); fillSelect("#addProject", names, false);
+  { const el = $("#area"), cur = el.value; el.innerHTML = `<option value="">All projects</option><option value="__mine">Near my earlier work</option>` + names.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join(""); if ([...el.options].some(o => o.value === cur)) el.value = cur; } fillSelect("#graphProject", names, true); fillSelect("#logProject", names, true); fillSelect("#addProject", names, false);
   const a = $("#actor"), cur = a.value || store("river.actor") || "";
   a.innerHTML = `<option value="">(nobody)</option>` + S.agents.map(x => `<option value="${esc(x.name)}">${esc(x.name)}${x.kind === "human" ? " (human)" : ""}</option>`).join("");
   if ([...a.options].some(o => o.value === cur)) a.value = cur;
@@ -354,6 +382,34 @@ function renderSettings() {
     const ov = o.filter(x => x.key === k).map(x => `<span class="chip c-p">${esc(x.scope)} = ${esc(x.value)} <span class="link" data-unset="${esc(k)}" data-scope="${esc(x.scope)}">×</span></span>`).join(" ");
     return `<tr><td>${esc(k)}</td><td class="muted">${esc(d[k])}</td><td>${ov}</td></tr>`;
   }).join("");
+}
+
+let logSig = "";
+async function renderLog(force) {
+  if (tab !== "done") return;
+  const q = new URLSearchParams({ since: $("#logSince").value });
+  if ($("#logProject").value) q.set("project", $("#logProject").value);
+  const r = await fetch("/api/log?" + q); if (!r.ok) return;
+  const L = await r.json(), sig = JSON.stringify(L);
+  if (!force && sig === logSig) return;
+  logSig = sig;
+  const time = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const dayName = (d) => new Date(d + "T12:00:00Z").toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  $("#log").innerHTML = L.by_day.map(d => `<div class="day">
+      <div class="day-h"><b>${esc(dayName(d.day))}</b><span class="muted">${d.items.length} done</span></div>
+      ${d.items.map(it => `<div class="done-row" data-open="${it.id}">
+        <div class="id">#${it.id}</div>
+        <div><div class="title">${esc(it.title)} <span class="chip c-p">${esc(it.project)}</span></div>${it.output ? `<div class="out">${esc(it.output)}</div>` : ""}</div>
+        <div class="when">${time(it.closed_at)}${it.by_agent && it.by_agent !== "?" ? "<br>" + esc(it.by_agent) : ""}</div>
+      </div>`).join("")}
+    </div>`).join("") || `<div class="muted">Nothing done in this period.</div>`;
+  const win = L.since ? $("#logSince").selectedOptions[0].textContent : null;
+  $("#progress").innerHTML = L.progress.map(p => {
+    const pct = p.total ? Math.round(100 * p.done / p.total) : 0;
+    return `<div class="prog"><div class="prog-h"><b>${esc(p.project)}</b><span class="muted">${p.done}/${p.total} · ${pct}%</span></div>
+      <div class="bar"><div style="width:${pct}%"></div></div>
+      ${win ? `<div class="muted" style="font-size:12px;margin-top:2px">+${p.done_in_window} in the ${esc(win)}</div>` : ""}</div>`;
+  }).join("") || `<div class="muted">No items.</div>`;
 }
 
 async function renderGraph(force) {
@@ -473,7 +529,7 @@ async function refresh() {
   const r = await fetch("/api/state"); S = await r.json();
   if (S.dev_build) { if (window._build && window._build !== S.dev_build) return location.reload(); window._build = S.dev_build; }
   renderSelects(); renderCapacity(); renderNext(); renderProjects(); renderAgents(); renderEvents(); renderSettings();
-  renderGraph(false);
+  renderGraph(false); renderLog(false);
   $("#stamp").textContent = "updated " + new Date().toLocaleTimeString();
   if (openItem != null && $("#drawer").classList.contains("open")) openDrawer(openItem);
 }
@@ -492,7 +548,8 @@ document.addEventListener("click", async (e) => {
     return act("config_unset", args).catch(() => {}); }
   if (t.dataset.tab) {
     tab = t.dataset.tab; document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b === t));
-    for (const s of ["board", "graph", "settings"]) $("#tab-" + s).classList.toggle("hidden", s !== tab);
+    for (const s of ["board", "graph", "done", "settings"]) $("#tab-" + s).classList.toggle("hidden", s !== tab);
+    renderLog(true);
     return renderGraph(true);
   }
 });
@@ -502,6 +559,8 @@ $("#area").addEventListener("change", renderNext);
 $("#showDone").addEventListener("change", renderProjects);
 $("#graphProject").addEventListener("change", () => renderGraph(true));
 $("#graphDone").addEventListener("change", () => renderGraph(true));
+$("#logProject").addEventListener("change", () => renderLog(true));
+$("#logSince").addEventListener("change", () => renderLog(true));
 $("#claimNext").addEventListener("click", async () => {
   if (!actor()) return toast("Choose who you are in 'Acting as' first", true);
   const area = $("#area").value;
