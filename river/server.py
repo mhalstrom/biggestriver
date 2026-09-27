@@ -127,7 +127,10 @@ class Handler(BaseHTTPRequestHandler):
             conn = core.connect()
             try:
                 core.activity(conn, actor)
-                return self._send(200, {"ok": True, "result": op(conn, body.get("args", {}), actor)})
+                result = op(conn, body.get("args", {}), actor)
+                with core.tx(conn):
+                    core.sync_needs_you(conn)
+                return self._send(200, {"ok": True, "result": result})
             finally:
                 conn.close()
         except RiverError as e:

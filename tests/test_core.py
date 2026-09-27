@@ -708,5 +708,72 @@ class KeepRelease(Base):
         self.assertEqual(core._item(self.c, self.p)["status"], "open")
 
 
+class NeedsYou(Base):
+    def setUp(self):
+        super().setUp()
+        core.project_add(self.c, "a")
+        core.register(self.c, "mark", human=True)
+        core.register(self.c, "ag")
+
+    def sync(self):
+        with core.tx(self.c):
+            core.sync_needs_you(self.c)
+
+    def test_human_item_opens_when_ready_and_closes_when_claimed(self):
+        core.config_set(self.c, "notify_channels", "mac,ntfy")
+        prep = self.add("a", "prep")
+        sign = self.add("a", "sign", doer="human", after=[prep])
+        self.sync()
+        self.assertEqual(core.needs_you(self.c), [])
+        core.claim(self.c, prep, "ag")
+        core.done(self.c, prep, None, "ag")
+        self.sync()
+        self.sync()  # idempotent: still one event
+        ev = core.needs_you(self.c)
+        self.assertEqual([(e["kind"], e["item_id"]) for e in ev], [("item", sign)])
+        self.assertEqual(sorted(n["channel"] for n in ev[0]["notifications"]), ["mac", "ntfy"])
+        self.assertEqual(len(core.outbox(self.c)), 2)
+        core.claim(self.c, sign, "mark")
+        self.sync()
+        self.assertEqual(core.needs_you(self.c), [])
+        closed = core.needs_you(self.c, include_closed=True)
+        self.assertEqual(closed[0]["close_reason"], "claimed")
+        self.assertEqual(core.outbox(self.c), [])  # closed before it was sent: nothing to send
+
+    def test_question_to_human_and_answer(self):
+        q = core.send(self.c, "question", "which plan?", to="mark", actor="ag")
+        core.send(self.c, "question", "agents only", to="ag", actor="mark")
+        self.sync()
+        ev = core.needs_you(self.c, human="mark")
+        self.assertEqual([(e["kind"], e["message_id"], e["human"]) for e in ev], [("message", q["id"], "mark")])
+        self.assertEqual(core.outbox(self.c), [])  # no channels configured: nothing to send
+        core.answer(self.c, q["id"], "B", actor="mark")
+        self.sync()
+        self.assertEqual(core.needs_you(self.c, human="mark"), [])
+        self.assertEqual(core.needs_you(self.c, include_closed=True)[0]["close_reason"], "answered")
+
+    def test_outbox_retry_then_give_up(self):
+        core.config_set(self.c, "notify_channels", "ntfy")
+        self.add("a", "sign", doer="human")
+        self.sync()
+        (n,) = core.outbox(self.c)
+        core.outbox_mark(self.c, n["id"], False, "timeout")
+        self.assertEqual(core.outbox(self.c)[0]["attempts"], 1)
+        for _ in range(core.NOTIFY_MAX_ATTEMPTS - 1):
+            core.outbox_mark(self.c, n["id"], False, "timeout")
+        self.assertEqual(core.outbox(self.c), [])
+        with self.assertRaises(RiverError):
+            core.config_set(self.c, "notify_channels", "Bad Name")
+
+    def test_sent_once(self):
+        core.config_set(self.c, "notify_channels", "mac")
+        self.add("a", "sign", doer="human")
+        self.sync()
+        (n,) = core.outbox(self.c)
+        core.outbox_mark(self.c, n["id"], True)
+        self.sync()
+        self.assertEqual(core.outbox(self.c), [])
+
+
 if __name__ == "__main__":
     unittest.main()

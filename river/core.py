@@ -40,6 +40,7 @@ DEFAULT_SETTINGS = {
     "gone_after": "24h",
     "question_nudge_after": "30m",
     "serve_port": "8765",
+    "notify_channels": "",
 }
 
 SCHEMA = """
@@ -138,6 +139,32 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at  TEXT NOT NULL,
   read_at     TEXT,
   closed_at   TEXT
+);
+
+-- Something needs a person: a human item became ready, or a question or alert went to a human.
+CREATE TABLE IF NOT EXISTS needs_you (
+  id            INTEGER PRIMARY KEY,
+  kind          TEXT NOT NULL CHECK (kind IN ('item','message')),
+  item_id       INTEGER REFERENCES items(id),
+  message_id    INTEGER REFERENCES messages(id),
+  human         TEXT,                       -- NULL: any person
+  summary       TEXT NOT NULL,
+  opened_at     TEXT NOT NULL,
+  closed_at     TEXT,
+  close_reason  TEXT
+);
+
+-- One row per (event, channel): each event notifies once per channel; a failed send retries.
+CREATE TABLE IF NOT EXISTS notifications (
+  id          INTEGER PRIMARY KEY,
+  event_id    INTEGER NOT NULL REFERENCES needs_you(id),
+  channel     TEXT NOT NULL,
+  state       TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','sent','failed')),
+  attempts    INTEGER NOT NULL DEFAULT 0,
+  last_error  TEXT,
+  created_at  TEXT NOT NULL,
+  sent_at     TEXT,
+  UNIQUE (event_id, channel)
 );
 
 CREATE INDEX IF NOT EXISTS items_status ON items(status);
@@ -294,6 +321,8 @@ def config_set(conn, key, value, project=None, item=None, agent=None, actor=None
             raise RiverError(f"{key} takes a whole number")
     elif key == "default_prerequisite_mode" and value not in ("keep", "release"):
         raise RiverError("default_prerequisite_mode is keep or release")
+    elif key == "notify_channels" and not all(re.match(r"^[a-z0-9_-]+$", c) for c in _channels(value)):
+        raise RiverError("notify_channels is a comma list of channel names, for example: mac,ntfy (empty sends nothing)")
     sc = _scope(conn, project, item, agent)
     with tx(conn):
         conn.execute("INSERT INTO settings(scope,key,value) VALUES (?,?,?) "
@@ -1100,7 +1129,116 @@ def activity(conn, actor):
     with tx(conn):
         expired = _sweep(conn)
         _touch_agent(conn, actor)
+        sync_needs_you(conn)
     return expired
+
+
+# ---------------------------------------------------------------- needs you
+
+NOTIFY_MAX_ATTEMPTS = 5
+
+
+def _channels(value):
+    return [c.strip() for c in (value or "").split(",") if c.strip()]
+
+
+def _open_event(conn, kind, summary, item_id=None, message_id=None, human=None):
+    t = iso(now())
+    eid = conn.execute("INSERT INTO needs_you(kind,item_id,message_id,human,summary,opened_at) VALUES (?,?,?,?,?,?)",
+                       (kind, item_id, message_id, human, summary, t)).lastrowid
+    for ch in _channels(setting(conn, "notify_channels", item_id=item_id, agent=human)):
+        conn.execute("INSERT OR IGNORE INTO notifications(event_id,channel,created_at) VALUES (?,?,?)", (eid, ch, t))
+    if item_id is not None:
+        _event(conn, item_id, "river", f"needs you: {summary}")
+    return eid
+
+
+def sync_needs_you(conn):
+    """Open and close needs-you events so they match the queue. Safe to run any number of times.
+
+    Runs inside the caller's transaction. Opens an event for each ready human
+    item and each open question or unread alert to a human, and closes events
+    whose reason is gone (done, dropped, claimed, blocked again, answered, read).
+    """
+    humans = {r["name"] for r in conn.execute("SELECT name FROM agents WHERE kind='human'")}
+    ann = annotate(conn)
+    want_items = {a["id"]: a for a in ann.values()
+                  if a["ready"] and a["doer"] == "human" and not a["project_archived"]}
+    want_msgs = {}
+    if humans:
+        for r in conn.execute(
+                f"SELECT * FROM messages WHERE kind IN ('question','alert') AND to_agent IN ({','.join('?' * len(humans))}) "
+                "AND ((kind='question' AND state='open') OR (kind='alert' AND read_at IS NULL))", sorted(humans)):
+            want_msgs[r["id"]] = r
+    t = iso(now())
+    for ev in conn.execute("SELECT * FROM needs_you WHERE closed_at IS NULL").fetchall():
+        if ev["kind"] == "item" and ev["item_id"] not in want_items:
+            it = ann.get(ev["item_id"])
+            why = (it["status"] if it and it["status"] in CLOSED_STATES
+                   else "claimed" if it and it["status"] in ("in_progress", "held")
+                   else "no longer ready")
+            conn.execute("UPDATE needs_you SET closed_at=?, close_reason=? WHERE id=?", (t, why, ev["id"]))
+        elif ev["kind"] == "message" and ev["message_id"] not in want_msgs:
+            m = conn.execute("SELECT kind, state FROM messages WHERE id=?", (ev["message_id"],)).fetchone()
+            why = m["state"] if m and m["state"] != "open" else "read"
+            conn.execute("UPDATE needs_you SET closed_at=?, close_reason=? WHERE id=?", (t, why, ev["id"]))
+    have_items = {r[0] for r in conn.execute("SELECT item_id FROM needs_you WHERE kind='item' AND closed_at IS NULL")}
+    have_msgs = {r[0] for r in conn.execute("SELECT message_id FROM needs_you WHERE kind='message' AND closed_at IS NULL")}
+    for iid in sorted(set(want_items) - have_items):
+        a = want_items[iid]
+        _open_event(conn, "item", f"#{iid} {a['title']} ({a['project']}) is ready for a person", item_id=iid)
+    for mid in sorted(set(want_msgs) - have_msgs):
+        m = want_msgs[mid]
+        _open_event(conn, "message", f"{m['kind']} from {m['from_agent']}: {m['body'][:120]}",
+                    item_id=m["item_id"], message_id=mid, human=m["to_agent"])
+
+
+def needs_you(conn, human=None, include_closed=False, limit=100):
+    """Open needs-you events (for one person: theirs and the ones for anyone), newest first."""
+    with tx(conn):
+        sync_needs_you(conn)
+    sql = ("SELECT n.*, i.title item_title, p.name project, m.kind message_kind, m.from_agent, m.body "
+           "FROM needs_you n LEFT JOIN items i ON i.id=n.item_id LEFT JOIN projects p ON p.id=i.project_id "
+           "LEFT JOIN messages m ON m.id=n.message_id WHERE 1=1")
+    args = []
+    if not include_closed:
+        sql += " AND n.closed_at IS NULL"
+    if human is not None:
+        sql += " AND (n.human IS NULL OR n.human=?)"
+        args.append(human)
+    rows = [dict(r) for r in conn.execute(sql + " ORDER BY n.id DESC LIMIT ?", args + [limit])]
+    for r in rows:
+        r["notifications"] = [dict(x) for x in conn.execute(
+            "SELECT channel, state, attempts, last_error, sent_at FROM notifications WHERE event_id=? ORDER BY channel",
+            (r["id"],))]
+    return rows
+
+
+def outbox(conn, channel=None):
+    """Notifications still to send: pending, or failed with attempts left. For the dispatcher."""
+    sql = ("SELECT o.*, n.summary, n.kind, n.item_id, n.message_id, n.human "
+           "FROM notifications o JOIN needs_you n ON n.id=o.event_id "
+           "WHERE (o.state='pending' OR (o.state='failed' AND o.attempts < ?)) "
+           "AND n.closed_at IS NULL")  # a person already acted: do not notify about it
+    args = [NOTIFY_MAX_ATTEMPTS]
+    if channel:
+        sql += " AND o.channel=?"
+        args.append(channel)
+    return [dict(r) for r in conn.execute(sql + " ORDER BY o.id", args)]
+
+
+def outbox_mark(conn, notification_id, ok, error=None):
+    """Record one send attempt: sent, or failed with the error (it retries until NOTIFY_MAX_ATTEMPTS)."""
+    with tx(conn):
+        if not conn.execute("SELECT 1 FROM notifications WHERE id=?", (notification_id,)).fetchone():
+            raise RiverError(f"no notification {notification_id}")
+        if ok:
+            conn.execute("UPDATE notifications SET state='sent', attempts=attempts+1, sent_at=?, last_error=NULL "
+                         "WHERE id=?", (iso(now()), notification_id))
+        else:
+            conn.execute("UPDATE notifications SET state='failed', attempts=attempts+1, last_error=? WHERE id=?",
+                         (str(error or "unknown error")[:500], notification_id))
+    return dict(conn.execute("SELECT * FROM notifications WHERE id=?", (notification_id,)).fetchone())
 
 
 def register(conn, name, human=False, note=""):
@@ -1734,6 +1872,9 @@ def state(conn):
         "capacity": capacity(conn, ann),
         "settings": config_list(conn),
         "events": recent_events(conn),
+        "needs_you": [dict(r) for r in conn.execute(
+            "SELECT id, kind, item_id, message_id, human, summary, opened_at FROM needs_you "
+            "WHERE closed_at IS NULL ORDER BY id DESC")],
     }
 
 

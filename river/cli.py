@@ -305,6 +305,8 @@ def build_parser():
     x.add_argument("--project"); x.add_argument("--status"); x.add_argument("--all", action="store_true")
 
     x = sub.add_parser("show", help="one item with its links and history"); x.add_argument("id", type=int)
+    x = sub.add_parser("needs-you", help="what waits on a person: ready human items, questions and alerts to people")
+    x.add_argument("--human", help="only this person's (and those for anyone)"); x.add_argument("--all", action="store_true", help="closed ones too")
     x = sub.add_parser("status", help="overview: every project's counts, recent completions, who is working, open slots")
     x.add_argument("--recent", type=int, default=10, help="how many recent completions (default 10)")
     x = sub.add_parser("log", help="completed work: done items with output, who, and when, by day")
@@ -436,6 +438,8 @@ def run(argv=None):
     if args.cmd not in ("go", "plan"):
         core.activity(conn, actor)
     res = dispatch(conn, args, actor)
+    with core.tx(conn):
+        core.sync_needs_you(conn)  # the command may have made a human item ready, or sent a question to a person
     if args.json:
         print(json.dumps(res, indent=2, default=str))
     else:
@@ -564,6 +568,8 @@ def dispatch(conn, a, actor):
         return core.item_show(conn, a.id)
     if c == "status":
         return core.status(conn, a.recent)
+    if c == "needs-you":
+        return core.needs_you(conn, a.human, a.all)
     if c == "log":
         return core.completed(conn, a.project, None if a.since == "all" else a.since)
     if c == "go":
@@ -863,6 +869,16 @@ def render(a, res):
         return
     if c == "status":
         return render_status(res)
+    if c == "needs-you":
+        if not res:
+            print("(nothing needs a person now)")
+        for e in res:
+            who = e["human"] or "any person"
+            state = f"closed {e['closed_at']} ({e['close_reason']})" if e["closed_at"] else f"open since {e['opened_at']}"
+            print(f"[{e['id']}] for {who}: {e['summary']}  ({state})")
+            for n in e["notifications"]:
+                print(f"      {n['channel']}: {n['state']}" + (f" after {n['attempts']} tries: {n['last_error']}" if n["last_error"] else ""))
+        return
     if c == "log":
         window = f"last {res['since']}" if res["since"] else "all time"
         if not res["items"]:
