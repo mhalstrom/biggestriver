@@ -202,6 +202,11 @@ def build_parser():
     x.add_argument("--claim", action="store_true", help="take it")
     x.add_argument("--limit", "-n", type=int, default=1)
 
+    x = sub.add_parser("init", help="set up the current folder: link or create its project, add the agent block")
+    x.add_argument("--project", help="project name (default: the folder name)")
+    x.add_argument("--description", default="", help="what the project covers, for agents")
+    x.add_argument("--file", action="append", help="instructions file to add the block to (default CLAUDE.md, plus AGENTS.md if present)")
+
     x = sub.add_parser("go", help="start or continue an agent session: name, role, item, briefing")
     x.add_argument("--project", help="project name(s) when this folder is not linked")
     x.add_argument("--role", choices=core.ROLES, help="ask for a role instead of letting river pick")
@@ -264,6 +269,8 @@ def run(argv=None):
             text = (GUIDES / name / "SKILL.md").read_text()
             print(text.split("---", 2)[2].strip() if text.startswith("---") else text)
         return 0
+    if args.cmd == "init":
+        return init_folder(args)
     if args.cmd == "setup-agent":
         if not args.append:
             print(AGENT_SNIPPET)
@@ -320,6 +327,49 @@ def _hint(a, res, actor):
     if not actor and c in ("list", "show", "who", "capacity", "blockers"):
         return HINTS["no_actor"]
     return None
+
+
+def _append_block(f):
+    old = f.read_text() if f.exists() else ""
+    if "Biggest River" in old:
+        return f"{f.name}: already has the work queue block"
+    f.write_text(old + ("\n" if old and not old.endswith("\n") else "") + ("\n" if old else "") + AGENT_SNIPPET)
+    return f"{f.name}: added the work queue block"
+
+
+def init_folder(args):
+    import re
+    conn = core.connect()
+    here = Path.cwd()
+    lines = []
+    linked = core.projects_for_dir(conn, here)
+    linked_here = [n for n in linked if Path(core._project(conn, n)["path"]) == here.resolve()]
+    if args.project:
+        name = args.project
+    elif linked_here:
+        name = None
+        lines.append(f"projects already linked to this folder: {', '.join(linked_here)}")
+    else:
+        name = re.sub(r"[^a-z0-9._-]+", "-", here.name.lower()).strip("-") or "project"
+    if name:
+        exists = conn.execute("SELECT 1 FROM projects WHERE name=?", (name,)).fetchone()
+        if exists:
+            core.project_path(conn, name, str(here), args.actor)
+            lines.append(f"project {name}: linked to {here}")
+        else:
+            core.project_add(conn, name, notes=args.description, actor=args.actor, path=str(here))
+            lines.append(f"project {name}: created and linked to {here}")
+        if args.description and exists:
+            core.project_describe(conn, name, args.description, args.actor)
+    files = [Path(f) for f in (args.file or [])] or [here / "CLAUDE.md"] + ([here / "AGENTS.md"] if (here / "AGENTS.md").exists() else [])
+    for f in files:
+        lines.append(_append_block(f))
+    shown = name or linked_here[0]
+    if not core._project(conn, shown)["notes"]:
+        lines.append(f'next: describe it for agents: river project describe {shown} "what it covers, where, what helps"')
+    lines.append(f"next: add work (river add {shown} \"...\") or open an agent here and say go")
+    print("\n".join(lines))
+    return 0
 
 
 def dispatch(conn, a, actor):

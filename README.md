@@ -23,17 +23,37 @@ projects at the same time.
 One SQLite file, one command (`river`), one page. Python 3.10 or later, standard
 library only. Inspired by [Beads](https://github.com/steveyegge/beads).
 
-## Try it
+## Install
 
 ```sh
 git clone https://github.com/mhalstrom/biggestriver
 cd biggestriver
-./seed/example.sh              # a small example on a fresh database
-./bin/river serve --open       # http://127.0.0.1:8765
+./install.sh          # links `river` into ~/.local/bin and the Claude Code skills into ~/.claude/skills
 ```
 
-Put `bin/river` on your `PATH` (for example `ln -s "$PWD/bin/river" ~/.local/bin/river`).
-The database is `data/river.db`; set `RIVER_DB` to use another file.
+`./install.sh --bin-dir DIR` picks another folder; `--no-skills` skips the
+skills. The queue database is `data/river.db` in the clone; set `RIVER_DB` to
+use another file.
+
+## Set up a project
+
+In each project folder:
+
+```sh
+river init --description "what this project covers and what context helps"
+```
+
+This creates the project (named after the folder), links it to the folder, and
+adds a short block to `CLAUDE.md` (and `AGENTS.md` if present) that tells
+agents to run `river go` when you say "go". Then add work and start agents:
+
+```sh
+river add <project> "first item" --doer ai
+# open Claude Code (or another agent) in the folder and say: go
+river serve --open    # watch the board at http://127.0.0.1:8765
+```
+
+To see it with sample data first: `./seed/example.sh` on an empty database.
 
 ## Use it
 
@@ -80,30 +100,13 @@ river config set lease_ttl 7d --agent alex       # people keep claims longer
 river config set max_leases 3 --agent alex
 ```
 
-## Set up your agents
+## How agents learn it
 
-Agents learn river from the command itself. Run `river` with no arguments for
-the quick start, `river guide` for the full work loop, and `river guide setup`
-for these steps.
-
-1. Put `bin/river` on `PATH`.
-2. Add a short block to the instructions file your agent reads (`CLAUDE.md`
-   for Claude Code, `AGENTS.md` for Codex and others):
-
-   ```sh
-   river setup-agent --append CLAUDE.md     # or: river setup-agent  (prints the block)
-   ```
-
-   The block tells the agent to run `river guide` once and then work from the
-   queue.
-3. Give each agent session its own name: it runs `river register <name>` and
-   sets `RIVER_AGENT`.
-4. Optional, Claude Code: install the skills so they load when needed.
-
-   ```sh
-   ln -s "$PWD/skills/river" ~/.claude/skills/river
-   ln -s "$PWD/skills/river-planner" ~/.claude/skills/river-planner
-   ```
+The command teaches itself: `river` with no arguments prints a quick start,
+`river guide` the full work loop, `river guide planner` how to plan, and
+`river guide setup` the setup steps. `river go` prints a briefing with the
+role, the item, the rules, and the command to run next. `river setup-agent`
+prints the instructions block alone.
 
 After each command, river prints one hint line with the likely next command
 (for example, how to finish or release the item just claimed). Hints go to
