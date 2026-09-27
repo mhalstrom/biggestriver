@@ -31,6 +31,7 @@ MESSAGE_STATES = ("open", "accepted", "declined", "answered", "read")
 DEFAULT_SETTINGS = {
     "lease_ttl": "30m",
     "hold_ttl": "2h",
+    "owner_ttl": "8h",
     "keep_prereq_limit": "3",
     "replan_threshold": "3",
     "default_prerequisite_mode": "release",
@@ -449,6 +450,62 @@ def target_describe(conn, name, text, actor=None):
         conn.execute("UPDATE targets SET description=? WHERE name=?", (text, name))
         _event(conn, None, actor, f"target {name} description changed")
     return target_show(conn, name)
+
+
+def target_own(conn, name, actor=None):
+    """Become the one owner of a target. Refused while another agent owns it."""
+    if not actor:
+        raise RiverError("owning a target needs an agent name: set RIVER_AGENT or pass --as <name>")
+    with tx(conn):
+        _sweep(conn)
+        _agent(conn, actor)
+        t = _target(conn, name)
+        if t["owner"] and t["owner"] != actor:
+            left = parse_iso(t["owner_expires_at"]) - now()
+            raise RiverError(f"refused: target {name} is owned by {t['owner']} "
+                             f"(until {t['owner_expires_at']}, {_short(left)} left unless they renew). "
+                             f"Ask them: river send question --to {t['owner']} \"...\", "
+                             f"or they can hand it over: river target give {name} --to {actor}")
+        ttl = parse_duration(setting(conn, "owner_ttl", agent=actor))
+        cur = conn.execute("UPDATE targets SET owner=?, owner_expires_at=? WHERE name=? AND (owner IS NULL OR owner=?)",
+                           (actor, iso(now() + ttl), name, actor))
+        if cur.rowcount != 1:
+            raise RiverError(f"target {name} changed owner while you asked; see: river target show {name}")
+        if t["owner"] != actor:
+            _event(conn, None, actor, f"target {name} owned by {actor}")
+    return target_show(conn, name)
+
+
+def target_release(conn, name, actor=None):
+    with tx(conn):
+        t = _target(conn, name)
+        if t["owner"] != actor:
+            raise RiverError(f"target {name} is owned by {t['owner'] or 'nobody'}, not {actor}")
+        conn.execute("UPDATE targets SET owner=NULL, owner_expires_at=NULL WHERE name=?", (name,))
+        _event(conn, None, actor, f"target {name} released")
+    return target_show(conn, name)
+
+
+def target_give(conn, name, to, actor=None):
+    """Hand a target to another agent. Only the owner can give it."""
+    with tx(conn):
+        _sweep(conn)
+        t = _target(conn, name)
+        if t["owner"] != actor:
+            raise RiverError(f"only the owner can give target {name}; it is owned by {t['owner'] or 'nobody'}"
+                             + ("" if t["owner"] else f" (take it: river target own {name})"))
+        _agent(conn, to)
+        ttl = parse_duration(setting(conn, "owner_ttl", agent=to))
+        conn.execute("UPDATE targets SET owner=?, owner_expires_at=? WHERE name=?", (to, iso(now() + ttl), name))
+        _event(conn, None, actor, f"target {name} given to {to}")
+        _send(conn, "notice", actor, f"{actor} gave you target {name}: you now run its deploys. "
+              f"See: river target show {name}", to=to)
+    return target_show(conn, name)
+
+
+def _short(td):
+    m = max(0, int(td.total_seconds() // 60))
+    return f"{m // 60}h{m % 60:02d}m" if m >= 60 else f"{m}m"
 
 
 def target_list(conn):
@@ -885,11 +942,13 @@ def ready_list(conn, project=None, unblocks=None, doer_for=None, ann=None, near=
 # ---------------------------------------------------------------- registry and leases
 
 def _touch_agent(conn, actor):
-    """Renew every lease the actor holds and record that it was seen."""
+    """Renew every lease and target ownership the actor holds, and record that it was seen."""
     if not actor:
         return
     t = now()
     conn.execute("UPDATE agents SET last_seen=? WHERE name=?", (iso(t), actor))
+    owner_ttl = parse_duration(setting(conn, "owner_ttl", agent=actor))
+    conn.execute("UPDATE targets SET owner_expires_at=? WHERE owner=?", (iso(t + owner_ttl), actor))
     for r in conn.execute("SELECT id FROM items WHERE assignee=? AND status='in_progress'", (actor,)).fetchall():
         ttl = parse_duration(setting(conn, "lease_ttl", item_id=r["id"], agent=actor))
         conn.execute("UPDATE items SET lease_expires_at=? WHERE id=?", (iso(t + ttl), r["id"]))
@@ -905,6 +964,12 @@ def _sweep(conn):
         _event(conn, r["id"], "river", f"lease expired (was {r['assignee']}); back to open")
         _send(conn, "notice", "river", f"your lease on #{r['id']} expired; the item is open again. "
               f"Claim it again if you still work on it: river claim {r['id']}", to=r["assignee"], item_id=r["id"])
+    for r in conn.execute("SELECT name, owner FROM targets WHERE owner IS NOT NULL AND owner_expires_at < ?",
+                          (t,)).fetchall():
+        conn.execute("UPDATE targets SET owner=NULL, owner_expires_at=NULL WHERE name=?", (r["name"],))
+        _event(conn, None, "river", f"target {r['name']} ownership expired (was {r['owner']})")
+        _send(conn, "notice", "river", f"your ownership of target {r['name']} expired; nobody owns it now. "
+              f"Take it again if you still deploy there: river target own {r['name']}", to=r["owner"])
     return [r["id"] for r in expired]
 
 
@@ -935,6 +1000,10 @@ def unregister(conn, name, actor=None):
         held = conn.execute("SELECT id FROM items WHERE assignee=? AND status IN ('in_progress','held')", (name,)).fetchall()
         if held:
             raise RiverError(f"{name} holds {', '.join('#' + str(r['id']) for r in held)}; release those first")
+        owned = [r["name"] for r in conn.execute("SELECT name FROM targets WHERE owner=?", (name,))]
+        if owned:
+            raise RiverError(f"{name} owns target {', '.join(owned)}; release or give it first "
+                             f"(river target release <t>, river target give <t> --to <agent>)")
         conn.execute("DELETE FROM agents WHERE name=?", (name,))
         conn.execute("DELETE FROM settings WHERE scope=?", (f"agent:{name}",))
         _event(conn, None, actor or name, f"agent {name} unregistered")
@@ -970,6 +1039,8 @@ def agent_status(conn, name):
     a["holds"] = [dict(r) for r in conn.execute(
         "SELECT id, title, status, lease_expires_at FROM items WHERE assignee=? AND status IN ('in_progress','held') ORDER BY id",
         (name,))]
+    a["owns"] = [dict(r) for r in conn.execute(
+        "SELECT name, owner_expires_at FROM targets WHERE owner=? ORDER BY name", (name,))]
     return a
 
 

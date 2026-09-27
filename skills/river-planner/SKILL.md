@@ -15,8 +15,15 @@ river project rank <name> <N>                          # 1 = most important over
 river project list
 river target add <name> --description "how it deploys"  # where projects ship to
 river project target <name> <target>                   # each project has at most one
-river target show <target>                             # its projects
+river target show <target>                             # its projects and owner
+river target own <target>                              # one owner per target runs its deploys
+river target give <target> --to <agent>                # or: river target release <target>
 ```
+
+A target has at most one owner. Ownership lasts `owner_ttl` (default 8h) and
+every command by the owner renews it; when it expires the target is free and
+the old owner gets a notice. `river target own` names the current owner when
+it refuses.
 
 Write the description for an agent that must decide whether it fits: what the
 project covers, where it lives (repository, directories), and what knowledge

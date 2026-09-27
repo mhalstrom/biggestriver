@@ -485,5 +485,73 @@ class Kinds(Base):
         self.assertEqual(core.annotate(self.c)[x]["waits_on"], [y])
 
 
+class Ownership(Base):
+    def setUp(self):
+        super().setUp()
+        core.target_add(self.c, "web")
+        for n in ("ag", "bo"):
+            core.register(self.c, n)
+
+    def test_parallel_own_has_one_winner(self):
+        names = [f"w{i}" for i in range(8)]
+        for n in names:
+            core.register(self.c, n)
+        won, refused = [], []
+        start = threading.Barrier(len(names))
+
+        def worker(name):
+            c = core.connect(self.path)
+            try:
+                start.wait()
+                core.target_own(c, "web", name)
+                won.append(name)
+            except RiverError as e:
+                refused.append(str(e))
+            finally:
+                c.close()
+
+        ts = [threading.Thread(target=worker, args=(n,)) for n in names]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+        self.assertEqual(len(won), 1)
+        self.assertEqual(len(refused), len(names) - 1)
+        self.assertTrue(all(f"owned by {won[0]}" in e for e in refused))
+        self.assertEqual(core.target_show(self.c, "web")["owner"], won[0])
+
+    def test_own_is_renewed_and_repeatable(self):
+        core.target_own(self.c, "web", "ag")
+        self.c.execute("UPDATE targets SET owner_expires_at=? WHERE name='web'",
+                       (core.iso(core.now() + timedelta(minutes=5)),))
+        core.activity(self.c, "ag")
+        left = core.parse_iso(core.target_show(self.c, "web")["owner_expires_at"]) - core.now()
+        self.assertGreater(left, timedelta(hours=7))
+        core.target_own(self.c, "web", "ag")  # owning again is fine
+
+    def test_expiry_frees_target_and_notifies(self):
+        core.target_own(self.c, "web", "ag")
+        self.c.execute("UPDATE targets SET owner_expires_at=? WHERE name='web'",
+                       (core.iso(core.now() - timedelta(minutes=1)),))
+        core.target_own(self.c, "web", "bo")
+        self.assertEqual(core.target_show(self.c, "web")["owner"], "bo")
+        box = core.inbox(self.c, "ag")
+        self.assertEqual([(m["kind"], m["from_agent"]) for m in box], [("notice", "river")])
+        self.assertIn("web", box[0]["body"])
+
+    def test_give_release_and_refusals(self):
+        with self.assertRaises(RiverError):
+            core.target_give(self.c, "web", "bo", "ag")  # nobody owns it
+        core.target_own(self.c, "web", "ag")
+        with self.assertRaises(RiverError):
+            core.target_release(self.c, "web", "bo")
+        with self.assertRaises(RiverError):
+            core.unregister(self.c, "ag")
+        core.target_give(self.c, "web", "bo", "ag")
+        self.assertEqual(core.target_show(self.c, "web")["owner"], "bo")
+        self.assertEqual(core.unread(self.c, "bo")["unread"], 1)
+        self.assertEqual([o["name"] for o in core.agent_status(self.c, "bo")["owns"]], ["web"])
+        core.target_release(self.c, "web", "bo")
+        self.assertIsNone(core.target_show(self.c, "web")["owner"])
+
+
 if __name__ == "__main__":
     unittest.main()

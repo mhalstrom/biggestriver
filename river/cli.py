@@ -185,7 +185,8 @@ def _footer(conn, actor):
     if not r:
         print(f"(agent {actor} is not registered: river register {actor} [--human])", file=sys.stderr)
         return
-    holds = core.agent_status(conn, actor)["holds"]
+    st = core.agent_status(conn, actor)
+    holds = st["holds"]
     bits = []
     if holds:
         parts = []
@@ -196,6 +197,9 @@ def _footer(conn, actor):
             else:
                 parts.append(f"#{h['id']}")
         bits.append(f"holds {', '.join(parts)}")
+    if st["owns"]:
+        bits.append("owns " + ", ".join(
+            f"{o['name']} {core._short(core.parse_iso(o['owner_expires_at']) - core.now())} left" for o in st["owns"]))
     msg = _unread_text(core.unread(conn, actor), actor)
     if msg:
         bits.append(msg)
@@ -248,6 +252,10 @@ def build_parser():
     x.add_argument("--description", default="", help="how and where it deploys")
     x = tgs.add_parser("describe", help="set how a target deploys"); x.add_argument("name"); x.add_argument("text")
     x = tgs.add_parser("show", help="a target, its owner, and its projects"); x.add_argument("name")
+    x = tgs.add_parser("own", help="become the one owner of a target (runs its deploys)"); x.add_argument("name")
+    x = tgs.add_parser("release", help="stop owning a target"); x.add_argument("name")
+    x = tgs.add_parser("give", help="hand a target you own to another agent"); x.add_argument("name")
+    x.add_argument("--to", required=True)
     tgs.add_parser("list")
 
     x = sub.add_parser("add", help="add an item to a project")
@@ -495,6 +503,12 @@ def dispatch(conn, a, actor):
             return core.target_describe(conn, a.name, a.text, actor)
         if a.tcmd == "show":
             return core.target_show(conn, a.name)
+        if a.tcmd == "own":
+            return core.target_own(conn, a.name, actor)
+        if a.tcmd == "release":
+            return core.target_release(conn, a.name, actor)
+        if a.tcmd == "give":
+            return core.target_give(conn, a.name, a.to, actor)
         return core.target_list(conn)
     if c == "add":
         return core.item_add(conn, a.project, a.title, a.priority, a.notes, a.doer, a.after, actor,
@@ -686,7 +700,11 @@ def render(a, res):
             return
         print(res["name"])
         print("  " + (res["description"] or f"(no description: river target describe {res['name']} \"how it deploys\")"))
-        print("  owner: " + (res["owner"] or "nobody"))
+        if res["owner"]:
+            left = core._short(core.parse_iso(res["owner_expires_at"]) - core.now())
+            print(f"  owner: {res['owner']} ({left} left; any command by {res['owner']} renews it)")
+        else:
+            print(f"  owner: nobody (take it: river target own {res['name']})")
         print(f"  projects ({len(res['projects'])}):")
         for p in res["projects"]:
             print(f"    {p['name']}  ({p['open_items']} open)")
@@ -760,7 +778,8 @@ def render(a, res):
         for ag in res:
             holds = ", ".join(f"#{h['id']} {h['title']}" for h in ag["holds"]) or "nothing"
             note = f" — {ag['note']}" if ag["note"] else ""
-            print(f"{ag['name']} ({ag['kind']}, {ag['state']}){note}\n    holds: {holds}")
+            print(f"{ag['name']} ({ag['kind']}, {ag['state']}){note}\n    holds: {holds}"
+                  + (f"\n    owns: {', '.join(o['name'] for o in ag['owns'])}" if ag.get("owns") else ""))
         return
     if c == "capacity":
         print(f"Ready for agents: {len(res['ready_for_agents'])}   ready for humans: {len(res['ready_for_humans'])}   "
