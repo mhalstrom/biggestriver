@@ -1442,7 +1442,13 @@ def sync_needs_you(conn):
 
 
 def needs_you(conn, human=None, include_closed=False, limit=100):
-    """Open needs-you events (for one person: theirs and the ones for anyone), newest first."""
+    """Needs-you events for one person (theirs and the ones for anyone), most important first.
+
+    Open events come before closed ones. Among open events, questions and alerts come
+    first, oldest first, because an agent waits on the answer now; then items in
+    queue order (effective priority, project rank, what they unblock). Closed
+    events follow, newest first. Each item event carries its effective priority,
+    where that priority comes from, and how many open items it unblocks."""
     with tx(conn):
         sync_needs_you(conn)
     sql = ("SELECT n.*, i.title item_title, p.name project, m.kind message_kind, m.from_agent, m.body "
@@ -1454,8 +1460,25 @@ def needs_you(conn, human=None, include_closed=False, limit=100):
     if human is not None:
         sql += " AND (n.human IS NULL OR n.human=?)"
         args.append(human)
-    rows = [dict(r) for r in conn.execute(sql + " ORDER BY n.id DESC LIMIT ?", args + [limit])]
+    rows = [dict(r) for r in conn.execute(sql + " ORDER BY n.id DESC", args)]
+    ann = annotate(conn)
     for r in rows:
+        a = ann.get(r["item_id"]) if r["kind"] == "item" else None
+        r["priority"] = a["effective_priority"] if a else None
+        r["priority_from"] = a["priority_from"] if a else None
+        r["unblocks_count"] = a["unblocks_count"] if a else 0
+        if r["closed_at"]:
+            r["_key"] = (3, -r["id"])
+        elif a:
+            r["_key"] = (1,) + a["sort_key"]
+        elif r["kind"] == "message":
+            r["_key"] = (0, r["id"])
+        else:
+            r["_key"] = (2, -r["id"])  # an item the queue no longer knows
+    rows.sort(key=lambda r: r["_key"])
+    rows = rows[:limit]
+    for r in rows:
+        del r["_key"]
         r["notifications"] = [dict(x) for x in conn.execute(
             "SELECT channel, state, attempts, last_error, sent_at FROM notifications WHERE event_id=? ORDER BY channel",
             (r["id"],))]

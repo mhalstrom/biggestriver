@@ -597,7 +597,7 @@ function renderNeedsYou() {
         + (e.item_id ? `<button class="btn" data-open="${e.item_id}">Open #${e.item_id}</button>` : "");
     return `<div class="ny">
       <div class="ny-h"><b>${esc(isItem ? `#${e.item_id} ${e.item_title}` : `${e.message_kind} from ${e.from_agent}`)}</b>
-        ${e.project ? `<span class="chip c-p">${esc(e.project)}</span>` : ""}<span class="muted" style="font-size:12px">${ago(e.opened_at)}</span></div>
+        ${e.priority != null ? `<span class="chip" title="${esc(e.priority_from ? `priority from #${e.priority_from}` : "own priority")}${e.unblocks_count ? `; unblocks ${e.unblocks_count}` : ""}">P${e.priority}</span>` : ""}${e.project ? `<span class="chip c-p">${esc(e.project)}</span>` : ""}<span class="muted" style="font-size:12px">${ago(e.opened_at)}</span></div>
       ${detail ? `<div class="ny-c">${esc(clip(detail, 500))}</div>` : ""}
       <div class="actions">${buttons}</div></div>`;
   }).join("");

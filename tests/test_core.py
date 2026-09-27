@@ -740,6 +740,21 @@ class NeedsYou(Base):
         self.assertEqual(closed[0]["close_reason"], "claimed")
         self.assertEqual(core.outbox(self.c), [])  # closed before it was sent: nothing to send
 
+    def test_most_important_first(self):
+        low = self.add("a", "low", p=3, doer="human")
+        mid = self.add("a", "mid", p=2, doer="human")
+        feeds = self.add("a", "feeds a P0", p=3, doer="human")
+        top = self.add("a", "top", p=0, after=[feeds])
+        q = core.send(self.c, "question", "which plan?", to="mark", actor="ag")
+        alert = core.send(self.c, "alert", "disk full", to="mark", actor="ag")
+        self.sync()
+        ev = core.needs_you(self.c, human="mark")
+        self.assertEqual([e["message_id"] or e["item_id"] for e in ev], [q["id"], alert["id"], feeds, mid, low])
+        first_item = ev[2]
+        self.assertEqual((first_item["priority"], first_item["priority_from"], first_item["unblocks_count"]), (0, top, 1))
+        self.assertEqual(ev[4]["priority"], 3)
+        self.assertIsNone(ev[0]["priority"])
+
     def test_question_to_human_and_answer(self):
         q = core.send(self.c, "question", "which plan?", to="mark", actor="ag")
         core.send(self.c, "question", "agents only", to="ag", actor="mark")

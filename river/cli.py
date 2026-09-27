@@ -329,7 +329,7 @@ def build_parser():
     x = sub.add_parser("prompt", help="a paste-ready prompt for an agent that helps a person with a human item")
     x.add_argument("id", type=int, nargs="?"); x.add_argument("--all", action="store_true", help="every item and question that waits on the person")
     x.add_argument("--for", dest="person", help="the person (default: you if you are a person, else the first registered person)")
-    x = sub.add_parser("needs-you", help="what waits on a person: ready human items, questions and alerts to people")
+    x = sub.add_parser("needs-you", help="what waits on a person, most important first: questions and alerts, then ready human items by priority")
     x.add_argument("--human", help="only this person's (and those for anyone)"); x.add_argument("--all", action="store_true", help="closed ones too")
     x = sub.add_parser("status", help="overview: every project's counts, recent completions, who is working, open slots")
     x.add_argument("--recent", type=int, default=10, help="how many recent completions (default 10)")
@@ -1051,7 +1051,13 @@ def render(a, res):
         for e in res:
             who = e["human"] or "any person"
             state = f"closed {e['closed_at']} ({e['close_reason']})" if e["closed_at"] else f"open since {e['opened_at']}"
-            print(f"[{e['id']}] for {who}: {e['summary']}  ({state})")
+            pri = ""
+            if e.get("priority") is not None:
+                pri = f"P{e['priority']}" + (f" from #{e['priority_from']}" if e["priority_from"] else "")
+                if e["unblocks_count"]:
+                    pri += f", unblocks {e['unblocks_count']}"
+                pri = f"[{pri}] "
+            print(f"[{e['id']}] {pri}for {who}: {e['summary']}  ({state})")
             for n in e["notifications"]:
                 print(f"      {n['channel']}: {n['state']}" + (f" after {n['attempts']} tries: {n['last_error']}" if n["last_error"] else ""))
         return
