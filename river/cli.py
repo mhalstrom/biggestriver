@@ -102,7 +102,7 @@ def _fmt_item(a, show_reason=True):
     if a["doer"] != "any":
         flags.append(a["doer"])
     if a.get("reserved_for") and a["status"] == "open":
-        flags.append(f"reserved for {a['reserved_for']}")
+        flags.append(f"pushed to {a['reserved_for']}" if a.get("reserved_until") else f"reserved for {a['reserved_for']}")
     if a.get("replan"):
         flags.append("replan")
     if a.get("same_project"):
@@ -375,6 +375,10 @@ def build_parser():
                    help="you hold <id>: keep it and do the prerequisites yourself")
     g.add_argument("--release", dest="mode", action="store_const", const="release",
                    help="you hold <id>: give it back while the prerequisites wait")
+    x = sub.add_parser("push", help="reserve an open item for one agent and alert it")
+    x.add_argument("id", type=int); x.add_argument("--to", required=True); x.add_argument("--note")
+    x = sub.add_parser("accept", help="take an item pushed to you"); x.add_argument("id", type=int)
+    x = sub.add_parser("decline", help="hand a pushed item back"); x.add_argument("id", type=int); x.add_argument("--note")
     x = sub.add_parser("keep", help="hold an item again while you do its open prerequisites"); x.add_argument("id", type=int)
     x = sub.add_parser("undep", help="remove waits or conflict links"); x.add_argument("id", type=int); x.add_argument("--on", type=int, nargs="+", required=True)
     x = sub.add_parser("blocked", help="record a blocker outside the queue"); x.add_argument("id", type=int); x.add_argument("--reason", required=True)
@@ -647,6 +651,12 @@ def dispatch(conn, a, actor):
         return core.dep_add(conn, a.id, a.on, actor, a.kind, a.mode)
     if c == "keep":
         return core.keep(conn, a.id, actor)
+    if c == "push":
+        return core.push(conn, a.id, a.to, a.note, actor)
+    if c == "accept":
+        return core.accept(conn, a.id, actor)
+    if c == "decline":
+        return core.decline(conn, a.id, a.note, actor)
     if c == "undep":
         return core.dep_remove(conn, a.id, a.on, actor)
     if c == "blocked":

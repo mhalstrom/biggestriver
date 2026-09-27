@@ -32,6 +32,7 @@ DEFAULT_SETTINGS = {
     "lease_ttl": "30m",
     "hold_ttl": "2h",
     "owner_ttl": "8h",
+    "reserve_ttl": "2h",
     "keep_prereq_limit": "3",
     "replan_threshold": "3",
     "default_prerequisite_mode": "release",
@@ -96,6 +97,8 @@ CREATE TABLE IF NOT EXISTS items (
   kind              TEXT NOT NULL DEFAULT 'work',
   target            TEXT,
   reserved_for      TEXT,
+  reserved_until    TEXT,
+  reserved_by       TEXT,
   hold_expires_at   TEXT,
   replan            INTEGER NOT NULL DEFAULT 0,
   found_during      INTEGER REFERENCES items(id),
@@ -255,6 +258,9 @@ def _migrate(conn):
         conn.execute("ALTER TABLE items ADD COLUMN kind TEXT NOT NULL DEFAULT 'work'")
     if "target" not in icols:
         conn.execute("ALTER TABLE items ADD COLUMN target TEXT")
+    if "reserved_until" not in icols:
+        conn.execute("ALTER TABLE items ADD COLUMN reserved_until TEXT")
+        conn.execute("ALTER TABLE items ADD COLUMN reserved_by TEXT")
     if "found_during" not in icols:
         conn.execute("ALTER TABLE items ADD COLUMN found_during INTEGER REFERENCES items(id)")
     if "reserved_for" not in icols:
@@ -913,6 +919,56 @@ def keep(conn, item_id, actor=None):
     return item_show(conn, item_id)
 
 
+def push(conn, item_id, to, note=None, actor=None):
+    """Reserve an open item for one agent and alert it. It expires after reserve_ttl if nobody answers."""
+    with tx(conn):
+        _sweep(conn)
+        it = _item(conn, item_id)
+        _agent(conn, to)
+        if it["status"] != "open":
+            raise RiverError(f"#{item_id} is {it['status']}" + (f" by {it['assignee']}" if it["assignee"] else "")
+                             + "; only an open item can be pushed")
+        if it["reserved_for"] and it["reserved_for"] != to:
+            raise RiverError(f"#{item_id} is already reserved for {it['reserved_for']}"
+                             + (" (pushed)" if it["reserved_until"] else " (a prerequisite of an item it holds)"))
+        ttl = parse_duration(setting(conn, "reserve_ttl", item_id=it["id"], agent=to))
+        until = now() + ttl
+        conn.execute("UPDATE items SET reserved_for=?, reserved_until=?, reserved_by=? WHERE id=?",
+                     (to, iso(until), actor, it["id"]))
+        _event(conn, it["id"], actor, f"pushed to {to}" + (f": {note}" if note else ""))
+        _send(conn, "alert", actor or "river",
+              f"{actor or 'someone'} pushed #{it['id']} {it['title']} to you" + (f": {note}" if note else "") +
+              f". Take it: river accept {it['id']}   or: river decline {it['id']} --note \"why\"   "
+              f"(reserved for you for {_short(ttl)})", to=to, item_id=it["id"])
+    return item_show(conn, item_id)
+
+
+def accept(conn, item_id, actor=None):
+    """Take an item pushed to you."""
+    it = _item(conn, item_id)
+    if it["reserved_for"] != actor or not it["reserved_until"]:
+        raise RiverError(f"#{item_id} is not pushed to {actor}" +
+                         (f" (reserved for {it['reserved_for']})" if it["reserved_for"] else "") +
+                         f"; claim it instead: river claim {item_id}")
+    return claim(conn, item_id, actor)
+
+
+def decline(conn, item_id, note=None, actor=None):
+    """Hand a pushed item back: it is open to everyone again and the pusher hears why."""
+    with tx(conn):
+        it = _item(conn, item_id)
+        if it["reserved_for"] != actor or not it["reserved_until"]:
+            raise RiverError(f"#{item_id} is not pushed to {actor}")
+        conn.execute("UPDATE items SET reserved_for=NULL, reserved_until=NULL, reserved_by=NULL WHERE id=?", (it["id"],))
+        conn.execute("UPDATE messages SET state='declined', read_at=COALESCE(read_at, ?) "
+                     "WHERE kind='alert' AND item_id=? AND to_agent=? AND state='open'", (iso(now()), it["id"], actor))
+        _event(conn, it["id"], actor, "declined the push" + (f": {note}" if note else ""))
+        if it["reserved_by"] and it["reserved_by"] != actor:
+            _send(conn, "notice", actor, f"{actor} declined #{it['id']} {it['title']}" + (f": {note}" if note else "")
+                  + "; it is open to every agent again", to=it["reserved_by"], item_id=it["id"])
+    return item_show(conn, item_id)
+
+
 def _resume_holds(conn, closed_id):
     """A prerequisite closed: every held parent with nothing left open goes back to its holder, in progress."""
     back = []
@@ -1166,6 +1222,13 @@ def _sweep(conn):
         _event(conn, r["id"], "river", f"lease expired (was {r['assignee']}); back to open")
         _send(conn, "notice", "river", f"your lease on #{r['id']} expired; the item is open again. "
               f"Claim it again if you still work on it: river claim {r['id']}", to=r["assignee"], item_id=r["id"])
+    for r in conn.execute("SELECT id, title, reserved_for, reserved_by FROM items WHERE reserved_until < ? "
+                          "AND status='open'", (t,)).fetchall():
+        conn.execute("UPDATE items SET reserved_for=NULL, reserved_until=NULL, reserved_by=NULL WHERE id=?", (r["id"],))
+        _event(conn, r["id"], "river", f"push to {r['reserved_for']} expired; open to everyone")
+        for who in {r["reserved_for"], r["reserved_by"]} - {None}:
+            _send(conn, "notice", "river", f"the push of #{r['id']} {r['title']} to {r['reserved_for']} expired "
+                  f"without an answer; it is open to every agent again", to=who, item_id=r["id"])
     for r in conn.execute("SELECT id, assignee FROM items WHERE status='held' AND hold_expires_at < ?", (t,)).fetchall():
         _unhold(conn, r["id"], "river", f"hold expired (was {r['assignee']}); released")
         _send(conn, "notice", "river", f"your hold on #{r['id']} expired, so it is open to every agent now, and its "
@@ -1407,6 +1470,10 @@ def _claim_row(conn, item_id, actor):
         "WHERE id=? AND status='open'", (actor, iso(t), iso(t + ttl), item_id))
     if cur.rowcount != 1:
         raise RiverError(f"item {item_id} is no longer open")
+    if it0["reserved_until"]:
+        conn.execute("UPDATE items SET reserved_until=NULL WHERE id=?", (item_id,))
+        conn.execute("UPDATE messages SET state='accepted', read_at=COALESCE(read_at, ?) "
+                     "WHERE kind='alert' AND item_id=? AND to_agent=? AND state='open'", (iso(t), item_id, actor))
     _event(conn, item_id, actor, f"claimed (lease {setting(conn, 'lease_ttl', item_id=item_id, agent=actor)})")
     return ag
 
@@ -1425,8 +1492,10 @@ def next_item(conn, project=None, unblocks=None, claim=False, actor=None, limit=
         if not actor:
             return pool
         owned = {r["name"] for r in conn.execute("SELECT name FROM targets WHERE owner=?", (actor,))}
-        return [a for a in pool if (a["kind"] != "deploy" or a["target"] in owned)
+        pool = [a for a in pool if (a["kind"] != "deploy" or a["target"] in owned)
                 and a["reserved_for"] in (None, actor)]
+        # Items pushed to this agent come first; the sort is stable, so graph order holds inside each group.
+        return sorted(pool, key=lambda a: not (a["reserved_for"] == actor and a["reserved_until"]))
 
     if not claim:
         return [{k: v for k, v in a.items() if k != 'sort_key'}
@@ -2019,6 +2088,19 @@ def go(conn, cwd, actor=None, project=None, role=None):
             return None
         return got[0] if got else None
 
+    if role in (None, "worker"):
+        ann = annotate(conn)
+        pushed = sorted((a for a in ann.values() if a["reserved_for"] == actor and a["reserved_until"] and a["ready"]),
+                        key=lambda a: a["sort_key"])
+        for a in pushed:
+            try:
+                item = claim(conn, a["id"], actor)
+            except RiverError as e:
+                brief["claim_refused"] = str(e)
+                continue
+            brief.update(role="worker", item=item, why=f"#{item['id']} was pushed to you by {a['reserved_by'] or 'someone'}")
+            _set_role_note(conn, actor, "worker", item["id"])
+            return brief
     if role in (None, "deployer"):
         got = _deploy_claim(conn, actor, names, take_free=(role == "deployer"), brief=brief)
         if got:

@@ -45,6 +45,9 @@ OPS = {
     "dep_add": lambda c, a, who: core.dep_add(c, a["id"], [int(x) for x in a["on"]], who, a.get("kind", "blocks")),
     "dep_remove": lambda c, a, who: core.dep_remove(c, a["id"], [int(x) for x in a["on"]], who),
     "claim": lambda c, a, who: core.claim(c, a["id"], who),
+    "push": lambda c, a, who: core.push(c, a["id"], a["to"], a.get("note"), who),
+    "accept": lambda c, a, who: core.accept(c, a["id"], who),
+    "decline": lambda c, a, who: core.decline(c, a["id"], a.get("note"), who),
     "next_claim": lambda c, a, who: core.next_item(c, a.get("project"), a.get("unblocks"), True, who, 1, a.get("near"),
                                                    bool(a.get("mine"))),
     "done": lambda c, a, who: core.done(c, a["id"], a.get("output"), who),
@@ -57,7 +60,28 @@ OPS = {
     "config_set": lambda c, a, who: core.config_set(c, a["key"], str(a["value"]), a.get("project"), a.get("item"),
                                                     a.get("agent"), who),
     "config_unset": lambda c, a, who: core.config_unset(c, a["key"], a.get("project"), a.get("item"), a.get("agent"), who),
+    "answer": lambda c, a, who: core.answer(c, int(a["msg"]), a["body"], who),
+    "message_read": lambda c, a, who: _message_read(c, int(a["msg"])),
 }
+
+
+def _message_read(conn, msg_id):
+    """Marks one alert or note read, which closes its needs-you event. Questions stay open until answered."""
+    core.message_show(conn, msg_id)  # refuses an unknown id
+    with core.tx(conn):
+        core._mark_read(conn, [msg_id])
+    return core.message_show(conn, msg_id)
+
+
+def needs_you_view(conn, human=None):
+    """Open needs-you events with what a person needs to act: the item's context and notes, the message's id."""
+    rows = core.needs_you(conn, human or None)
+    for r in rows:
+        if r["item_id"] is not None:
+            it = conn.execute("SELECT context, notes, status FROM items WHERE id=?", (r["item_id"],)).fetchone()
+            if it:
+                r.update(item_context=it["context"], item_notes=it["notes"], item_status=it["status"])
+    return rows
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -96,6 +120,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, core.completed(conn, q.get("project") or None, None if since == "all" else since))
             except RiverError as e:
                 return self._send(400, {"error": str(e)})
+            finally:
+                conn.close()
+        if path == "/api/needs-you":
+            from urllib.parse import parse_qs, urlsplit
+            q = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+            conn = core.connect()
+            try:
+                return self._send(200, {"events": needs_you_view(conn, q.get("human"))})
             finally:
                 conn.close()
         if path.startswith("/api/item/"):

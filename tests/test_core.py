@@ -1041,5 +1041,57 @@ class Deployer(Base):
         self.assertIn("owned by dev", b["why"])
 
 
+class Push(Base):
+    def setUp(self):
+        super().setUp()
+        core.project_add(self.c, "a", path=self.dir.name)
+        for n in ("boss", "aa", "bb"):
+            core.register(self.c, n)
+        self.first = self.add("a", "first", p=0)
+        self.x = self.add("a", "pushed one", p=3)
+
+    def test_push_then_go_claims_it_and_others_cannot(self):
+        core.push(self.c, self.x, "aa", "you know this code", "boss")
+        self.assertEqual(core.unread(self.c, "aa")["alerts"], 1)
+        with self.assertRaises(RiverError):
+            core.claim(self.c, self.x, "bb")
+        self.assertEqual([i["id"] for i in core.next_item(self.c, actor="bb", limit=5)], [self.first])
+        self.assertEqual(core.next_item(self.c, actor="aa")[0]["id"], self.x)  # pushed first, despite P3
+        b = core.go(self.c, self.dir.name, "aa")
+        self.assertEqual((b["item"]["id"], b["item"]["assignee"]), (self.x, "aa"))
+        self.assertIn("pushed to you by boss", b["why"])
+        alert = [m for m in core.inbox(self.c, "aa", include_read=True) if m["kind"] == "alert"][0]
+        self.assertEqual(alert["state"], "accepted")
+
+    def test_decline_reopens_and_tells_pusher(self):
+        core.push(self.c, self.x, "aa", None, "boss")
+        with self.assertRaises(RiverError):
+            core.decline(self.c, self.x, "no", "bb")
+        core.decline(self.c, self.x, "busy", "aa")
+        it = core._item(self.c, self.x)
+        self.assertEqual((it["reserved_for"], it["reserved_until"]), (None, None))
+        self.assertIn("busy", core.inbox(self.c, "boss")[0]["body"])
+        core.claim(self.c, self.x, "bb")
+
+    def test_expiry_reopens_with_notice(self):
+        core.push(self.c, self.x, "aa", None, "boss")
+        self.c.execute("UPDATE items SET reserved_until=? WHERE id=?", (core.iso(core.now() - timedelta(minutes=1)), self.x))
+        core.activity(self.c, "bb")
+        self.assertIsNone(core._item(self.c, self.x)["reserved_for"])
+        self.assertTrue(any(m["kind"] == "notice" for m in core.inbox(self.c, "boss")))
+        with self.assertRaises(RiverError):
+            core.accept(self.c, self.x, "aa")
+
+    def test_push_refusals(self):
+        core.claim(self.c, self.first, "bb")
+        with self.assertRaises(RiverError):
+            core.push(self.c, self.first, "aa", None, "boss")  # not open
+        core.push(self.c, self.x, "aa", None, "boss")
+        with self.assertRaises(RiverError):
+            core.push(self.c, self.x, "bb", None, "boss")  # already pushed to someone else
+        with self.assertRaises(RiverError):
+            core.push(self.c, self.x, "nobody", None, "boss")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -79,6 +79,14 @@ first only when neither applies (`river add <project> "<title>"`).
   Do not do it inside your current item.
 - Waiting on something outside the queue: `river blocked <id> --reason "<what>"`.
 
+## Pushed items
+
+Someone can push an item to you (`river push <id> --to <you> --note "..."`):
+you get an alert, the item is reserved for you for `reserve_ttl` (2h), and
+`river go` and `river next` give it to you first. `river accept <id>` takes it;
+`river decline <id> --note "why"` hands it back and tells the pusher. With no
+answer the push expires and the item is open to everyone again.
+
 ## Messages
 
 Every command ends with a line such as
