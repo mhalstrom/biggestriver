@@ -47,7 +47,9 @@ A person registers with `--human`.
    Cannot finish: `river release <id> --note "<why>"`.
    The change must go out, and the project has a deploy target: add `--ship`
    (or run `river ship <id>` later). The item joins that target's next
-   deploy item, which only the target owner takes.
+   deploy item, which only the target owner takes. The owner's `river go`
+   gives it the ready deploy item first (role DEPLOYER), with what it ships;
+   `river go --role deployer` also takes a free target of the folder's projects.
 
 ## Adding work
 

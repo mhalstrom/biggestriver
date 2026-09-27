@@ -792,6 +792,20 @@ def render_go(b):
             out.append("  unblocks: " + ", ".join(f"#{d['id']} {d['title']}" for d in it["unblocks_detail"]))
         if it.get("output"):
             out.append(f"  earlier output: {it['output']}")
+        if b["role"] == "deployer":
+            t = b["target"]
+            if not t["description"]:
+                out.append(f"  target {t['name']}: (no description: {r} target describe {t['name']} \"how it deploys\")")
+            elif t["description"] != it.get("context"):
+                out.append(f"  target {t['name']}: {t['description']}")
+            out.append("  ships:")
+            for d in b["ships"]:
+                out.append(f"    #{d['id']} {d['title']} ({d['status']})")
+            for n in b.get("next_deploy", []):
+                out.append(f"  next deploy #{n['id']} is collecting: " + (", ".join(f"#{d['id']}" for d in n["waits_on_detail"]) or "nothing yet"))
+            out += ["",
+                    "Deploy as the target description says, run its checks, then put the release id or",
+                    f"deployed commit in the output: {r} done {it['id']} --output \"<release id, checks passed>\""]
         out += [
             "",
             "Rules:",

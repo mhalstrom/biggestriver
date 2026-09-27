@@ -1938,7 +1938,7 @@ def state(conn):
 
 # ---------------------------------------------------------------- go
 
-ROLES = ("worker", "unblocker", "planner", "idle")
+ROLES = ("deployer", "worker", "unblocker", "planner", "idle")
 
 
 def go(conn, cwd, actor=None, project=None, role=None):
@@ -2003,9 +2003,12 @@ def go(conn, cwd, actor=None, project=None, role=None):
                     _set_role_note(conn, actor, "worker", item["id"])
                     return brief
         item = item_show(conn, held[0]["id"])
-        brief.update(role="worker", resumed=True, item=item,
+        r = "deployer" if item["kind"] == "deploy" else "worker"
+        if r == "deployer":
+            brief.update(_deploy_brief(conn, item))
+        brief.update(role=r, resumed=True, item=item,
                      why=f"you already hold #{item['id']}; finish or release it first")
-        _set_role_note(conn, actor, "worker", item["id"])
+        _set_role_note(conn, actor, r, item["id"])
         return brief
 
     def try_claim(**kw):
@@ -2016,6 +2019,19 @@ def go(conn, cwd, actor=None, project=None, role=None):
             return None
         return got[0] if got else None
 
+    if role in (None, "deployer"):
+        got = _deploy_claim(conn, actor, names, take_free=(role == "deployer"), brief=brief)
+        if got:
+            brief.update(_deploy_brief(conn, got))
+            brief.update(role="deployer", item=got,
+                         why=f"you own target {got['target']} and #{got['id']} is ready to deploy")
+            _set_role_note(conn, actor, "deployer", got["id"])
+            return brief
+        if role == "deployer":
+            brief.update(role="idle", item=None, held_by_others=[],
+                         why=brief.get("claim_refused") or "no deploy item is ready for the targets you own")
+            _set_role_note(conn, actor, "idle", None)
+            return brief
     if role in (None, "worker"):
         item = try_claim(project=area)
         if item:
@@ -2053,6 +2069,42 @@ def go(conn, cwd, actor=None, project=None, role=None):
                       else "nothing here can move now, and nothing it waits on is ready"))
     _set_role_note(conn, actor, "idle", None)
     return brief
+
+
+def _deploy_claim(conn, actor, names, take_free=False, brief=None):
+    """Claim a ready deploy item on a target the actor owns; with take_free, first own a free target of these projects."""
+    if take_free:
+        targets = [r["target"] for r in conn.execute(
+            f"SELECT DISTINCT target FROM projects WHERE target IS NOT NULL AND name IN ({','.join('?' * len(names))})",
+            names)] if names else []
+        for t in targets:
+            try:
+                target_own(conn, t, actor)
+            except RiverError as e:
+                if brief is not None:
+                    brief["claim_refused"] = str(e)
+    owned = [r["name"] for r in conn.execute("SELECT name FROM targets WHERE owner=? ORDER BY name", (actor,))]
+    if not owned:
+        return None
+    ann = annotate(conn)
+    ready = sorted((a for a in ann.values() if a["kind"] == "deploy" and a["target"] in owned and a["ready"]),
+                   key=lambda a: a["sort_key"])
+    for a in ready:
+        try:
+            return claim(conn, a["id"], actor)
+        except RiverError as e:
+            if brief is not None:
+                brief["claim_refused"] = str(e)
+    return None
+
+
+def _deploy_brief(conn, item):
+    t = dict(_target(conn, item["target"]))
+    nxt = conn.execute("SELECT id FROM items WHERE kind='deploy' AND target=? AND status='open' AND id<>? ORDER BY id",
+                       (t["name"], item["id"])).fetchall()
+    return {"target": {"name": t["name"], "description": t["description"], "owner": t["owner"]},
+            "ships": item["waits_on_detail"],
+            "next_deploy": [item_show(conn, r["id"]) for r in nxt]}
 
 
 def _set_role_note(conn, actor, role, item_id):
