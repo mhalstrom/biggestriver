@@ -312,6 +312,9 @@ def build_parser():
     x.add_argument("--now", action="store_true", help="do not wait for the batch window")
     x = nts.add_parser("test", help="send a test message on one channel"); x.add_argument("channel")
     nts.add_parser("status", help="per channel: configured, pending, last send, last error")
+    x = nts.add_parser("setup", help="set up a channel (ntfy: makes a secret topic and prints the phone steps)")
+    x.add_argument("channel", choices=["ntfy"]); x.add_argument("--url", help="ntfy server (default https://ntfy.sh)")
+    x.add_argument("--token", help="access token for a protected or self-hosted ntfy server")
     x = sub.add_parser("needs-you", help="what waits on a person: ready human items, questions and alerts to people")
     x.add_argument("--human", help="only this person's (and those for anyone)"); x.add_argument("--all", action="store_true", help="closed ones too")
     x = sub.add_parser("status", help="overview: every project's counts, recent completions, who is working, open slots")
@@ -583,6 +586,8 @@ def dispatch(conn, a, actor):
             return notify.test(conn, a.channel)
         if a.ncmd == "status":
             return notify.status(conn)
+        if a.ncmd == "setup":
+            return notify.setup_ntfy(conn, a.url, a.token, actor)
         if a.once or a.now:
             return {"results": notify.run(conn, now_=a.now)}
         import threading
@@ -657,9 +662,9 @@ def dispatch(conn, a, actor):
     if c == "config":
         if a.ccmd == "get":
             if a.key:
-                return {"key": a.key, "value": core.setting(
+                return {"key": a.key, "value": core.mask(a.key, core.setting(
                     conn, a.key, item_id=a.item, agent=a.agent,
-                    project_id=core._project(conn, a.project)["id"] if a.project else None)}
+                    project_id=core._project(conn, a.project)["id"] if a.project else None))}
             return core.config_list(conn)
         if a.ccmd == "set":
             return core.config_set(conn, a.key, a.value, a.project, a.item, a.agent, actor)
@@ -892,6 +897,9 @@ def render(a, res):
     if c == "status":
         return render_status(res)
     if c == "notify":
+        if "subscribe" in res:
+            print("\n".join(res["subscribe"]))
+            return
         if "results" in res:
             if not res["results"]:
                 print("(nothing to send)")
@@ -990,7 +998,7 @@ def render(a, res):
             for o in res["overrides"]:
                 print(f"{o['key']} = {o['value']} ({o['scope']})")
         else:
-            print(json.dumps(res))
+            print(json.dumps(res, ensure_ascii=False))
         return
     if c == "register" or c == "note":
         print(f"{res['name']} ({res['kind']}) registered. Set RIVER_AGENT={res['name']} in your shell.")

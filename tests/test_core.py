@@ -834,5 +834,49 @@ class Dispatch(Base):
             core.config_set(self.c, "notify_interval", "often")
 
 
+class Ntfy(Base):
+    def test_setup_masks_and_posts(self):
+        from unittest import mock
+        from river import notify
+        out = notify.setup_ntfy(self.c)
+        topic = core.setting(self.c, "ntfy_topic")
+        self.assertTrue(topic.startswith("river-") and len(topic) > 12)
+        self.assertIn(topic, "\n".join(out["subscribe"]))
+        self.assertIn("ntfy", core._channels(core.setting(self.c, "notify_channels")))
+        listed = [o for o in core.config_list(self.c)["overrides"] if o["key"] == "ntfy_topic"]
+        self.assertNotIn(topic, listed[0]["value"])
+        self.assertNotIn(topic, " ".join(e["change"] for e in core.recent_events(self.c)))
+        core.config_set(self.c, "ntfy_token", "tk_secret_123")
+        seen = []
+
+        class Resp:
+            status = 200
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        def fake(req, timeout):
+            seen.append(req)
+            return Resp()
+
+        with mock.patch("urllib.request.urlopen", fake):
+            notify.ADAPTERS["ntfy"](self.c)("Überweisung fällig", "body ✓", "http://127.0.0.1:8765/#item-3")
+        (req,) = seen
+        self.assertEqual(req.full_url, f"https://ntfy.sh/{topic}")
+        self.assertEqual(req.get_method(), "POST")
+        self.assertEqual(req.data, "body ✓".encode())
+        self.assertTrue(req.get_header("Title").startswith("=?UTF-8?B?"))
+        self.assertEqual(req.get_header("Click"), "http://127.0.0.1:8765/#item-3")
+        self.assertEqual(req.get_header("Authorization"), "Bearer tk_secret_123")
+
+    def test_no_topic_and_bad_values(self):
+        from river import notify
+        with self.assertRaises(RiverError):
+            notify.ADAPTERS["ntfy"](self.c)
+        with self.assertRaises(RiverError):
+            core.config_set(self.c, "ntfy_topic", "has space")
+        with self.assertRaises(RiverError):
+            core.config_set(self.c, "ntfy_url", "ntfy.sh")
+
+
 if __name__ == "__main__":
     unittest.main()

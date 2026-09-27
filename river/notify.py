@@ -36,6 +36,64 @@ def _log_channel(conn):
 register_channel("log", _log_channel)
 
 
+def _header(text):
+    """HTTP headers are Latin-1; ntfy reads RFC 2047 for anything else."""
+    try:
+        text.encode("ascii")
+        return text
+    except UnicodeEncodeError:
+        import base64
+        return "=?UTF-8?B?" + base64.b64encode(text.encode()).decode() + "?="
+
+
+def _ntfy_channel(conn):
+    """POST to <ntfy_url>/<ntfy_topic>. The topic is the secret: keep it out of logs and repositories."""
+    import urllib.request
+    base = core.setting(conn, "ntfy_url").rstrip("/")
+    topic = core.setting(conn, "ntfy_topic")
+    token = core.setting(conn, "ntfy_token")
+    if not topic:
+        raise RiverError("ntfy has no topic; run: river notify setup ntfy")
+
+    def send(title, body, url):
+        headers = {"Title": _header(title), "Tags": "bell", "Content-Type": "text/plain; charset=utf-8"}
+        if url:
+            headers["Click"] = url
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        req = urllib.request.Request(f"{base}/{topic}", data=body.encode(), headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=10) as r:
+            if r.status >= 300:
+                raise OSError(f"ntfy answered {r.status}")
+    return send
+
+
+register_channel("ntfy", _ntfy_channel)
+
+
+def setup_ntfy(conn, url=None, token=None, actor=None):
+    """Make a random topic, store it, add ntfy to notify_channels, and say how to subscribe on the phone."""
+    import secrets
+    topic = "river-" + secrets.token_urlsafe(18).replace("_", "").replace("-", "")[:22]
+    if url:
+        core.config_set(conn, "ntfy_url", url, actor=actor)
+    if token:
+        core.config_set(conn, "ntfy_token", token, actor=actor)
+    core.config_set(conn, "ntfy_topic", topic, actor=actor)
+    chans = core._channels(core.setting(conn, "notify_channels"))
+    if "ntfy" not in chans:
+        core.config_set(conn, "notify_channels", ",".join(chans + ["ntfy"]), actor=actor)
+    server = core.setting(conn, "ntfy_url")
+    return {"subscribe": [
+        "ntfy is set up. On the phone:",
+        "  1. Install the ntfy app (App Store or Google Play).",
+        f"  2. Subscribe to topic {topic}" + ("" if server == "https://ntfy.sh" else f" on server {server}") + ".",
+        "     Keep the topic secret: anyone who knows it can read these notifications.",
+        "  3. Test it: river notify test ntfy",
+        "River shows only the end of the topic from now on (river config get ntfy_topic).",
+    ]}
+
+
 def page_url(conn, item_id=None):
     base = f"http://127.0.0.1:{SERVE_PORT['port'] or core.setting(conn, 'serve_port')}/"
     return base + (f"#item-{item_id}" if item_id else "")

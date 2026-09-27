@@ -43,6 +43,9 @@ DEFAULT_SETTINGS = {
     "notify_channels": "",
     "notify_interval": "30s",
     "notify_batch_window": "60s",
+    "ntfy_url": "https://ntfy.sh",
+    "ntfy_topic": "",
+    "ntfy_token": "",
 }
 
 SCHEMA = """
@@ -323,14 +326,18 @@ def config_set(conn, key, value, project=None, item=None, agent=None, actor=None
             raise RiverError(f"{key} takes a whole number")
     elif key == "default_prerequisite_mode" and value not in ("keep", "release"):
         raise RiverError("default_prerequisite_mode is keep or release")
+    elif key == "ntfy_url" and not re.match(r"^https?://[^\s/]+", value):
+        raise RiverError("ntfy_url is the server address, for example https://ntfy.sh")
+    elif key == "ntfy_topic" and value and not re.match(r"^[A-Za-z0-9_-]{1,64}$", value):
+        raise RiverError("ntfy_topic uses letters, digits, '-' and '_' (up to 64); river notify setup ntfy makes one")
     elif key == "notify_channels" and not all(re.match(r"^[a-z0-9_-]+$", c) for c in _channels(value)):
         raise RiverError("notify_channels is a comma list of channel names, for example: mac,ntfy (empty sends nothing)")
     sc = _scope(conn, project, item, agent)
     with tx(conn):
         conn.execute("INSERT INTO settings(scope,key,value) VALUES (?,?,?) "
                      "ON CONFLICT(scope,key) DO UPDATE SET value=excluded.value", (sc, key, value))
-        _event(conn, None, actor, f"setting {sc} {key}={value}")
-    return {"scope": sc, "key": key, "value": value}
+        _event(conn, None, actor, f"setting {sc} {key}={mask(key, value)}")
+    return {"scope": sc, "key": key, "value": mask(key, value)}
 
 
 def config_unset(conn, key, project=None, item=None, agent=None, actor=None):
@@ -341,8 +348,20 @@ def config_unset(conn, key, project=None, item=None, agent=None, actor=None):
     return {"scope": sc, "key": key}
 
 
+# Anyone who knows these can read or send the notifications; config output shows only their end.
+SECRET_SETTINGS = ("ntfy_topic", "ntfy_token")
+
+
+def mask(key, value):
+    if key in SECRET_SETTINGS and value:
+        return "…" + value[-4:] if len(value) > 8 else "…"
+    return value
+
+
 def config_list(conn):
     rows = [dict(r) for r in conn.execute("SELECT scope,key,value FROM settings ORDER BY scope,key")]
+    for r in rows:
+        r["value"] = mask(r["key"], r["value"])
     return {"defaults": DEFAULT_SETTINGS, "overrides": rows}
 
 
