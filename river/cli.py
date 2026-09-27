@@ -122,6 +122,10 @@ def _context_lines(a, indent="  "):
     return out
 
 
+def _cut(text, n=70):
+    return text if len(text) <= n else text[:n - 1].rstrip() + "…"
+
+
 def _print_show(a):
     print(_fmt_item(a))
     if a["notes"]:
@@ -278,6 +282,8 @@ def build_parser():
     x.add_argument("--project"); x.add_argument("--status"); x.add_argument("--all", action="store_true")
 
     x = sub.add_parser("show", help="one item with its links and history"); x.add_argument("id", type=int)
+    x = sub.add_parser("status", help="overview: every project's counts, recent completions, who is working, open slots")
+    x.add_argument("--recent", type=int, default=10, help="how many recent completions (default 10)")
     x = sub.add_parser("log", help="completed work: done items with output, who, and when, by day")
     x.add_argument("--project"); x.add_argument("--since", default="7d", help="how far back (default 7d; all for everything)")
 
@@ -519,6 +525,8 @@ def dispatch(conn, a, actor):
         return core.item_list(conn, a.project, a.status, a.all)
     if c == "show":
         return core.item_show(conn, a.id)
+    if c == "status":
+        return core.status(conn, a.recent)
     if c == "log":
         return core.completed(conn, a.project, None if a.since == "all" else a.since)
     if c == "go":
@@ -732,6 +740,37 @@ def render(a, res):
         return
     if c == "blockers":
         _print_tree(res)
+        return
+    if c == "status":
+        rows = res["projects"]
+        if not rows:
+            print("(no projects: river project add <name>)")
+        else:
+            w = max(4, *(len(p["project"]) for p in rows))
+            print(f"{'project':<{w}}  {'done':>4} {'open':>4} {'ready':>5} {'working':>7} {'human':>5} {'blocked':>7}")
+            for p in rows:
+                print(f"{p['project']:<{w}}  {p['done']:>4} {p['open']:>4} {p['ready']:>5} {p['in_progress']:>7} "
+                      f"{p['human_waiting']:>5} {p['blocked']:>7}" + (f"  [{p['target']}]" if p["target"] else ""))
+        print()
+        print(f"Recently done ({len(res['recent'])}):" if res["recent"] else "Recently done: nothing yet")
+        for it in res["recent"]:
+            by = f" by {it['by_agent']}" if it["by_agent"] not in (None, "?") else ""
+            print(f"  {it['closed_at'][:16].replace('T', ' ')}  #{it['id']:<4} [{it['project']}] {_cut(it['title'])}{by}")
+        print()
+        print("Working now:" if res["agents"] else "Working now: nobody registered")
+        for ag in res["agents"]:
+            holds = ", ".join(f"#{h['id']} {_cut(h['title'], 60)}" for h in ag["holds"]) or "nothing"
+            owns = f"; owns {', '.join(ag['owns'])}" if ag["owns"] else ""
+            print(f"  {ag['name']} ({ag['kind']}, {ag['state']}): {holds}{owns}")
+        if res["human_waiting"]:
+            print()
+            print("Waiting on a human:")
+            for h in res["human_waiting"]:
+                print(f"  #{h['id']:<4} [{h['project']}] {_cut(h['title'])}")
+        print()
+        print(f"Open slots: {res['spare_slots']}   sessions with nothing to do: {res['excess_sessions']}")
+        for adv in res["advice"]:
+            print(" -", adv["text"])
         return
     if c == "log":
         window = f"last {res['since']}" if res["since"] else "all time"

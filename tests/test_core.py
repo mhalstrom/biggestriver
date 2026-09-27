@@ -553,5 +553,25 @@ class Ownership(Base):
         self.assertIsNone(core.target_show(self.c, "web")["owner"])
 
 
+class Status(Base):
+    def test_status_counts_and_recent(self):
+        core.project_add(self.c, "a")
+        core.register(self.c, "ag")
+        x, y = self.add("a", "x"), self.add("a", "y")
+        h = self.add("a", "sign", doer="human")
+        w = self.add("a", "later", after=[y])
+        core.claim(self.c, x, "ag")
+        core.done(self.c, x, "ok", "ag")
+        core.claim(self.c, y, "ag")
+        st = core.status(self.c)
+        row = st["projects"][0]
+        self.assertEqual({k: row[k] for k in ("done", "open", "ready", "in_progress", "human_waiting", "blocked")},
+                         {"done": 1, "open": 3, "ready": 1, "in_progress": 1, "human_waiting": 1, "blocked": 1})
+        self.assertEqual([r["id"] for r in st["recent"]], [x])
+        self.assertEqual([h_["id"] for h_ in st["human_waiting"]], [h])
+        self.assertEqual([a["holds"][0]["id"] for a in st["agents"] if a["name"] == "ag"], [y])
+        self.assertNotEqual(w, h)
+
+
 if __name__ == "__main__":
     unittest.main()

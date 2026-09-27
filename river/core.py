@@ -1479,6 +1479,39 @@ def completed(conn, project=None, since="7d"):
             "progress": progress}
 
 
+def status(conn, recent=10):
+    """One overview: every project's counts, the latest completions, who is working, and open slots."""
+    ann = annotate(conn)
+    projects = []
+    for p in project_list(conn):
+        mine = [a for a in ann.values() if a["project"] == p["name"]]
+        projects.append({
+            "project": p["name"], "rank": p["rank"], "target": p.get("target"),
+            "done": sum(a["status"] == "done" for a in mine),
+            "open": sum(a["status"] in OPEN_STATES for a in mine),
+            "ready": sum(a["ready"] for a in mine),
+            "in_progress": sum(a["status"] in ("in_progress", "held") for a in mine),
+            "human_waiting": sum(a["ready"] and a["doer"] == "human" for a in mine),
+            "blocked": sum(a["status"] == "open" and not a["ready"] for a in mine),
+        })
+    agents = [agent_status(conn, r["name"]) for r in conn.execute("SELECT name FROM agents ORDER BY name")]
+    cap = capacity(conn, ann)
+    return {
+        "now": iso(now()),
+        "projects": projects,
+        "recent": completed(conn, since=None)["items"][:recent],
+        "agents": [{"name": a["name"], "kind": a["kind"], "state": a["state"], "note": a["note"],
+                    "holds": a["holds"], "owns": [o["name"] for o in a["owns"]]}
+                   for a in agents if a["state"] != "gone"],
+        "human_waiting": [{"id": a["id"], "title": a["title"], "project": a["project"]}
+                          for a in sorted(ann.values(), key=lambda a: a["sort_key"])
+                          if a["ready"] and a["doer"] == "human" and not a["project_archived"]],
+        "spare_slots": cap["spare_slots"],
+        "excess_sessions": cap["excess_sessions"],
+        "advice": cap["advice"],
+    }
+
+
 def recent_events(conn, limit=40):
     return [dict(r) for r in conn.execute(
         "SELECT e.at, e.actor, e.change, e.item_id, i.title FROM events e LEFT JOIN items i ON i.id=e.item_id "
