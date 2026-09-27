@@ -7,6 +7,10 @@ unblocker, planner, or idle), claims an item, and prints a briefing that ends
 with the command to run when the item is done. The web page shows who holds
 what and how many more sessions the ready work could use.
 
+![The board: parallel work, next up, projects, and agents](site/img/board-tour.gif)
+
+![A river go briefing: role, item, context, rules, and the command to run when done](site/img/go-briefing.png)
+
 A small work queue for people and AI agent sessions that work on several
 projects at the same time.
 
