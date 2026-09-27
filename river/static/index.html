@@ -476,6 +476,9 @@ async function openDrawer(id) {
     <div class="sec"><h4>Details</h4><div class="form">
       <input id="dTitle" value="${esc(it.title)}">
       <textarea id="dNotes" rows="3" placeholder="Notes">${esc(it.notes)}</textarea>
+      <label>Context<textarea id="dContext" rows="2" placeholder="what a new agent must know to start">${esc(it.context)}</textarea></label>
+      <label>Touches<input id="dTouches" placeholder="files it changes, comma separated" value="${esc((it.touches || []).join(", "))}"></label>
+      <label>Check<input id="dCheck" placeholder="command that shows it works" value="${esc(it.check)}"></label>
       <div class="two">
         <label>Priority (own)<select id="dPrio">${[0,1,2,3,4].map(p => `<option ${p === it.priority ? "selected" : ""}>${p}</option>`).join("")}</select></label>
         <label>Who can do it<select id="dDoer">${["any","ai","human"].map(x => `<option value="${x}" ${x === it.doer ? "selected" : ""}>${x === "any" ? "anyone" : x === "ai" ? "agent" : "human"}</option>`).join("")}</select></label>
@@ -511,7 +514,7 @@ async function drawerAction(what) {
     if (what === "block") { const r = $("#dBlock").value.trim(); if (r) await act("block", { id, reason: r }); }
     if (what === "dep") { const on = $("#dDep").value.split(/[\s,]+/).filter(Boolean).map(Number); if (on.length) await act("dep_add", { id, on }); }
     if (what === "save") {
-      await act("item_edit", { id, title: $("#dTitle").value, notes: $("#dNotes").value, doer: $("#dDoer").value, project: $("#dProject").value !== it.project ? $("#dProject").value : undefined });
+      await act("item_edit", { id, title: $("#dTitle").value, notes: $("#dNotes").value, context: $("#dContext").value, touches: $("#dTouches").value, check: $("#dCheck").value, doer: $("#dDoer").value, project: $("#dProject").value !== it.project ? $("#dProject").value : undefined });
       if (+$("#dPrio").value !== it.priority) await act("prio", { id, priority: +$("#dPrio").value });
       toast("Saved");
     }

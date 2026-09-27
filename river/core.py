@@ -74,6 +74,9 @@ CREATE TABLE IF NOT EXISTS items (
   claimed_at        TEXT,
   lease_expires_at  TEXT,
   output            TEXT NOT NULL DEFAULT '',
+  context           TEXT NOT NULL DEFAULT '',
+  touches           TEXT NOT NULL DEFAULT '',
+  "check"           TEXT NOT NULL DEFAULT '',
   created_at        TEXT NOT NULL,
   closed_at         TEXT
 );
@@ -190,6 +193,10 @@ def _migrate(conn):
         conn.execute("ALTER TABLE projects ADD COLUMN path TEXT")
     if "target" not in cols:
         conn.execute("ALTER TABLE projects ADD COLUMN target TEXT")
+    icols = {r["name"] for r in conn.execute("PRAGMA table_info(items)")}
+    for col in ("context", "touches", "check"):
+        if col not in icols:
+            conn.execute(f"ALTER TABLE items ADD COLUMN \"{col}\" TEXT NOT NULL DEFAULT ''")
 
 
 class tx:
@@ -462,7 +469,24 @@ def _item(conn, item_id):
     return r
 
 
-def item_add(conn, project, title, priority=2, notes="", doer="any", after=(), actor=None):
+def _touches(value):
+    """Files an item changes, as one path per line; accepts a list or a comma or newline separated string."""
+    if value is None:
+        return None
+    parts = value if isinstance(value, (list, tuple)) else re.split(r"[,\n]", value)
+    seen = []
+    for x in (str(v).strip() for v in parts):
+        if x and x not in seen:
+            seen.append(x)
+    return "\n".join(seen)
+
+
+def touches_list(text):
+    return [x for x in (text or "").split("\n") if x]
+
+
+def item_add(conn, project, title, priority=2, notes="", doer="any", after=(), actor=None,
+             context="", touches=None, check=""):
     if doer not in DOERS:
         raise RiverError(f"doer is one of {', '.join(DOERS)}")
     if not (0 <= int(priority) <= 4):
@@ -471,8 +495,10 @@ def item_add(conn, project, title, priority=2, notes="", doer="any", after=(), a
         p = _project(conn, project)
         top = conn.execute("SELECT COALESCE(MAX(rank),0) m FROM items WHERE project_id=?", (p["id"],)).fetchone()["m"]
         cur = conn.execute(
-            "INSERT INTO items(project_id,title,notes,priority,rank,doer,created_at) VALUES (?,?,?,?,?,?,?)",
-            (p["id"], title, notes, int(priority), top + 1, doer, iso(now())))
+            'INSERT INTO items(project_id,title,notes,priority,rank,doer,context,touches,"check",created_at) '
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (p["id"], title, notes, int(priority), top + 1, doer, context or "", _touches(touches) or "",
+             check or "", iso(now())))
         iid = cur.lastrowid
         _event(conn, iid, actor, f"added to {project} at P{priority}")
         for b in after:
@@ -480,7 +506,8 @@ def item_add(conn, project, title, priority=2, notes="", doer="any", after=(), a
     return item_show(conn, iid)
 
 
-def item_edit(conn, item_id, title=None, notes=None, doer=None, project=None, actor=None):
+def item_edit(conn, item_id, title=None, notes=None, doer=None, project=None, actor=None,
+              context=None, touches=None, check=None):
     with tx(conn):
         it = _item(conn, item_id)
         if title is not None:
@@ -498,6 +525,10 @@ def item_edit(conn, item_id, title=None, notes=None, doer=None, project=None, ac
             p = _project(conn, project)
             conn.execute("UPDATE items SET project_id=? WHERE id=?", (p["id"], it["id"]))
             _event(conn, it["id"], actor, f"moved to project {project}")
+        for col, val in (("context", context), ("touches", _touches(touches)), ("check", check)):
+            if val is not None and val != it[col]:
+                conn.execute(f'UPDATE items SET "{col}"=? WHERE id=?', (val, it["id"]))
+                _event(conn, it["id"], actor, f"{col} changed")
     return item_show(conn, item_id)
 
 
@@ -647,6 +678,7 @@ def annotate(conn):
         ready = it["status"] == "open" and not open_blockers and not it["blocked_reason"]
         a = dict(it)
         a.update(
+            touches=touches_list(it["touches"]),
             project=p["name"],
             project_rank=p["rank"],
             project_archived=bool(p["archived"]),

@@ -26,11 +26,12 @@ helps. Agents read `river project list` to pick an area.
 
 ```
 river add <project> "<title>" [-p 0-4] [--doer any|ai|human] [--after <id> ...] [--notes "..."]
+          [--context "..."] [--touches <file> ...] [--check "<command>"]
 river dep <id> --on <id> ...        # <id> waits on the others
 river undep <id> --on <id> ...
 river prio <id> <0-4>               # 0 is most important
 river move <id> --before|--after <id>   # manual order inside a project
-river edit <id> [--title] [--notes] [--doer] [--project]
+river edit <id> [--title] [--notes] [--doer] [--project] [--context] [--touches ...] [--check]
 river blocked <id> --reason "..." / river unblock <id>
 river drop <id> / river reopen <id>
 ```
@@ -54,9 +55,10 @@ Stripe activation" P0); its prerequisites inherit it. Do not raise every step.
 ## Writing good items
 
 - One outcome per item that one agent or person can finish and check.
-- Put the facts an agent needs in `--notes`: files and line ranges, commands,
-  decisions already made, and how to know it is done. Another agent should be
-  able to start without searching.
+- Give an agent what it needs to start without searching. `--context`: why the
+  item exists, where to look, decisions already made. `--touches`: the files
+  it changes. `--check`: the command that shows it works. `river next` and
+  `river go` print these three in one block. Use `--notes` for anything else.
 - Mark who can do it: `--doer human` for account, legal, and payment steps;
   `--doer ai` for code and text work; `any` otherwise.
 - Record every "needs first" as a dependency. The tool refuses loops.

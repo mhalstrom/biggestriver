@@ -385,5 +385,30 @@ class Log(Base):
             core.completed(self.c, since="soon")
 
 
+class Context(Base):
+    def test_context_touches_check(self):
+        core.project_add(self.c, "a")
+        i = core.item_add(self.c, "a", "x", context="why", touches=["b.py", "a.py", "b.py", " "], check="make test")
+        self.assertEqual((i["context"], i["touches"], i["check"]), ("why", ["b.py", "a.py"], "make test"))
+        core.item_edit(self.c, i["id"], touches="c.py, d.py")
+        self.assertEqual(core.item_show(self.c, i["id"])["touches"], ["c.py", "d.py"])
+        core.item_edit(self.c, i["id"], touches=[], check="")
+        got = core.item_show(self.c, i["id"])
+        self.assertEqual((got["touches"], got["check"], got["context"]), ([], "", "why"))
+        self.assertEqual(core.next_item(self.c)[0]["context"], "why")
+
+    def test_old_database_gains_context_columns(self):
+        self.c.close()
+        import sqlite3
+        raw = sqlite3.connect(self.path)
+        for col in ("context", "touches", "check"):
+            raw.execute(f'ALTER TABLE items DROP COLUMN "{col}"')
+        raw.commit()
+        raw.close()
+        self.c = core.connect(self.path)
+        cols = {r["name"] for r in self.c.execute("PRAGMA table_info(items)")}
+        self.assertTrue({"context", "touches", "check"} <= cols)
+
+
 if __name__ == "__main__":
     unittest.main()

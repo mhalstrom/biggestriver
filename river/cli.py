@@ -103,10 +103,26 @@ def _fmt_item(a, show_reason=True):
     return line
 
 
+def _context_lines(a, indent="  "):
+    """What a new agent needs to start: why and where (context), the files (touches), how to know it works (check)."""
+    out = []
+    if a.get("context"):
+        first, *rest = a["context"].splitlines() or [""]
+        out.append(f"{indent}context: {first}")
+        out += [f"{indent}         {line}" for line in rest]
+    if a.get("touches"):
+        out.append(f"{indent}touches: {', '.join(a['touches'])}")
+    if a.get("check"):
+        out.append(f"{indent}check:   {a['check']}")
+    return out
+
+
 def _print_show(a):
     print(_fmt_item(a))
     if a["notes"]:
         print("  notes:", a["notes"])
+    for line in _context_lines(a):
+        print(line)
     if a["waits_on_detail"]:
         print("  waits on:", ", ".join(f"#{d['id']} {d['title']} ({d['status']})" for d in a["waits_on_detail"]))
     if a["unblocks_detail"]:
@@ -229,10 +245,15 @@ def build_parser():
     x.add_argument("--after", type=int, nargs="*", default=[], help="items this one waits on")
     x.add_argument("--notes", default="")
     x.add_argument("--doer", default="any", choices=core.DOERS, help="who can do it (default any)")
+    x.add_argument("--context", default="", help="what a new agent must know to start: why, where, decisions made")
+    x.add_argument("--touches", nargs="*", default=[], help="files or directories it changes")
+    x.add_argument("--check", default="", help="command that shows it works (tests, a build)")
 
     x = sub.add_parser("edit", help="change title, notes, doer, or project")
     x.add_argument("id", type=int); x.add_argument("--title"); x.add_argument("--notes")
     x.add_argument("--doer", choices=core.DOERS); x.add_argument("--project")
+    x.add_argument("--context"); x.add_argument("--touches", nargs="*", help="replaces the list; give none to clear it")
+    x.add_argument("--check")
 
     x = sub.add_parser("list", help="list items (open by default)")
     x.add_argument("--project"); x.add_argument("--status"); x.add_argument("--all", action="store_true")
@@ -461,9 +482,10 @@ def dispatch(conn, a, actor):
             return core.target_show(conn, a.name)
         return core.target_list(conn)
     if c == "add":
-        return core.item_add(conn, a.project, a.title, a.priority, a.notes, a.doer, a.after, actor)
+        return core.item_add(conn, a.project, a.title, a.priority, a.notes, a.doer, a.after, actor,
+                             a.context, a.touches, a.check)
     if c == "edit":
-        return core.item_edit(conn, a.id, a.title, a.notes, a.doer, a.project, actor)
+        return core.item_edit(conn, a.id, a.title, a.notes, a.doer, a.project, actor, a.context, a.touches, a.check)
     if c == "list":
         return core.item_list(conn, a.project, a.status, a.all)
     if c == "show":
@@ -553,6 +575,7 @@ def render_go(b):
         out.append(f"YOUR ITEM #{it['id']}: {it['title']}")
         if it["notes"]:
             out.append(f"  notes: {it['notes']}")
+        out += _context_lines(it)
         if it["waits_on_detail"]:
             out.append("  waited on (all done): " + ", ".join(f"#{d['id']} {d['title']}" for d in it["waits_on_detail"]))
         if it["unblocks_detail"]:
@@ -671,6 +694,8 @@ def render(a, res):
         else:
             for it in res:
                 print(_fmt_item(it))
+                for line in _context_lines(it, "       "):
+                    print(line)
         return
     if c == "blockers":
         _print_tree(res)
