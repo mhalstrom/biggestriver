@@ -949,5 +949,22 @@ class Email(Base):
             notify.register_channel("email", notify._email_channel)
 
 
+class AddingWork(Base):
+    def test_found_during_links_and_project_inference(self):
+        core.project_add(self.c, "a", path=self.dir.name)
+        core.project_add(self.c, "b")
+        src = self.add("b", "work")
+        self.assertEqual(core.project_for_add(self.c, "/", related=src), "b")
+        self.assertEqual(core.project_for_add(self.c, self.dir.name), "a")
+        with self.assertRaises(RiverError):
+            core.project_for_add(self.c, "/")
+        found = core.item_add(self.c, "b", "odd bug", found_during=src, actor="t")
+        self.assertEqual(found["found_during"], src)
+        self.assertEqual(found["waits_on"], [])
+        self.assertEqual([x["id"] for x in core.item_show(self.c, src)["found_here"]], [found["id"]])
+        with self.assertRaises(RiverError):
+            core.item_add(self.c, "b", "x", found_during=999)
+
+
 if __name__ == "__main__":
     unittest.main()

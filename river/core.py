@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS items (
   reserved_for      TEXT,
   hold_expires_at   TEXT,
   replan            INTEGER NOT NULL DEFAULT 0,
+  found_during      INTEGER REFERENCES items(id),
   created_at        TEXT NOT NULL,
   closed_at         TEXT
 );
@@ -254,6 +255,8 @@ def _migrate(conn):
         conn.execute("ALTER TABLE items ADD COLUMN kind TEXT NOT NULL DEFAULT 'work'")
     if "target" not in icols:
         conn.execute("ALTER TABLE items ADD COLUMN target TEXT")
+    if "found_during" not in icols:
+        conn.execute("ALTER TABLE items ADD COLUMN found_during INTEGER REFERENCES items(id)")
     if "reserved_for" not in icols:
         conn.execute("ALTER TABLE items ADD COLUMN reserved_for TEXT")
         conn.execute("ALTER TABLE items ADD COLUMN hold_expires_at TEXT")
@@ -624,12 +627,14 @@ def touches_list(text):
 
 
 def item_add(conn, project, title, priority=2, notes="", doer="any", after=(), actor=None,
-             context="", touches=None, check="", blocks=None, mode=None):
+             context="", touches=None, check="", blocks=None, mode=None, found_during=None):
     if doer not in DOERS:
         raise RiverError(f"doer is one of {', '.join(DOERS)}")
     if not (0 <= int(priority) <= 4):
         raise RiverError("priority is 0 (highest) to 4 (lowest)")
     with tx(conn):
+        if found_during is not None:
+            _item(conn, found_during)
         p = _project(conn, project)
         top = conn.execute("SELECT COALESCE(MAX(rank),0) m FROM items WHERE project_id=?", (p["id"],)).fetchone()["m"]
         cur = conn.execute(
@@ -639,6 +644,10 @@ def item_add(conn, project, title, priority=2, notes="", doer="any", after=(), a
              check or "", iso(now())))
         iid = cur.lastrowid
         _event(conn, iid, actor, f"added to {project} at P{priority}")
+        if found_during is not None:
+            conn.execute("UPDATE items SET found_during=? WHERE id=?", (int(found_during), iid))
+            _event(conn, iid, actor, f"found during #{found_during}")
+            _event(conn, int(found_during), actor, f"found work: #{iid} {title}")
         for b in after:
             _dep_add(conn, iid, int(b), actor)
         _sync_conflicts(conn, iid, actor)
@@ -646,6 +655,23 @@ def item_add(conn, project, title, priority=2, notes="", doer="any", after=(), a
             _dep_add(conn, int(blocks), iid, actor)
             _prereq_mode(conn, int(blocks), [iid], actor, mode)
     return item_show(conn, iid)
+
+
+def project_for_add(conn, cwd, related=None):
+    """The project a new item goes to when none is named: the related item's, else the folder's."""
+    if related is not None:
+        return _project_name(conn, _item(conn, related)["project_id"])
+    names = projects_for_dir(conn, cwd)
+    if len(names) == 1:
+        return names[0]
+    if names:
+        raise RiverError(f"this folder belongs to {', '.join(names)}; name one: river add <project> \"<title>\"")
+    raise RiverError("no project named and this folder is not linked to one; "
+                     "use: river add <project> \"<title>\" (or --blocks/--found-during <id>)")
+
+
+def _project_name(conn, pid):
+    return conn.execute("SELECT name FROM projects WHERE id=?", (pid,)).fetchone()["name"]
 
 
 def item_edit(conn, item_id, title=None, notes=None, doer=None, project=None, actor=None,
@@ -1551,6 +1577,8 @@ def item_show(conn, item_id, ann=None):
         r = conn.execute("SELECT owner FROM targets WHERE name=?", (a["target"],)).fetchone()
         a["target_owner"] = r["owner"] if r else None
         a["ships"] = a["waits_on_detail"]
+    a["found_here"] = [{"id": r["id"], "title": r["title"], "status": r["status"]} for r in conn.execute(
+        "SELECT id, title, status FROM items WHERE found_during=? ORDER BY id", (iid,))]
     a["message_count"] = conn.execute("SELECT COUNT(*) FROM messages WHERE item_id=?", (iid,)).fetchone()[0]
     return a
 

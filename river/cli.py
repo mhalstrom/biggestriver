@@ -155,6 +155,10 @@ def _print_show(a):
         print("  held until:", a["hold_expires_at"], "(renewed by your commands; river release ends it)")
     if a.get("output"):
         print("  output:", a["output"])
+    if a.get("found_during"):
+        print(f"  found during: #{a['found_during']}")
+    if a.get("found_here"):
+        print("  found while doing this:", ", ".join(f"#{d['id']} {d['title']} ({d['status']})" for d in a["found_here"]))
     if a.get("message_count"):
         print(f"  messages: {a['message_count']} (river thread --item {a['id']})")
     if a.get("shipped_in"):
@@ -279,8 +283,8 @@ def build_parser():
     x.add_argument("--to", required=True)
     tgs.add_parser("list")
 
-    x = sub.add_parser("add", help="add an item to a project")
-    x.add_argument("project"); x.add_argument("title")
+    x = sub.add_parser("add", help="add an item: river add [project] \"title\" (project from --blocks/--found-during or the folder)")
+    x.add_argument("words", nargs="+", metavar="[project] title")
     x.add_argument("--priority", "-p", type=int, default=2, help="0 highest .. 4 lowest (default 2)")
     x.add_argument("--after", type=int, nargs="*", default=[], help="items this one waits on")
     x.add_argument("--notes", default="")
@@ -289,6 +293,8 @@ def build_parser():
     x.add_argument("--touches", nargs="*", default=[], help="files or directories it changes")
     x.add_argument("--check", default="", help="command that shows it works (tests, a build)")
     x.add_argument("--blocks", type=int, help="item that must wait on this new one (usually the one you hold)")
+    x.add_argument("--found-during", type=int, dest="found_during",
+                   help="the item you were working on when you found this (links them; not a dependency)")
     g = x.add_mutually_exclusive_group()
     g.add_argument("--keep", dest="mode", action="store_const", const="keep",
                    help="with --blocks: keep holding that item and do this one yourself now")
@@ -568,8 +574,15 @@ def dispatch(conn, a, actor):
     if c == "add":
         if a.mode and a.blocks is None:
             raise RiverError("--keep and --release go with --blocks <id>")
-        return core.item_add(conn, a.project, a.title, a.priority, a.notes, a.doer, a.after, actor,
-                             a.context, a.touches, a.check, a.blocks, a.mode)
+        if len(a.words) > 2:
+            raise RiverError("put the title in quotes: river add [project] \"title\"")
+        if len(a.words) == 2:
+            project, title = a.words
+        else:
+            title = a.words[0]
+            project = core.project_for_add(conn, os.getcwd(), a.blocks if a.blocks is not None else a.found_during)
+        return core.item_add(conn, project, title, a.priority, a.notes, a.doer, a.after, actor,
+                             a.context, a.touches, a.check, a.blocks, a.mode, a.found_during)
     if c == "edit":
         return core.item_edit(conn, a.id, a.title, a.notes, a.doer, a.project, actor, a.context, a.touches, a.check)
     if c == "list":
@@ -774,9 +787,9 @@ def render_go(b):
             "",
             "Rules:",
             f"  - Do this item only. Read `{r} show {it['id']}` again if you need the links.",
-            f"  - It needs something first: {r} add <project> \"<title>\" --blocks {it['id']} --keep   (small; you do it now)",
+            f"  - It needs something first: {r} add \"<title>\" --blocks {it['id']} --keep   (small; you do it now)",
             f"    or ... --blocks {it['id']} --release   (large or better for someone else; then run go again).",
-            f"  - You find other work: {r} add <project> \"<title>\" --notes \"found during #{it['id']}\". Do not do it now.",
+            f"  - You find other work: {r} add \"<title>\" --found-during {it['id']}. Do not do it now.",
             f"  - Waiting on something outside the queue: {r} blocked {it['id']} --reason \"<what>\", release, run go again.",
             f"  - The user must do a step: add it with --doer human and tell the user.",
             "",

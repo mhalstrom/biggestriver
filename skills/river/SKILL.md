@@ -49,6 +49,18 @@ A person registers with `--human`.
    (or run `river ship <id>` later). The item joins that target's next
    deploy item, which only the target owner takes.
 
+## Adding work
+
+One command, no ids copied by hand. The project comes from the item you name
+with `--blocks` or `--found-during`, or from the folder you are in; name it
+first only when neither applies (`river add <project> "<title>"`).
+
+- Needs to happen before your item: `river add "<title>" --blocks <your-id> --keep|--release`
+- Found while working, not needed for your item: `river add "<title>" --found-during <your-id>`
+  (linked both ways in `river show`; it does not block anything)
+- Give the next agent a start: `--context "why, where"`, `--touches <files>`,
+  `--check "<command>"`, and `--doer human` for steps only a person can do.
+
 ## When you find other work
 
 - Something this item needs first: `river add <project> "<title>" --blocks <your-id>`
@@ -61,7 +73,7 @@ A person registers with `--human`.
   - `--release` (the default): it is large or better for someone else. Your
     item goes back to the queue, waiting on the new one. Run `river go` again.
   `river keep <id>` holds a released item again; `river release <id>` ends a hold.
-- Something unrelated: `river add <project> "<title>" --notes "found while doing #<id>"`.
+- Something unrelated: `river add "<title>" --found-during <id>`.
   Do not do it inside your current item.
 - Waiting on something outside the queue: `river blocked <id> --reason "<what>"`.
 
