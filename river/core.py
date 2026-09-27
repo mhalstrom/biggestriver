@@ -102,6 +102,11 @@ CREATE TABLE IF NOT EXISTS items (
   hold_expires_at   TEXT,
   replan            INTEGER NOT NULL DEFAULT 0,
   found_during      INTEGER REFERENCES items(id),
+  takeover_by       TEXT,
+  takeover_kind     TEXT,
+  takeover_note     TEXT,
+  takeover_at       TEXT,
+  takeover_seen     INTEGER NOT NULL DEFAULT 0,
   created_at        TEXT NOT NULL,
   closed_at         TEXT
 );
@@ -261,6 +266,10 @@ def _migrate(conn):
     if "reserved_until" not in icols:
         conn.execute("ALTER TABLE items ADD COLUMN reserved_until TEXT")
         conn.execute("ALTER TABLE items ADD COLUMN reserved_by TEXT")
+    if "takeover_by" not in icols:
+        for col, typ in (("takeover_by", "TEXT"), ("takeover_kind", "TEXT"), ("takeover_note", "TEXT"),
+                         ("takeover_at", "TEXT"), ("takeover_seen", "INTEGER NOT NULL DEFAULT 0")):
+            conn.execute(f"ALTER TABLE items ADD COLUMN {col} {typ}")
     if "found_during" not in icols:
         conn.execute("ALTER TABLE items ADD COLUMN found_during INTEGER REFERENCES items(id)")
     if "reserved_for" not in icols:
@@ -1462,6 +1471,9 @@ def _claim_row(conn, item_id, actor):
         raise RiverError(f"refused: {actor} is a planner session; planners change the plan and do not take work. "
                          f"To work instead, run: river --as {actor} go")
     it0 = _item(conn, item_id)
+    if it0["doer"] == "human" and ag["kind"] == "ai":
+        raise RiverError(f"refused: #{item_id} is for a person. If you can do it or work around it, take it over "
+                         f"(the user is told, and can undo it): river takeover {item_id} --note \"<how you will do it>\"")
     if it0["reserved_for"] and it0["reserved_for"] != actor:
         raise RiverError(f"refused: #{item_id} is reserved for {it0['reserved_for']}, who holds the item it unblocks")
     limit = int(setting(conn, "max_leases", agent=actor))
@@ -1542,11 +1554,17 @@ def claim(conn, item_id, actor=None):
     return item_show(conn, item_id)
 
 
-def _close(conn, item_id, status, actor, output=None):
+def _close(conn, item_id, status, actor, output=None, note=None):
     with tx(conn):
         it = _item(conn, item_id)
         if it["status"] in CLOSED_STATES:
             raise RiverError(f"item {item_id} is already {it['status']}")
+        if it["doer"] == "human" and _is_ai(conn, actor):
+            if not (note or "").strip():
+                raise RiverError(f"#{item_id} is for a person; to mark it {status} as an agent, say why the user "
+                                 f"no longer needs to do it: river {'done' if status == 'done' else 'drop'} {item_id} "
+                                 f"--note \"<why>\"   (the user is told, and can undo it)")
+            _record_takeover(conn, it, "done" if status == "done" else "dropped", note, actor)
         if it["assignee"] and actor and it["assignee"] != actor:
             raise RiverError(f"item {item_id} is held by {it['assignee']}; ask them, or release it first")
         conn.execute("UPDATE items SET status=?, closed_at=?, lease_expires_at=NULL, hold_expires_at=NULL, "
@@ -1564,8 +1582,8 @@ def _close(conn, item_id, status, actor, output=None):
     return res
 
 
-def done(conn, item_id, output=None, actor=None, ship_it=False):
-    res = _close(conn, item_id, "done", actor, output)
+def done(conn, item_id, output=None, actor=None, ship_it=False, note=None):
+    res = _close(conn, item_id, "done", actor, output, note)
     if ship_it:
         res["shipped_in"] = ship(conn, item_id, actor)["id"]
     return res
@@ -1619,8 +1637,86 @@ def ship(conn, item_id, actor=None):
     return item_show(conn, dep["id"])
 
 
-def drop(conn, item_id, actor=None):
-    return _close(conn, item_id, "dropped", actor)
+def drop(conn, item_id, actor=None, note=None):
+    return _close(conn, item_id, "dropped", actor, note=note)
+
+
+def _is_ai(conn, actor):
+    r = conn.execute("SELECT kind FROM agents WHERE name=?", (actor,)).fetchone() if actor else None
+    return bool(r) and r["kind"] == "ai"
+
+
+_TAKEOVER_WORDS = {"took over": "took over", "done": "marked done", "dropped": "dropped"}
+
+
+def _record_takeover(conn, it, kind, note, actor):
+    """An agent took a person's item off their list: record it, tell the people, and close their open asks."""
+    t = iso(now())
+    conn.execute("UPDATE items SET takeover_by=?, takeover_kind=?, takeover_note=?, takeover_at=?, takeover_seen=0 "
+                 "WHERE id=?", (actor, kind, note, t, it["id"]))
+    _event(conn, it["id"], actor, f"{_TAKEOVER_WORDS[kind]} a person's item: {note}")
+    humans = [r["name"] for r in conn.execute("SELECT name FROM agents WHERE kind='human' ORDER BY name")]
+    for h in humans:
+        _send(conn, "notice", actor, f"{actor} {_TAKEOVER_WORDS[kind]} #{it['id']} {it['title']} (it was yours): {note}. "
+              f"Undo: river undo-takeover {it['id']}", to=h, item_id=it["id"])
+    if humans:
+        conn.execute(f"UPDATE messages SET state='read', read_at=COALESCE(read_at, ?) WHERE item_id=? "
+                     f"AND kind IN ('question','alert') AND state='open' AND to_agent IN ({','.join('?' * len(humans))})",
+                     [t, it["id"]] + humans)
+
+
+def takeover(conn, item_id, note, actor=None):
+    """An agent does a person's item itself: it becomes an agent item, claimed by the actor, and the people are told."""
+    if not actor:
+        raise RiverError("taking over needs an agent name: set RIVER_AGENT or pass --as <name>")
+    if not (note or "").strip():
+        raise RiverError(f"say how you will do it without the user: river takeover {item_id} --note \"...\"")
+    with tx(conn):
+        _sweep(conn)
+        it = _item(conn, item_id)
+        if it["doer"] != "human":
+            raise RiverError(f"#{item_id} is not a person's item (doer {it['doer']}); claim it: river claim {item_id}")
+        a = annotate(conn)[it["id"]]
+        if not a["ready"]:
+            raise RiverError(f"#{item_id} is not ready ({a['status']}"
+                             + (f", waits on {', '.join('#' + str(b) for b in a['open_blockers'])}" if a["open_blockers"] else "")
+                             + "); take it over when it is")
+        conn.execute("UPDATE items SET doer='ai' WHERE id=?", (it["id"],))
+        _record_takeover(conn, it, "took over", note.strip(), actor)
+        _claim_row(conn, it["id"], actor)
+    return item_show(conn, item_id)
+
+
+def undo_takeover(conn, item_id, actor=None):
+    """Give the item back to the people, open, as it was before an agent took it."""
+    with tx(conn):
+        it = _item(conn, item_id)
+        if not it["takeover_by"]:
+            raise RiverError(f"#{item_id} was not taken over by an agent")
+        conn.execute("UPDATE items SET doer='human', status='open', assignee=NULL, claimed_at=NULL, lease_expires_at=NULL, "
+                     "hold_expires_at=NULL, closed_at=NULL, takeover_by=NULL, takeover_kind=NULL, takeover_note=NULL, "
+                     "takeover_at=NULL, takeover_seen=0 WHERE id=?", (it["id"],))
+        _event(conn, it["id"], actor, f"undo: back to the people (was {_TAKEOVER_WORDS[it['takeover_kind']]} by {it['takeover_by']})")
+        if it["takeover_by"] != actor:
+            _send(conn, "notice", actor or "river", f"{actor or 'someone'} gave #{it['id']} {it['title']} back to the people; "
+                  "stop work on it; it is no longer yours",
+                  to=it["takeover_by"], item_id=it["id"])
+    return item_show(conn, item_id)
+
+
+def takeover_seen(conn, item_id, actor=None):
+    with tx(conn):
+        _item(conn, item_id)
+        conn.execute("UPDATE items SET takeover_seen=1 WHERE id=?", (int(item_id),))
+    return {"id": int(item_id), "seen": True}
+
+
+def takeovers(conn, include_seen=False):
+    sql = ("SELECT i.id, i.title, i.status, i.takeover_by, i.takeover_kind, i.takeover_note, i.takeover_at, p.name project "
+           "FROM items i JOIN projects p ON p.id=i.project_id WHERE i.takeover_by IS NOT NULL")
+    if not include_seen:
+        sql += " AND i.takeover_seen=0"
+    return [dict(r) for r in conn.execute(sql + " ORDER BY i.takeover_at DESC")]
 
 
 def release(conn, item_id, note=None, actor=None):
@@ -2018,6 +2114,7 @@ def state(conn):
         "capacity": capacity(conn, ann),
         "settings": config_list(conn),
         "events": recent_events(conn),
+        "takeovers": takeovers(conn),
         "needs_you": [dict(r) for r in conn.execute(
             "SELECT id, kind, item_id, message_id, human, summary, opened_at FROM needs_you "
             "WHERE closed_at IS NULL ORDER BY id DESC")],

@@ -47,6 +47,8 @@ OPS = {
     "claim": lambda c, a, who: core.claim(c, a["id"], who),
     "push": lambda c, a, who: core.push(c, a["id"], a["to"], a.get("note"), who),
     "push_cancel": lambda c, a, who: core.cancel_push(c, a["id"], who),
+    "undo_takeover": lambda c, a, who: core.undo_takeover(c, a["id"], who),
+    "takeover_seen": lambda c, a, who: core.takeover_seen(c, a["id"], who),
     "accept": lambda c, a, who: core.accept(c, a["id"], who),
     "decline": lambda c, a, who: core.decline(c, a["id"], a.get("note"), who),
     "next_claim": lambda c, a, who: core.next_item(c, a.get("project"), a.get("unblocks"), True, who, 1, a.get("near"),

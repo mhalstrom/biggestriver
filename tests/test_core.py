@@ -1142,5 +1142,44 @@ class NeedsYouPage(Base):
             self.server.OPS["message_read"](self.c, {"msg": 9999}, "mark")
 
 
+class Takeover(Base):
+    def setUp(self):
+        super().setUp()
+        core.project_add(self.c, "a")
+        core.register(self.c, "mark", human=True)
+        core.register(self.c, "ag")
+        self.h = self.add("a", "pick a color", doer="human")
+
+    def test_takeover_clears_the_users_list_with_one_notice_and_undo(self):
+        q = core.send(self.c, "question", "which color?", to="mark", item=self.h, actor="ag")
+        with self.assertRaises(RiverError):
+            core.claim(self.c, self.h, "ag")
+        with self.assertRaises(RiverError):
+            core.takeover(self.c, self.h, " ", "ag")
+        it = core.takeover(self.c, self.h, "brand guide says blue", "ag")
+        self.assertEqual((it["doer"], it["status"], it["assignee"]), ("ai", "in_progress", "ag"))
+        self.assertEqual(core.needs_you(self.c), [])
+        self.assertEqual(core.message_show(self.c, q["id"])["state"], "read")
+        notes = [m for m in core.inbox(self.c, "mark") if m["kind"] == "notice"]
+        self.assertEqual(len(notes), 1)
+        self.assertIn("undo-takeover", notes[0]["body"])
+        self.assertEqual([t["id"] for t in core.state(self.c)["takeovers"]], [self.h])
+        core.undo_takeover(self.c, self.h, "mark")
+        it = core._item(self.c, self.h)
+        self.assertEqual((it["doer"], it["status"], it["assignee"], it["takeover_by"]), ("human", "open", None, None))
+        self.assertEqual(len(core.needs_you(self.c)), 1)
+
+    def test_agent_done_or_drop_needs_a_note(self):
+        with self.assertRaises(RiverError):
+            core.done(self.c, self.h, None, "ag")
+        core.drop(self.c, self.h, "ag", note="not needed on the free tier")
+        self.assertEqual(core.takeovers(self.c)[0]["takeover_kind"], "dropped")
+        core.takeover_seen(self.c, self.h)
+        self.assertEqual(core.takeovers(self.c), [])
+        core.undo_takeover(self.c, self.h, "mark")
+        self.assertEqual(core._item(self.c, self.h)["status"], "open")
+        core.done(self.c, self.h, "did it", "mark")  # a person needs no note
+
+
 if __name__ == "__main__":
     unittest.main()

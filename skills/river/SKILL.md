@@ -99,6 +99,15 @@ river add "Approve the refund policy draft" --doer human --blocks <your-id> \
   The go briefing lists the people by name.
 - Then tell the user in chat too, with the item id.
 
+The other way round: you can do a person's item yourself, or work around it.
+Take it off their list, with the reason; they get one notice and can undo it:
+
+- `river takeover <id> --note "<how you will do it>"`: it becomes your item.
+- `river done <id> --note "<why it is no longer needed>"` or `river drop <id> --note "..."`.
+
+`river claim` refuses a person's item for an agent, so the user is never
+bypassed without a notice.
+
 ## Pushed items
 
 Someone can push an item to you (`river push <id> --to <you> --note "..."`):

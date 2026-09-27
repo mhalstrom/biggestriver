@@ -356,10 +356,15 @@ def build_parser():
     x = sub.add_parser("claim", help="take one ready item by id"); x.add_argument("id", type=int)
     x = sub.add_parser("done", help="finish an item"); x.add_argument("id", type=int); x.add_argument("--output")
     x.add_argument("--ship", action="store_true", help="also ask for it to be deployed (river ship)")
+    x.add_argument("--note", help="why an agent may close a person's item (required then; the user is told)")
     x = sub.add_parser("ship", help="ask for an item to be deployed: it joins its target's next deploy item")
     x.add_argument("id", type=int)
     x = sub.add_parser("release", help="give a claimed item back"); x.add_argument("id", type=int); x.add_argument("--note")
     x = sub.add_parser("drop", help="close an item without doing it"); x.add_argument("id", type=int)
+    x.add_argument("--note", help="why (required when an agent drops a person's item)")
+    x = sub.add_parser("takeover", help="an agent does a person's item itself (the user is told, and can undo)")
+    x.add_argument("id", type=int); x.add_argument("--note", required=True, help="how you will do it without the user")
+    x = sub.add_parser("undo-takeover", help="give a taken-over item back to the people"); x.add_argument("id", type=int)
     x = sub.add_parser("reopen", help="open a closed item again"); x.add_argument("id", type=int)
     x = sub.add_parser("prio", help="set item priority"); x.add_argument("id", type=int); x.add_argument("priority", type=int)
     x = sub.add_parser("move", help="manual order inside a project")
@@ -638,13 +643,17 @@ def dispatch(conn, a, actor):
     if c == "claim":
         return core.claim(conn, a.id, actor)
     if c == "done":
-        return core.done(conn, a.id, a.output, actor, a.ship)
+        return core.done(conn, a.id, a.output, actor, a.ship, a.note)
     if c == "ship":
         return core.ship(conn, a.id, actor)
     if c == "release":
         return core.release(conn, a.id, a.note, actor)
     if c == "drop":
-        return core.drop(conn, a.id, actor)
+        return core.drop(conn, a.id, actor, a.note)
+    if c == "takeover":
+        return core.takeover(conn, a.id, a.note, actor)
+    if c == "undo-takeover":
+        return core.undo_takeover(conn, a.id, actor)
     if c == "reopen":
         return core.reopen(conn, a.id, actor)
     if c == "prio":
@@ -887,7 +896,7 @@ def render_go(b):
         out.append(f"Messages for you: {msg}. Read them before you start.")
     if b.get("human_waiting"):
         out.append("")
-        out.append("Waiting on the user (tell them):")
+        out.append(f"Waiting on the user (tell them; if you can do one or work around it: {r} takeover <id> --note \"how\"):")
         for h in b["human_waiting"]:
             blocks = "; ".join(f"blocks #{d['id']} {d['title']} (P{d['priority']})" for d in h.get("blocks", [])[:2])
             out.append(f"  #{h['id']} {h['title']}" + (f"  ({blocks})" if blocks else ""))

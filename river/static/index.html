@@ -135,7 +135,8 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
 .prog-h .muted { font-variant-numeric: tabular-nums; }
 .bar { height: 8px; border-radius: 4px; background: var(--wait-bg); overflow: hidden; margin-top: 4px; }
 .bar > div { height: 100%; background: var(--ready); }
-#needsYouPanel { border-color: var(--human); }
+#needsYouPanel, #takeoverPanel { border-color: var(--human); }
+#takeoverPanel h2 { color: var(--human); }
 #needsYouPanel h2 { color: var(--human); }
 .ny { padding: 8px 0; border-top: 1px solid var(--line); }
 .ny:first-child { border-top: none; }
@@ -162,6 +163,10 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
 
 <main>
   <section id="tab-board">
+    <div class="panel hidden" id="takeoverPanel">
+      <h2>Agents took these off your list</h2>
+      <div id="takeovers"></div>
+    </div>
     <div class="panel hidden" id="needsYouPanel">
       <h2>Needs you <span class="spacer"></span><button class="btn hidden" id="notifyOn">Turn on browser notifications</button></h2>
       <div id="needsYou"></div>
@@ -371,6 +376,16 @@ function renderAgents() {
       ${a.holds.map(h => `<div class="st">holds <span class="link" data-open="${h.id}">#${h.id} ${esc(h.title)}</span>${h.lease_expires_at ? " · " + left(h.lease_expires_at) + " left" : ""}</div>`).join("") || '<div class="st">holds nothing</div>'}
       ${S.items.filter(i => i.status === "open" && i.reserved_until && i.reserved_for === a.name).map(i => `<div class="st">pushed <span class="link" data-open="${i.id}">#${i.id} ${esc(i.title)}</span> · ${left(i.reserved_until)} left · <span class="link" data-unpush="${i.id}">cancel</span></div>`).join("")}
     </div>`).join("") || `<div class="muted">No agents registered.</div>`;
+}
+
+function renderTakeovers() {
+  const T = S.takeovers || [];
+  $("#takeoverPanel").classList.toggle("hidden", !T.length);
+  const words = { "took over": "took over", "done": "marked done", "dropped": "dropped" };
+  $("#takeovers").innerHTML = T.map(t => `<div class="ny">
+      <div class="ny-h"><b>#${t.id} ${esc(t.title)}</b> <span class="chip c-p">${esc(t.project)}</span><span class="muted" style="font-size:12px">${ago(t.takeover_at)}</span></div>
+      <div class="ny-c"><b>${esc(t.takeover_by)}</b> ${words[t.takeover_kind] || t.takeover_kind} it: ${esc(t.takeover_note || "")}</div>
+      <div class="actions"><button class="btn" data-open="${t.id}">Open</button><button class="btn" data-undo-takeover="${t.id}">Undo: give it back to me</button><button class="btn primary" data-takeover-ok="${t.id}">OK</button></div></div>`).join("");
 }
 
 function renderEvents() {
@@ -621,7 +636,7 @@ async function needsYouAction(t) {
 async function refresh() {
   const r = await fetch("/api/state"); S = await r.json();
   if (S.dev_build) { if (window._build && window._build !== S.dev_build) return location.reload(); window._build = S.dev_build; }
-  renderSelects(); renderCapacity(); renderNext(); renderProjects(); renderAgents(); renderEvents(); renderSettings();
+  renderSelects(); renderCapacity(); renderNext(); renderProjects(); renderAgents(); renderEvents(); renderSettings(); renderTakeovers();
   renderGraph(false); renderLog(false); pollNeedsYou().catch(() => {});
   $("#stamp").textContent = "updated " + new Date().toLocaleTimeString();
   if (openItem != null && $("#drawer").classList.contains("open")) openDrawer(openItem);
@@ -635,6 +650,8 @@ document.addEventListener("click", async (e) => {
   if (t.dataset.do) return drawerAction(t.dataset.do);
   if (t.dataset.ny) return needsYouAction(t);
   if (t.id === "notifyOn") { await Notification.requestPermission(); return renderNeedsYou(); }
+  if (t.dataset.undoTakeover) { await act("undo_takeover", { id: +t.dataset.undoTakeover }).then(() => toast("Back on your list")).catch(() => {}); return; }
+  if (t.dataset.takeoverOk) { await act("takeover_seen", { id: +t.dataset.takeoverOk }).catch(() => {}); return; }
   if (t.dataset.unpush) { await act("push_cancel", { id: +t.dataset.unpush }).then(() => toast("Push cancelled")).catch(() => {}); return; }
   if (t.dataset.undep) { await act("dep_remove", { id: openItem, on: [+t.dataset.undep] }).catch(() => {}); return openDrawer(openItem); }
   if (t.dataset.describe) { const p = S.projects.find(x => x.name === t.dataset.describe); const text = prompt(`What does "${p.name}" cover, and what context helps an agent work on it?`, p.notes || ""); if (text !== null) await act("project_describe", { name: p.name, text }).catch(() => {}); return; }
