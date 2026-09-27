@@ -949,6 +949,44 @@ class Email(Base):
             notify.register_channel("email", notify._email_channel)
 
 
+class Mac(Base):
+    def run_mac(self, notifier, returncode=0):
+        from unittest import mock
+        from river import notify
+        seen = []
+
+        class Done:
+            def __init__(self): self.returncode, self.stderr = returncode, "boom"
+
+        def fake_run(cmd, **kw):
+            seen.append(cmd)
+            return Done()
+
+        with mock.patch("sys.platform", "darwin"), mock.patch("shutil.which", lambda name: notifier), \
+                mock.patch("subprocess.run", fake_run):
+            notify.ADAPTERS["mac"](self.c)('Say "yes"', "#3 sign", "http://127.0.0.1:8765/#item-3")
+        return seen[0]
+
+    def test_osascript_passes_texts_as_arguments(self):
+        cmd = self.run_mac(None)
+        self.assertEqual(cmd[0], "osascript")
+        self.assertEqual(cmd[-3:], ['Say "yes"', "#3 sign", "http://127.0.0.1:8765/#item-3"])
+        self.assertNotIn('Say "yes"', " ".join(cmd[:-3]))
+
+    def test_terminal_notifier_opens_the_page(self):
+        cmd = self.run_mac("/opt/homebrew/bin/terminal-notifier")
+        self.assertEqual(cmd[0], "/opt/homebrew/bin/terminal-notifier")
+        self.assertEqual(cmd[cmd.index("-open") + 1], "http://127.0.0.1:8765/#item-3")
+
+    def test_failure_and_other_platforms(self):
+        from unittest import mock
+        from river import notify
+        with self.assertRaises(OSError):
+            self.run_mac(None, returncode=1)
+        with mock.patch("sys.platform", "linux"), self.assertRaises(RiverError):
+            notify.ADAPTERS["mac"](self.c)
+
+
 class AddingWork(Base):
     def test_found_during_links_and_project_inference(self):
         core.project_add(self.c, "a", path=self.dir.name)
@@ -964,6 +1002,43 @@ class AddingWork(Base):
         self.assertEqual([x["id"] for x in core.item_show(self.c, src)["found_here"]], [found["id"]])
         with self.assertRaises(RiverError):
             core.item_add(self.c, "b", "x", found_during=999)
+
+
+class Deployer(Base):
+    def setUp(self):
+        super().setUp()
+        core.target_add(self.c, "web", "push, then smoke test")
+        core.project_add(self.c, "site", target="web", path=self.dir.name)
+        for n in ("dev", "ops"):
+            core.register(self.c, n)
+        w = self.add("site", "page")
+        core.claim(self.c, w, "dev")
+        core.done(self.c, w, "abc", "dev", ship_it=True)
+        self.work = self.add("site", "other")
+        self.deploy = core.item_show(self.c, w)["unblocks"][0]
+
+    def test_owner_gets_deploy_item_first(self):
+        core.target_own(self.c, "web", "ops")
+        b = core.go(self.c, self.dir.name, "ops")
+        self.assertEqual((b["role"], b["item"]["id"]), ("deployer", self.deploy))
+        self.assertEqual(b["target"]["name"], "web")
+        self.assertEqual([d["title"] for d in b["ships"]], ["page"])
+        again = core.go(self.c, self.dir.name, "ops")
+        self.assertEqual((again["role"], again.get("resumed")), ("deployer", True))
+
+    def test_role_deployer_takes_a_free_target(self):
+        b = core.go(self.c, self.dir.name, "ops", role="deployer")
+        self.assertEqual((b["role"], b["item"]["id"]), ("deployer", self.deploy))
+        self.assertEqual(core.target_show(self.c, "web")["owner"], "ops")
+        # A non-owner gets normal work, never the deploy item.
+        b2 = core.go(self.c, self.dir.name, "dev")
+        self.assertEqual((b2["role"], b2["item"]["id"]), ("worker", self.work))
+
+    def test_role_deployer_refused_when_owned(self):
+        core.target_own(self.c, "web", "dev")
+        b = core.go(self.c, self.dir.name, "ops", role="deployer")
+        self.assertEqual(b["role"], "idle")
+        self.assertIn("owned by dev", b["why"])
 
 
 if __name__ == "__main__":

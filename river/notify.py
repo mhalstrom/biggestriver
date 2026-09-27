@@ -121,6 +121,35 @@ def _email_channel(conn):
 register_channel("email", _email_channel)
 
 
+def _mac_channel(conn):
+    """A macOS banner. terminal-notifier (if on PATH) opens the page on click; osascript is the
+    fallback, and a click on its banner opens Script Editor, so the page link goes in the subtitle."""
+    import shutil
+    import subprocess
+    import sys
+    if sys.platform != "darwin":
+        raise RiverError("the mac channel needs macOS; remove mac from notify_channels on this machine")
+    notifier = shutil.which("terminal-notifier")
+
+    def send(title, body, url):
+        if notifier:
+            cmd = [notifier, "-title", title, "-message", body, "-group", "river"]
+            if url:
+                cmd += ["-open", url]
+        else:
+            # The texts go in as arguments, never into the script, so quotes in a title are harmless.
+            cmd = ["osascript", "-e", "on run argv",
+                   "-e", "display notification (item 2 of argv) with title (item 1 of argv) subtitle (item 3 of argv)",
+                   "-e", "end run", title, body, url or ""]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if r.returncode != 0:
+            raise OSError(f"{Path(cmd[0]).name} exited {r.returncode}: {r.stderr.strip()[:200]}")
+    return send
+
+
+register_channel("mac", _mac_channel)
+
+
 def setup_ntfy(conn, url=None, token=None, actor=None):
     """Make a random topic, store it, add ntfy to notify_channels, and say how to subscribe on the phone."""
     import secrets
