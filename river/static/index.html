@@ -471,6 +471,7 @@ async function drawerAction(what) {
 
 async function refresh() {
   const r = await fetch("/api/state"); S = await r.json();
+  if (S.dev_build) { if (window._build && window._build !== S.dev_build) return location.reload(); window._build = S.dev_build; }
   renderSelects(); renderCapacity(); renderNext(); renderProjects(); renderAgents(); renderEvents(); renderSettings();
   renderGraph(false);
   $("#stamp").textContent = "updated " + new Date().toLocaleTimeString();

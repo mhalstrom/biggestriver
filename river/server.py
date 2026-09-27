@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
+import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -11,6 +15,17 @@ from . import core
 from .core import RiverError
 
 STATIC = Path(__file__).resolve().parent / "static"
+PKG = Path(__file__).resolve().parent
+DEV = {"on": False}
+
+
+def _watched():
+    return sorted(PKG.glob("*.py")) + sorted(STATIC.glob("*"))
+
+
+def _build_id():
+    """Changes whenever a watched file changes; the page reloads itself in dev mode."""
+    return str(max((f.stat().st_mtime_ns for f in _watched()), default=0))
 
 # Operations the page may call. Each maps JSON args to one core function.
 OPS = {
@@ -63,7 +78,10 @@ class Handler(BaseHTTPRequestHandler):
             conn = core.connect()
             try:
                 core.activity(conn, None)
-                return self._send(200, core.state(conn))
+                st = core.state(conn)
+                if DEV["on"]:
+                    st["dev_build"] = _build_id()
+                return self._send(200, st)
             finally:
                 conn.close()
         if path.startswith("/api/item/"):
@@ -105,10 +123,27 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, {"error": f"bad request: {e}"})
 
 
-def serve(port: int, open_browser=False):
+def _restart_on_change(httpd):
+    """Dev mode: when a Python file changes, stop serving and start the process again."""
+    code = {f: f.stat().st_mtime_ns for f in PKG.glob("*.py")}
+    while True:
+        time.sleep(1)
+        now = {f: f.stat().st_mtime_ns for f in PKG.glob("*.py")}
+        if now != code:
+            print("code changed; restarting", flush=True)
+            httpd.shutdown()
+            httpd.server_close()
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+
+
+def serve(port: int, open_browser=False, dev=False):
     httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     url = f"http://127.0.0.1:{port}/"
-    print(f"Biggest River on {url} (database {core.db_path()})", flush=True)
+    DEV["on"] = dev
+    print(f"Biggest River on {url} (database {core.db_path()}){' [dev: restarts on code change]' if dev else ''}",
+          flush=True)
+    if dev:
+        threading.Thread(target=_restart_on_change, args=(httpd,), daemon=True).start()
     if open_browser:
         webbrowser.open(url)
     try:
