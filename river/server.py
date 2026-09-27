@@ -131,8 +131,10 @@ def _restart_on_change(httpd):
         now = {f: f.stat().st_mtime_ns for f in PKG.glob("*.py")}
         if now != code:
             print("code changed; restarting", flush=True)
-            httpd.shutdown()
-            httpd.server_close()
+            # Replace the process in place. Python sockets are not inherited across exec,
+            # so the port is free for the new process. Shutting down first would let the
+            # main thread exit before this line runs.
+            time.sleep(0.3)  # let an editor finish writing
             os.execv(sys.executable, [sys.executable] + sys.argv)
 
 

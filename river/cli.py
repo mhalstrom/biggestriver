@@ -18,7 +18,11 @@ QUICKSTART = """Biggest River: a shared work queue for people and agent sessions
 Items live in projects and can wait on other items. `river next` gives the
 most important ready item in the area you choose; `--claim` takes it.
 
-First time:
+Agent sessions: run `river go` in the project folder. It names the session,
+picks a role (worker, unblocker, planner, idle), claims an item, and prints a
+briefing. Run it again after each item.
+
+By hand:
   river register <your-name> [--human] --note "what you work on"
   export RIVER_AGENT=<your-name>
   river project list                      what each project covers; pick the one you know
@@ -39,11 +43,9 @@ More:
 AGENT_SNIPPET = """## Work queue
 
 This project uses Biggest River (`river`) to track work and who is doing it.
-Before you start work, run `river guide` once and follow it. In short:
-register with `river register <session-name>`, set `RIVER_AGENT`, take work
-with `river next --project <project> --claim`, and finish with
-`river done <id> --output "..."`. Add work you find with `river add`, never
-do it silently.
+When the user says "go" (or asks you to take work from the queue), run
+`river go` in this folder and follow the briefing it prints: it names you,
+gives you a role and an item, and says what to run when you finish.
 """
 
 SETUP = """Setting up agents to use river
@@ -168,7 +170,9 @@ def build_parser():
     x = prs.add_parser("add"); x.add_argument("name"); x.add_argument("--rank", type=int)
     x.add_argument("--description", "--notes", dest="notes", default="",
                    help="what the project covers and what context helps (agents read this to pick an area)")
+    x.add_argument("--path", help="folder this project lives in; river go run there finds it")
     x = prs.add_parser("describe", help="set a project's description"); x.add_argument("name"); x.add_argument("text")
+    x = prs.add_parser("path", help="link a project to a folder (river go uses it)"); x.add_argument("name"); x.add_argument("path", nargs="?")
     x = prs.add_parser("show", help="a project's description, who works on it, and its ready items"); x.add_argument("name")
     x = prs.add_parser("rank"); x.add_argument("name"); x.add_argument("rank", type=int)
     x = prs.add_parser("archive"); x.add_argument("name")
@@ -197,6 +201,10 @@ def build_parser():
     x.add_argument("--mine", action="store_true", help="items linked to what you claimed or finished before, then your projects")
     x.add_argument("--claim", action="store_true", help="take it")
     x.add_argument("--limit", "-n", type=int, default=1)
+
+    x = sub.add_parser("go", help="start or continue an agent session: name, role, item, briefing")
+    x.add_argument("--project", help="project name(s) when this folder is not linked")
+    x.add_argument("--role", choices=core.ROLES, help="ask for a role instead of letting river pick")
 
     x = sub.add_parser("claim", help="take one ready item by id"); x.add_argument("id", type=int)
     x = sub.add_parser("done", help="finish an item"); x.add_argument("id", type=int); x.add_argument("--output")
@@ -275,14 +283,15 @@ def run(argv=None):
         server.serve(port, open_browser=args.open, dev=args.dev)
         return 0
     actor = args.actor
-    core.activity(conn, actor)
+    if args.cmd != "go":
+        core.activity(conn, actor)
     res = dispatch(conn, args, actor)
     if args.json:
         print(json.dumps(res, indent=2, default=str))
     else:
         render(args, res)
     sys.stdout.flush()
-    _footer(conn, actor)
+    _footer(conn, res["agent"] if args.cmd == "go" else actor)
     if not args.quiet and not args.json:
         h = _hint(args, res, actor)
         if h:
@@ -292,6 +301,8 @@ def run(argv=None):
 
 def _hint(a, res, actor):
     c = a.cmd
+    if c == "go":
+        return None
     if c == "register":
         return HINTS["register"].format(name=res["name"])
     if c == "next":
@@ -315,9 +326,11 @@ def dispatch(conn, a, actor):
     c = a.cmd
     if c == "project":
         if a.pcmd == "add":
-            return core.project_add(conn, a.name, a.rank, a.notes, actor)
+            return core.project_add(conn, a.name, a.rank, a.notes, actor, a.path)
         if a.pcmd == "rank":
             return core.project_rank(conn, a.name, a.rank, actor)
+        if a.pcmd == "path":
+            return core.project_path(conn, a.name, a.path, actor)
         if a.pcmd == "describe":
             return core.project_describe(conn, a.name, a.text, actor)
         if a.pcmd == "show":
@@ -333,6 +346,8 @@ def dispatch(conn, a, actor):
         return core.item_list(conn, a.project, a.status, a.all)
     if c == "show":
         return core.item_show(conn, a.id)
+    if c == "go":
+        return core.go(conn, os.getcwd(), actor, a.project, a.role)
     if c == "next":
         return core.next_item(conn, a.project, a.unblocks, a.claim, actor, a.limit, a.near, a.mine)
     if c == "claim":
@@ -386,8 +401,81 @@ def dispatch(conn, a, actor):
     raise RiverError(f"unknown command {c}")
 
 
+def render_go(b):
+    me = b["agent"]
+    r = f"river --as {me}"
+    out = []
+    out.append(f"You are river agent {me}. Role: {b['role'].upper()}. ({b['why']})")
+    if b["new_name"]:
+        out.append(f"Your shell may not keep environment variables, so pass --as {me} on every river command.")
+    for n in b["projects"]:
+        d = b["descriptions"].get(n)
+        out.append(f"Project {n}: {d}" if d else f"Project {n} (no description: {r} project describe {n} \"...\")")
+    out.append("")
+    it = b.get("item")
+    if it:
+        out.append(f"YOUR ITEM #{it['id']}: {it['title']}")
+        if it["notes"]:
+            out.append(f"  notes: {it['notes']}")
+        if it["waits_on_detail"]:
+            out.append("  waited on (all done): " + ", ".join(f"#{d['id']} {d['title']}" for d in it["waits_on_detail"]))
+        if it["unblocks_detail"]:
+            out.append("  unblocks: " + ", ".join(f"#{d['id']} {d['title']}" for d in it["unblocks_detail"]))
+        if it.get("output"):
+            out.append(f"  earlier output: {it['output']}")
+        out += [
+            "",
+            "Rules:",
+            f"  - Do this item only. Read `{r} show {it['id']}` again if you need the links.",
+            f"  - It needs something first: {r} add <project> \"<title>\" --doer ai|human, then {r} dep {it['id']} --on <new-id>;",
+            f"    if you will not do that yourself now: {r} release {it['id']} --note \"<why>\" and run go again.",
+            f"  - You find other work: {r} add <project> \"<title>\" --notes \"found during #{it['id']}\". Do not do it now.",
+            f"  - Waiting on something outside the queue: {r} blocked {it['id']} --reason \"<what>\", release, run go again.",
+            f"  - The user must do a step: add it with --doer human and tell the user.",
+            "",
+            f"When finished:  {r} done {it['id']} --output \"<what changed, commit id>\"",
+            f"Then continue:  {r} go",
+        ]
+    elif b["role"] == "planner":
+        out.append("NO READY WORK. Your job: plan the project into items that agents and people can take.")
+        if b.get("open_items"):
+            out.append("Open items that cannot move:")
+            for o in b["open_items"]:
+                why = f"blocked: {o['blocked_reason']}" if o["blocked_reason"] else (
+                    "waits on " + ",".join(f"#{x}" for x in o["open_blockers"]) if o["open_blockers"] else "held")
+                out.append(f"  #{o['id']} {o['title']}  ({why})")
+        out += [
+            "",
+            "Steps:",
+            "  1. Read the project description and the code or documents it names. Ask the user when the goal is unclear.",
+            f"  2. Add items, one checkable outcome each: {r} add <project> \"<title>\" --doer ai|human --notes \"<files, commands, how to know it is done>\"",
+            f"  3. Link what must come first: {r} dep <id> --on <id> ...   Set importance on the outcome only: {r} prio <id> 0",
+            f"  4. Then run {r} go to take the first item, or stop and let other sessions take them.",
+            f"  (Full planning guide: river guide planner)",
+        ]
+    else:
+        out.append("NOTHING FOR YOU NOW.")
+        for h in b.get("held_by_others", []):
+            out.append(f"  #{h['id']} {h['title']}  (held by {h['assignee']})")
+        out += [
+            "",
+            "Tell the user this session has no work here. Options:",
+            f"  - stop this session (it frees nothing, it holds nothing), or",
+            f"  - work elsewhere: river project list, then {r} go --project <name>, or",
+            f"  - check again later: {r} go",
+        ]
+    if b.get("human_waiting"):
+        out.append("")
+        out.append("Waiting on the user (tell them):")
+        for h in b["human_waiting"]:
+            out.append(f"  #{h['id']} {h['title']}")
+    print("\n".join(out))
+
+
 def render(a, res):
     c = a.cmd
+    if c == "go":
+        return render_go(res)
     if c == "project":
         if isinstance(res, dict) and "ready_count" in res:
             print(f"{res['name']} (rank {res['rank']})")

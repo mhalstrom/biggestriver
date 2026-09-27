@@ -1,9 +1,10 @@
 # Biggest River
 
 **In short:** you put work items into projects and say which items wait on
-which. Each person or agent session registers a name, picks the area it knows,
-and runs `river next --claim` to take the most important item that is ready
-there. When it finishes, it runs `river done`. The web page shows who holds
+which, and link each project to its folder. Open an agent in that folder and
+say "go": it runs `river go`, which names the session, picks a role (worker,
+unblocker, planner, or idle), claims an item, and prints a briefing that ends
+with the command to run when the item is done. The web page shows who holds
 what and how many more sessions the ready work could use.
 
 A small work queue for people and AI agent sessions that work on several
@@ -40,7 +41,8 @@ The database is `data/river.db`; set `RIVER_DB` to use another file.
 river register alex --human --note "owner"       # once per person or agent session
 export RIVER_AGENT=alex                          # or pass --as alex
 
-river project add website
+river project add website --path ~/code/shop --description "Storefront pages in web/; React"
+river go                                         # in ~/code/shop: name, role, item, briefing
 river add website "Build the checkout page" -p 0 --doer ai --after 3 4
 river next                                       # most important ready item overall
 river next --project website --claim             # take one from a project

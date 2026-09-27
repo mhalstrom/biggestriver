@@ -1,6 +1,6 @@
 ---
 name: river
-description: Take, do, and hand back work items from the Biggest River queue (the `river` command). Use when the user or a manager tells you to work from the river queue, when you need the next task in a project, or when you finish, release, or find new work.
+description: Take, do, and hand back work items from the Biggest River queue (the `river` command). Use when the user says "go" in a project that uses river, tells you to work from the queue, or when you finish, release, or find new work.
 ---
 
 # Biggest River: working from the queue
@@ -9,7 +9,14 @@ The queue holds projects, items, and the dependencies between them. You pick
 the area where you already hold context; inside it, `river next` returns the
 most important item that is ready (nothing it waits on is open).
 
-## Identity
+## Fastest start
+
+Run `river go` in the project folder and follow the briefing. It names you,
+picks your role (worker, unblocker, planner, idle), claims an item when there
+is one, and ends with the command to run next. Pass `--as <your-name>` on
+every later command. After `river done`, run `river --as <your-name> go` again.
+
+## Identity (by hand)
 
 Register once, then name yourself on every command:
 

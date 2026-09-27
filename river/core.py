@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS projects (
   name        TEXT NOT NULL UNIQUE,
   rank        INTEGER NOT NULL,
   notes       TEXT NOT NULL DEFAULT '',
+  path        TEXT,
   archived    INTEGER NOT NULL DEFAULT 0,
   created_at  TEXT NOT NULL
 );
@@ -142,7 +143,14 @@ def connect(path: Path | str | None = None) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=10000")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
+
+
+def _migrate(conn):
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(projects)")}
+    if "path" not in cols:
+        conn.execute("ALTER TABLE projects ADD COLUMN path TEXT")
 
 
 class tx:
@@ -248,7 +256,7 @@ def _project(conn, name):
     return r
 
 
-def project_add(conn, name, rank=None, notes="", actor=None):
+def project_add(conn, name, rank=None, notes="", actor=None, path=None):
     if not re.match(r"^[a-z0-9][a-z0-9._-]*$", name):
         raise RiverError("project names use lower-case letters, digits, '.', '_', '-'")
     with tx(conn):
@@ -260,6 +268,8 @@ def project_add(conn, name, rank=None, notes="", actor=None):
         _event(conn, None, actor, f"project {name} added")
     if rank is not None:
         project_rank(conn, name, rank, actor)
+    if path:
+        project_path(conn, name, path, actor)
     return dict(_project(conn, name))
 
 
@@ -283,6 +293,31 @@ def project_archive(conn, name, actor=None):
         conn.execute("UPDATE projects SET archived=1, rank=100000 WHERE name=?", (name,))
         _event(conn, None, actor, f"project {name} archived")
     return project_list(conn)
+
+
+def project_path(conn, name, path, actor=None):
+    """Link a project to a folder, so `river go` run inside that folder finds it."""
+    full = str(Path(path).expanduser().resolve()) if path else None
+    with tx(conn):
+        _project(conn, name)
+        conn.execute("UPDATE projects SET path=? WHERE name=?", (full, name))
+        _event(conn, None, actor, f"project {name} path {full or 'cleared'}")
+    return dict(_project(conn, name))
+
+
+def projects_for_dir(conn, cwd):
+    """Projects whose folder contains cwd; the deepest folder wins, ties keep every match."""
+    here = Path(cwd).expanduser().resolve()
+    best, depth = [], -1
+    for r in conn.execute("SELECT name, path FROM projects WHERE archived=0 AND path IS NOT NULL ORDER BY rank"):
+        root = Path(r["path"])
+        if here == root or root in here.parents:
+            d = len(root.parts)
+            if d > depth:
+                best, depth = [r["name"]], d
+            elif d == depth:
+                best.append(r["name"])
+    return best
 
 
 def project_describe(conn, name, text, actor=None):
@@ -972,3 +1007,110 @@ def state(conn):
         "settings": config_list(conn),
         "events": recent_events(conn),
     }
+
+
+# ---------------------------------------------------------------- go
+
+ROLES = ("worker", "unblocker", "planner", "idle")
+
+
+def go(conn, cwd, actor=None, project=None, role=None):
+    """One call for a fresh agent session: find the project, name the session, pick a role, and brief it."""
+    if role is not None and role not in ROLES:
+        raise RiverError(f"role is one of {', '.join(ROLES)}")
+    if project:
+        names = [n.strip() for n in project.split(",") if n.strip()]
+        for n in names:
+            _project(conn, n)
+    else:
+        names = projects_for_dir(conn, cwd)
+        if not names:
+            listing = "; ".join(f"{p['name']}" + (f" ({p['path']})" if p.get("path") else "") for p in project_list(conn))
+            raise RiverError(
+                f"no project is linked to {Path(cwd).resolve()}. Either run: river go --project <name>, "
+                f"or link this folder: river project path <name> . "
+                f"Projects: {listing or '(none; river project add <name> --path .)'}")
+    area = ",".join(names)
+
+    # Identity: reuse a registered name, else make one and register it.
+    new_name = False
+    if actor:
+        if not conn.execute("SELECT 1 FROM agents WHERE name=?", (actor,)).fetchone():
+            register(conn, actor, note=f"started with river go in {area}")
+            new_name = True
+    else:
+        import secrets
+        actor = f"{names[0]}-{secrets.token_hex(2)}"
+        register(conn, actor, note=f"started with river go in {area}")
+        new_name = True
+    activity(conn, actor)
+
+    ann = annotate(conn)
+    descs = {p["name"]: p["notes"] for p in project_list(conn) if p["name"] in names}
+    in_area = [a for a in ann.values() if a["project"] in names]
+    open_in_area = [a for a in in_area if a["status"] in OPEN_STATES]
+    human_ready = sorted((a for a in in_area if a["ready"] and a["doer"] == "human"), key=lambda a: a["sort_key"])
+    brief = {"agent": actor, "new_name": new_name, "projects": names, "descriptions": descs,
+             "human_waiting": [{"id": a["id"], "title": a["title"]} for a in human_ready]}
+
+    # Resume: an item already held.
+    held = conn.execute("SELECT id FROM items WHERE assignee=? AND status IN ('in_progress','held') ORDER BY id",
+                        (actor,)).fetchall()
+    if held and role in (None, "worker", "unblocker"):
+        item = item_show(conn, held[0]["id"])
+        brief.update(role="worker", resumed=True, item=item,
+                     why=f"you already hold #{item['id']}; finish or release it first")
+        _set_role_note(conn, actor, "worker", item["id"])
+        return brief
+
+    def try_claim(**kw):
+        try:
+            got = next_item(conn, claim=True, actor=actor, **kw)
+        except RiverError as e:
+            brief["claim_refused"] = str(e)
+            return None
+        return got[0] if got else None
+
+    if role in (None, "worker"):
+        item = try_claim(project=area)
+        if item:
+            brief.update(role="worker", item=item, why=f"#{item['id']} is the most important ready item in {area}")
+            _set_role_note(conn, actor, "worker", item["id"])
+            return brief
+    if role in (None, "unblocker"):
+        item = try_claim(unblocks=names[0]) if len(names) == 1 else None
+        if item is None and len(names) > 1:
+            for n in names:
+                item = try_claim(unblocks=n)
+                if item:
+                    break
+        if item:
+            brief.update(role="unblocker", item=item,
+                         why=f"nothing is ready in {area}; #{item['id']} ({item['project']}) clears the way for it")
+            _set_role_note(conn, actor, "unblocker", item["id"])
+            return brief
+
+    outside = [a for a in open_in_area if a["status"] == "open" and a["blocked_reason"]]
+    held_by_others = [a for a in open_in_area if a["status"] in ("in_progress", "held")]
+    needs_plan = not open_in_area or (not held_by_others and len(outside) == len([a for a in open_in_area if a["status"] == "open"]))
+    if role == "planner" or (role is None and needs_plan):
+        brief.update(role="planner", item=None,
+                     open_items=[{"id": a["id"], "title": a["title"], "blocked_reason": a["blocked_reason"],
+                                  "open_blockers": a["open_blockers"]} for a in open_in_area],
+                     why=("the project has no open items" if not open_in_area
+                          else "every open item waits on something outside the queue"))
+        _set_role_note(conn, actor, "planner", None)
+        return brief
+
+    brief.update(role="idle", item=None,
+                 held_by_others=[{"id": a["id"], "title": a["title"], "assignee": a["assignee"]} for a in held_by_others],
+                 why=("other sessions hold all the work that can move now" if held_by_others
+                      else "nothing here can move now, and nothing it waits on is ready"))
+    _set_role_note(conn, actor, "idle", None)
+    return brief
+
+
+def _set_role_note(conn, actor, role, item_id):
+    note = f"role: {role}" + (f" on #{item_id}" if item_id else "")
+    with tx(conn):
+        conn.execute("UPDATE agents SET note=? WHERE name=?", (note, actor))

@@ -176,6 +176,49 @@ class Areas(Base):
         self.assertEqual(p["working_now"], ["ag"])
 
 
+class Go(Base):
+    def setUp(self):
+        super().setUp()
+        self.web = os.path.join(self.dir.name, "web")
+        self.api = os.path.join(self.dir.name, "api")
+        os.makedirs(os.path.join(self.web, "src"))
+        os.makedirs(self.api)
+        core.project_add(self.c, "web", path=self.web)
+        core.project_add(self.c, "api", path=self.api)
+
+    def test_worker_from_folder_and_resume(self):
+        x = self.add("web", "x", doer="ai")
+        b = core.go(self.c, os.path.join(self.web, "src"))
+        self.assertEqual(b["role"], "worker")
+        self.assertEqual(b["item"]["id"], x)
+        self.assertTrue(b["agent"].startswith("web-"))
+        again = core.go(self.c, self.web, actor=b["agent"])
+        self.assertTrue(again.get("resumed"))
+
+    def test_unblocker(self):
+        a1 = self.add("api", "endpoint", doer="ai")
+        self.add("web", "page", after=[a1], doer="ai")
+        b = core.go(self.c, self.web)
+        self.assertEqual(b["role"], "unblocker")
+        self.assertEqual(b["item"]["id"], a1)
+
+    def test_planner_when_empty_or_outside_blocked(self):
+        self.assertEqual(core.go(self.c, self.web)["role"], "planner")
+        x = self.add("web", "x")
+        core.block(self.c, x, "waiting on design")
+        self.assertEqual(core.go(self.c, self.web)["role"], "planner")
+
+    def test_idle_when_others_hold_everything(self):
+        self.add("web", "x", doer="ai")
+        first = core.go(self.c, self.web)
+        self.assertEqual(first["role"], "worker")
+        self.assertEqual(core.go(self.c, self.web)["role"], "idle")
+
+    def test_unlinked_folder_refused(self):
+        with self.assertRaises(RiverError):
+            core.go(self.c, self.dir.name)
+
+
 class Capacity(Base):
     def test_slots_and_excess(self):
         core.project_add(self.c, "a")
