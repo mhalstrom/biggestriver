@@ -13,6 +13,9 @@ river project describe <name> "..."
 river project show <name>
 river project rank <name> <N>                          # 1 = most important overall
 river project list
+river target add <name> --description "how it deploys"  # where projects ship to
+river project target <name> <target>                   # each project has at most one
+river target show <target>                             # its projects
 ```
 
 Write the description for an agent that must decide whether it fits: what the

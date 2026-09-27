@@ -39,12 +39,22 @@ DEFAULT_SETTINGS = {
 }
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS targets (
+  id                INTEGER PRIMARY KEY,
+  name              TEXT NOT NULL UNIQUE,
+  description       TEXT NOT NULL DEFAULT '',
+  owner             TEXT,
+  owner_expires_at  TEXT,
+  created_at        TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS projects (
   id          INTEGER PRIMARY KEY,
   name        TEXT NOT NULL UNIQUE,
   rank        INTEGER NOT NULL,
   notes       TEXT NOT NULL DEFAULT '',
   path        TEXT,
+  target      TEXT,
   archived    INTEGER NOT NULL DEFAULT 0,
   created_at  TEXT NOT NULL
 );
@@ -178,6 +188,8 @@ def _migrate(conn):
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(projects)")}
     if "path" not in cols:
         conn.execute("ALTER TABLE projects ADD COLUMN path TEXT")
+    if "target" not in cols:
+        conn.execute("ALTER TABLE projects ADD COLUMN target TEXT")
 
 
 class tx:
@@ -283,7 +295,7 @@ def _project(conn, name):
     return r
 
 
-def project_add(conn, name, rank=None, notes="", actor=None, path=None):
+def project_add(conn, name, rank=None, notes="", actor=None, path=None, target=None):
     if not re.match(r"^[a-z0-9][a-z0-9._-]*$", name):
         raise RiverError("project names use lower-case letters, digits, '.', '_', '-'")
     with tx(conn):
@@ -297,6 +309,8 @@ def project_add(conn, name, rank=None, notes="", actor=None, path=None):
         project_rank(conn, name, rank, actor)
     if path:
         project_path(conn, name, path, actor)
+    if target:
+        project_target(conn, name, target, actor)
     return dict(_project(conn, name))
 
 
@@ -329,6 +343,17 @@ def project_path(conn, name, path, actor=None):
         _project(conn, name)
         conn.execute("UPDATE projects SET path=? WHERE name=?", (full, name))
         _event(conn, None, actor, f"project {name} path {full or 'cleared'}")
+    return dict(_project(conn, name))
+
+
+def project_target(conn, name, target, actor=None):
+    """Put a project in the deploy target it ships to; no target clears it."""
+    with tx(conn):
+        _project(conn, name)
+        if target is not None:
+            _target(conn, target)
+        conn.execute("UPDATE projects SET target=? WHERE name=?", (target, name))
+        _event(conn, None, actor, f"project {name} target {target or 'cleared'}")
     return dict(_project(conn, name))
 
 
@@ -381,6 +406,51 @@ def project_list(conn):
     return [dict(r) for r in conn.execute(
         "SELECT p.*, (SELECT COUNT(*) FROM items i WHERE i.project_id=p.id AND i.status IN ('open','in_progress','held')) open_items "
         "FROM projects p WHERE archived=0 ORDER BY rank, id")]
+
+
+# ---------------------------------------------------------------- deploy targets
+
+def _target(conn, name):
+    r = conn.execute("SELECT * FROM targets WHERE name=?", (name,)).fetchone()
+    if not r:
+        names = [x["name"] for x in conn.execute("SELECT name FROM targets ORDER BY name")]
+        raise RiverError(f"no target {name!r}; targets: {', '.join(names) or '(none; river target add <name> --description ...)'}")
+    return r
+
+
+def target_add(conn, name, description="", actor=None):
+    """A deploy target is where projects ship to (a server, an app store, a package index)."""
+    if not re.match(r"^[a-z0-9][a-z0-9._-]*$", name):
+        raise RiverError("target names use lower-case letters, digits, '.', '_', '-'")
+    with tx(conn):
+        if conn.execute("SELECT 1 FROM targets WHERE name=?", (name,)).fetchone():
+            raise RiverError(f"target {name!r} exists")
+        conn.execute("INSERT INTO targets(name,description,created_at) VALUES (?,?,?)", (name, description, iso(now())))
+        _event(conn, None, actor, f"target {name} added")
+    return target_show(conn, name)
+
+
+def target_describe(conn, name, text, actor=None):
+    with tx(conn):
+        _target(conn, name)
+        conn.execute("UPDATE targets SET description=? WHERE name=?", (text, name))
+        _event(conn, None, actor, f"target {name} description changed")
+    return target_show(conn, name)
+
+
+def target_list(conn):
+    return [dict(r) for r in conn.execute(
+        "SELECT t.*, (SELECT COUNT(*) FROM projects p WHERE p.target=t.name AND p.archived=0) projects "
+        "FROM targets t ORDER BY t.name")]
+
+
+def target_show(conn, name):
+    t = dict(_target(conn, name))
+    t["projects"] = [dict(r) for r in conn.execute(
+        "SELECT p.name, p.rank, p.notes, (SELECT COUNT(*) FROM items i WHERE i.project_id=p.id "
+        "AND i.status IN ('open','in_progress','held')) open_items "
+        "FROM projects p WHERE p.target=? AND p.archived=0 ORDER BY p.rank, p.id", (name,))]
+    return t
 
 
 # ---------------------------------------------------------------- items

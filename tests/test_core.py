@@ -318,5 +318,43 @@ class Messages(Base):
         self.assertEqual([(m["kind"], m["from_agent"], m["item_id"]) for m in box], [("notice", "river", self.x)])
 
 
+class Targets(Base):
+    def test_target_groups_projects(self):
+        core.target_add(self.c, "web", "rsync, then restart")
+        core.project_add(self.c, "site", target="web")
+        core.project_add(self.c, "api")
+        core.project_target(self.c, "api", "web")
+        core.project_add(self.c, "tool")
+        t = core.target_show(self.c, "web")
+        self.assertEqual([p["name"] for p in t["projects"]], ["site", "api"])
+        self.assertEqual(t["description"], "rsync, then restart")
+        self.assertIsNone(t["owner"])
+        self.assertEqual([(t["name"], t["projects"]) for t in core.target_list(self.c)], [("web", 2)])
+        core.project_target(self.c, "api", None)
+        self.assertEqual([p["name"] for p in core.target_show(self.c, "web")["projects"]], ["site"])
+
+    def test_refusals(self):
+        core.project_add(self.c, "a")
+        with self.assertRaises(RiverError):
+            core.project_target(self.c, "a", "nowhere")
+        core.target_add(self.c, "web")
+        with self.assertRaises(RiverError):
+            core.target_add(self.c, "web")
+        with self.assertRaises(RiverError):
+            core.target_add(self.c, "Bad Name")
+
+    def test_old_database_gains_target_column(self):
+        self.c.close()
+        import sqlite3
+        raw = sqlite3.connect(self.path)
+        raw.executescript("DROP TABLE projects; CREATE TABLE projects (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, "
+                          "rank INTEGER NOT NULL, notes TEXT NOT NULL DEFAULT '', archived INTEGER NOT NULL DEFAULT 0, "
+                          "created_at TEXT NOT NULL);")
+        raw.close()
+        self.c = core.connect(self.path)
+        cols = {r["name"] for r in self.c.execute("PRAGMA table_info(projects)")}
+        self.assertTrue({"path", "target"} <= cols)
+
+
 if __name__ == "__main__":
     unittest.main()

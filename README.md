@@ -61,7 +61,8 @@ To see it with sample data first: `./seed/example.sh` on an empty database.
 river register alex --human --note "owner"       # once per person or agent session
 export RIVER_AGENT=alex                          # or pass --as alex
 
-river project add website --path ~/code/shop --description "Storefront pages in web/; React"
+river target add prod-web --description "rsync to the VPS, then restart nginx"
+river project add website --path ~/code/shop --target prod-web --description "Storefront pages in web/; React"
 river go                                         # in ~/code/shop: name, role, item, briefing
 river add website "Build the checkout page" -p 0 --doer ai --after 3 4
 river next                                       # most important ready item overall

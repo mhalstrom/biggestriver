@@ -205,12 +205,23 @@ def build_parser():
     x.add_argument("--description", "--notes", dest="notes", default="",
                    help="what the project covers and what context helps (agents read this to pick an area)")
     x.add_argument("--path", help="folder this project lives in; river go run there finds it")
+    x.add_argument("--target", help="deploy target this project ships to (river target list)")
     x = prs.add_parser("describe", help="set a project's description"); x.add_argument("name"); x.add_argument("text")
     x = prs.add_parser("path", help="link a project to a folder (river go uses it)"); x.add_argument("name"); x.add_argument("path", nargs="?")
     x = prs.add_parser("show", help="a project's description, who works on it, and its ready items"); x.add_argument("name")
+    x = prs.add_parser("target", help="put a project in a deploy target (no target clears it)")
+    x.add_argument("name"); x.add_argument("target", nargs="?")
     x = prs.add_parser("rank"); x.add_argument("name"); x.add_argument("rank", type=int)
     x = prs.add_parser("archive"); x.add_argument("name")
     prs.add_parser("list")
+
+    tg = sub.add_parser("target", help="deploy targets: where projects ship to")
+    tgs = tg.add_subparsers(dest="tcmd", required=True)
+    x = tgs.add_parser("add"); x.add_argument("name")
+    x.add_argument("--description", default="", help="how and where it deploys")
+    x = tgs.add_parser("describe", help="set how a target deploys"); x.add_argument("name"); x.add_argument("text")
+    x = tgs.add_parser("show", help="a target, its owner, and its projects"); x.add_argument("name")
+    tgs.add_parser("list")
 
     x = sub.add_parser("add", help="add an item to a project")
     x.add_argument("project"); x.add_argument("title")
@@ -425,7 +436,7 @@ def dispatch(conn, a, actor):
     c = a.cmd
     if c == "project":
         if a.pcmd == "add":
-            return core.project_add(conn, a.name, a.rank, a.notes, actor, a.path)
+            return core.project_add(conn, a.name, a.rank, a.notes, actor, a.path, a.target)
         if a.pcmd == "rank":
             return core.project_rank(conn, a.name, a.rank, actor)
         if a.pcmd == "path":
@@ -434,9 +445,19 @@ def dispatch(conn, a, actor):
             return core.project_describe(conn, a.name, a.text, actor)
         if a.pcmd == "show":
             return core.project_show(conn, a.name)
+        if a.pcmd == "target":
+            return core.project_target(conn, a.name, a.target, actor)
         if a.pcmd == "archive":
             return core.project_archive(conn, a.name, actor)
         return core.project_list(conn)
+    if c == "target":
+        if a.tcmd == "add":
+            return core.target_add(conn, a.name, a.description, actor)
+        if a.tcmd == "describe":
+            return core.target_describe(conn, a.name, a.text, actor)
+        if a.tcmd == "show":
+            return core.target_show(conn, a.name)
+        return core.target_list(conn)
     if c == "add":
         return core.item_add(conn, a.project, a.title, a.priority, a.notes, a.doer, a.after, actor)
     if c == "edit":
@@ -595,6 +616,7 @@ def render(a, res):
         if isinstance(res, dict) and "ready_count" in res:
             print(f"{res['name']} (rank {res['rank']})")
             print("  " + (res["description"] or "(no description: river project describe " + res["name"] + " \"...\")"))
+            print("  target: " + (res.get("target") or "none (river project target " + res["name"] + " <target>)"))
             print("  items: " + ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in res["counts"].items() if v))
             print("  working now: " + (", ".join(res["working_now"]) or "nobody"))
             if res["worked_recently"]:
@@ -605,9 +627,29 @@ def render(a, res):
             return
         rows = res if isinstance(res, list) else [res]
         for p in rows:
-            print(f"{p['rank']:>2}. {p['name']}" + (f"  ({p['open_items']} open)" if "open_items" in p else ""))
+            print(f"{p['rank']:>2}. {p['name']}" + (f"  ({p['open_items']} open)" if "open_items" in p else "")
+                  + (f"  [target {p['target']}]" if p.get("target") else ""))
             if p.get("notes"):
                 print(f"    {p['notes']}")
+        return
+    if c == "target":
+        if isinstance(res, list):
+            if not res:
+                print("(no targets: river target add <name> --description \"how it deploys\")")
+            for t in res:
+                print(f"{t['name']}  ({t['projects']} project{'' if t['projects'] == 1 else 's'})"
+                      + (f"  owner {t['owner']}" if t["owner"] else ""))
+                if t["description"]:
+                    print(f"    {t['description']}")
+            return
+        print(res["name"])
+        print("  " + (res["description"] or f"(no description: river target describe {res['name']} \"how it deploys\")"))
+        print("  owner: " + (res["owner"] or "nobody"))
+        print(f"  projects ({len(res['projects'])}):")
+        for p in res["projects"]:
+            print(f"    {p['name']}  ({p['open_items']} open)")
+        if not res["projects"]:
+            print(f"    (none: river project target <project> {res['name']})")
         return
     if c in ("list",):
         if not res:
