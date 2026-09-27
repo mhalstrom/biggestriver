@@ -25,6 +25,12 @@ every command by the owner renews it; when it expires the target is free and
 the old owner gets a notice. `river target own` names the current owner when
 it refuses.
 
+`river ship <id>` (or `river done <id> --ship`) puts an item in its target's
+open deploy item, in the project `deploy-<target>`. One open deploy item per
+target collects requests from every project on it; once the owner claims it,
+the next request starts a new one. The deploy item waits on what it ships and
+takes the best priority among them.
+
 Write the description for an agent that must decide whether it fits: what the
 project covers, where it lives (repository, directories), and what knowledge
 helps. Agents read `river project list` to pick an area.

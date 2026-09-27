@@ -573,5 +573,49 @@ class Status(Base):
         self.assertNotEqual(w, h)
 
 
+class Ship(Base):
+    def setUp(self):
+        super().setUp()
+        core.target_add(self.c, "web", "rsync, then smoke test")
+        core.project_add(self.c, "site", target="web")
+        core.project_add(self.c, "api", target="web")
+        for n in ("dev", "ops"):
+            core.register(self.c, n)
+
+    def test_two_projects_share_one_deploy_item_only_owner_claims(self):
+        a = self.add("site", "page", p=1)
+        b = self.add("api", "endpoint")
+        core.done(self.c, a, "abc", "t", ship_it=True)
+        d1 = core.ship(self.c, b, "dev")
+        self.assertEqual(d1["kind"], "deploy")
+        self.assertEqual(d1["project"], "deploy-web")
+        self.assertEqual(d1["waits_on"], sorted([a, b]))
+        self.assertEqual(d1["priority"], 1)
+        self.assertEqual(d1["context"], "rsync, then smoke test")
+        core.done(self.c, b, "def", "t")
+        self.assertEqual([x["id"] for x in core.next_item(self.c, actor="dev")], [])
+        with self.assertRaises(RiverError):
+            core.claim(self.c, d1["id"], "dev")
+        core.target_own(self.c, "web", "ops")
+        self.assertEqual([x["id"] for x in core.next_item(self.c, actor="ops")], [d1["id"]])
+        core.claim(self.c, d1["id"], "ops")
+        c = self.add("site", "later")
+        d2 = core.ship(self.c, c, "dev")  # the first deploy item is taken: a new one starts
+        self.assertNotEqual(d2["id"], d1["id"])
+        done = core.done(self.c, d1["id"], "release r-42", "ops")
+        self.assertEqual([x["id"] for x in done["ships"]], sorted([a, b]))
+        self.assertEqual(core.unread(self.c, "ops")["unread"], 1)  # notice for the request made while ops owned it
+
+    def test_ship_refusals_and_repeat(self):
+        core.project_add(self.c, "misc")
+        with self.assertRaises(RiverError):
+            core.ship(self.c, self.add("misc", "x"), "dev")
+        a = self.add("site", "page")
+        d = core.ship(self.c, a, "dev")
+        self.assertEqual(core.ship(self.c, a, "dev")["id"], d["id"])
+        with self.assertRaises(RiverError):
+            core.ship(self.c, d["id"], "dev")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -81,6 +81,8 @@ CREATE TABLE IF NOT EXISTS items (
   context           TEXT NOT NULL DEFAULT '',
   touches           TEXT NOT NULL DEFAULT '',
   "check"           TEXT NOT NULL DEFAULT '',
+  kind              TEXT NOT NULL DEFAULT 'work',
+  target            TEXT,
   created_at        TEXT NOT NULL,
   closed_at         TEXT
 );
@@ -204,6 +206,10 @@ def _migrate(conn):
     for col in ("context", "touches", "check"):
         if col not in icols:
             conn.execute(f"ALTER TABLE items ADD COLUMN \"{col}\" TEXT NOT NULL DEFAULT ''")
+    if "kind" not in icols:
+        conn.execute("ALTER TABLE items ADD COLUMN kind TEXT NOT NULL DEFAULT 'work'")
+    if "target" not in icols:
+        conn.execute("ALTER TABLE items ADD COLUMN target TEXT")
 
 
 class tx:
@@ -1067,6 +1073,13 @@ def _claim_row(conn, item_id, actor):
         raise RiverError(f"refused: {actor} already holds {held} item(s) (max_leases {limit}). "
                          f"Finish one (river done <id>), release one (river release <id>), "
                          f"or raise the limit (river config set max_leases <n> --agent {actor})")
+    it = _item(conn, item_id)
+    if it["kind"] == "deploy":
+        owner = conn.execute("SELECT owner FROM targets WHERE name=?", (it["target"],)).fetchone()
+        if not owner or owner["owner"] != actor:
+            raise RiverError(f"refused: #{item_id} deploys to target {it['target']}, and only its owner can take it "
+                             f"(owner: {owner['owner'] if owner and owner['owner'] else 'nobody'}). "
+                             f"Become the owner first: river target own {it['target']}")
     ttl = parse_duration(setting(conn, "lease_ttl", item_id=item_id, agent=actor))
     t = now()
     cur = conn.execute(
@@ -1087,12 +1100,19 @@ def next_item(conn, project=None, unblocks=None, claim=False, actor=None, limit=
     if mine and not actor:
         raise RiverError("--mine needs an agent name: set RIVER_AGENT or pass --as <name>")
     who_mine = actor if mine else None
+
+    def takeable(pool):
+        if not actor:
+            return pool
+        owned = {r["name"] for r in conn.execute("SELECT name FROM targets WHERE owner=?", (actor,))}
+        return [a for a in pool if a["kind"] != "deploy" or a["target"] in owned]
+
     if not claim:
         return [{k: v for k, v in a.items() if k != 'sort_key'}
-                for a in ready_list(conn, project, unblocks, doer_for, near=near, mine=who_mine)[:limit]]
+                for a in takeable(ready_list(conn, project, unblocks, doer_for, near=near, mine=who_mine))[:limit]]
     with tx(conn):
         _sweep(conn)
-        pool = ready_list(conn, project, unblocks, doer_for, near=near, mine=who_mine)
+        pool = takeable(ready_list(conn, project, unblocks, doer_for, near=near, mine=who_mine))
         if not pool:
             return []
         _claim_row(conn, pool[0]["id"], actor)
@@ -1133,8 +1153,59 @@ def _close(conn, item_id, status, actor, output=None):
     return res
 
 
-def done(conn, item_id, output=None, actor=None):
-    return _close(conn, item_id, "done", actor, output)
+def done(conn, item_id, output=None, actor=None, ship_it=False):
+    res = _close(conn, item_id, "done", actor, output)
+    if ship_it:
+        res["shipped_in"] = ship(conn, item_id, actor)["id"]
+    return res
+
+
+def ship(conn, item_id, actor=None):
+    """Ask for the item to go out: add it to its target's open deploy item, or start one.
+
+    The deploy item waits on everything it ships, sits in the project
+    deploy-<target>, and only the target's owner can take it.
+    """
+    with tx(conn):
+        it = _item(conn, item_id)
+        if it["kind"] == "deploy":
+            raise RiverError(f"#{item_id} is itself a deploy item")
+        if it["status"] == "dropped":
+            raise RiverError(f"#{item_id} is dropped; there is nothing to ship")
+        proj = conn.execute("SELECT name, target FROM projects WHERE id=?", (it["project_id"],)).fetchone()
+        if not proj["target"]:
+            raise RiverError(f"project {proj['name']} has no deploy target; set one: "
+                             f"river project target {proj['name']} <target>  (river target list)")
+        tg = _target(conn, proj["target"])
+        dep = conn.execute("SELECT * FROM items WHERE kind='deploy' AND target=? AND status='open' ORDER BY id LIMIT 1",
+                           (tg["name"],)).fetchone()
+        if dep is None:
+            pname = f"deploy-{tg['name']}"
+            if not conn.execute("SELECT 1 FROM projects WHERE name=?", (pname,)).fetchone():
+                top = conn.execute("SELECT COALESCE(MAX(rank),0) m FROM projects WHERE archived=0").fetchone()["m"]
+                conn.execute("INSERT INTO projects(name,rank,notes,target,created_at) VALUES (?,?,?,?,?)",
+                             (pname, top + 1, f"Deploys to target {tg['name']}, made by river ship. "
+                              f"Only the target owner takes these items.", tg["name"], iso(now())))
+                _event(conn, None, actor, f"project {pname} added for target {tg['name']}")
+            pid = conn.execute("SELECT id FROM projects WHERE name=?", (pname,)).fetchone()["id"]
+            top = conn.execute("SELECT COALESCE(MAX(rank),0) m FROM items WHERE project_id=?", (pid,)).fetchone()["m"]
+            cur = conn.execute(
+                "INSERT INTO items(project_id,title,notes,priority,rank,doer,context,kind,target,created_at) "
+                "VALUES (?,?,?,?,?,'any',?,'deploy',?,?)",
+                (pid, f"Deploy {tg['name']}", "Ship every item this waits on; put the release id in the output.",
+                 it["priority"], top + 1, tg["description"], tg["name"], iso(now())))
+            dep = _item(conn, cur.lastrowid)
+            _event(conn, dep["id"], actor, f"deploy item for target {tg['name']} started")
+        if conn.execute("SELECT 1 FROM deps WHERE item_id=? AND blocked_by=?", (dep["id"], it["id"])).fetchone():
+            return item_show(conn, dep["id"])
+        _dep_add(conn, dep["id"], it["id"], actor)
+        if it["priority"] < dep["priority"]:
+            conn.execute("UPDATE items SET priority=? WHERE id=?", (it["priority"], dep["id"]))
+        _event(conn, it["id"], actor, f"ship requested in #{dep['id']} ({tg['name']})")
+        if tg["owner"] and tg["owner"] != actor:
+            _send(conn, "notice", actor or "river", f"ship request: #{it['id']} {it['title']} joins deploy #{dep['id']} "
+                  f"for {tg['name']}", to=tg["owner"], item_id=dep["id"])
+    return item_show(conn, dep["id"])
 
 
 def drop(conn, item_id, actor=None):
@@ -1180,6 +1251,10 @@ def item_show(conn, item_id, ann=None):
                               "assignee": ann[d]["assignee"]} for d in a["conflicts"]]
     a["events"] = [dict(r) for r in conn.execute(
         "SELECT at, actor, change FROM events WHERE item_id=? ORDER BY id DESC LIMIT 50", (iid,))]
+    if a["kind"] == "deploy":
+        r = conn.execute("SELECT owner FROM targets WHERE name=?", (a["target"],)).fetchone()
+        a["target_owner"] = r["owner"] if r else None
+        a["ships"] = a["waits_on_detail"]
     a["message_count"] = conn.execute("SELECT COUNT(*) FROM messages WHERE item_id=?", (iid,)).fetchone()[0]
     return a
 

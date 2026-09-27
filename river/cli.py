@@ -128,11 +128,15 @@ def _cut(text, n=70):
 
 def _print_show(a):
     print(_fmt_item(a))
+    if a.get("kind") == "deploy":
+        print(f"  deploy item for target {a['target']} (owner: {a.get('target_owner') or 'nobody'}; only the owner takes it)")
     if a["notes"]:
         print("  notes:", a["notes"])
     for line in _context_lines(a):
         print(line)
-    if a["waits_on_detail"]:
+    if a.get("kind") == "deploy" and a["waits_on_detail"]:
+        print("  ships:", ", ".join(f"#{d['id']} {d['title']} ({d['status']})" for d in a["waits_on_detail"]))
+    elif a["waits_on_detail"]:
         print("  waits on:", ", ".join(f"#{d['id']} {d['title']} ({d['status']})" for d in a["waits_on_detail"]))
     if a["unblocks_detail"]:
         print("  unblocks:", ", ".join(f"#{d['id']} {d['title']} ({d['status']})" for d in a["unblocks_detail"]))
@@ -146,6 +150,8 @@ def _print_show(a):
         print("  output:", a["output"])
     if a.get("message_count"):
         print(f"  messages: {a['message_count']} (river thread --item {a['id']})")
+    if a.get("shipped_in"):
+        print(f"  ship requested: joins deploy item #{a['shipped_in']}")
     if a.get("now_ready"):
         print("  now ready:", ", ".join(f"#{i}" for i in a["now_ready"]))
     for e in a.get("events", [])[:8]:
@@ -306,6 +312,9 @@ def build_parser():
 
     x = sub.add_parser("claim", help="take one ready item by id"); x.add_argument("id", type=int)
     x = sub.add_parser("done", help="finish an item"); x.add_argument("id", type=int); x.add_argument("--output")
+    x.add_argument("--ship", action="store_true", help="also ask for it to be deployed (river ship)")
+    x = sub.add_parser("ship", help="ask for an item to be deployed: it joins its target's next deploy item")
+    x.add_argument("id", type=int)
     x = sub.add_parser("release", help="give a claimed item back"); x.add_argument("id", type=int); x.add_argument("--note")
     x = sub.add_parser("drop", help="close an item without doing it"); x.add_argument("id", type=int)
     x = sub.add_parser("reopen", help="open a closed item again"); x.add_argument("id", type=int)
@@ -536,7 +545,9 @@ def dispatch(conn, a, actor):
     if c == "claim":
         return core.claim(conn, a.id, actor)
     if c == "done":
-        return core.done(conn, a.id, a.output, actor)
+        return core.done(conn, a.id, a.output, actor, a.ship)
+    if c == "ship":
+        return core.ship(conn, a.id, actor)
     if c == "release":
         return core.release(conn, a.id, a.note, actor)
     if c == "drop":
