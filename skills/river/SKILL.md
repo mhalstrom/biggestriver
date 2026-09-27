@@ -108,6 +108,17 @@ Take it off their list, with the reason; they get one notice and can undo it:
 `river claim` refuses a person's item for an agent, so the user is never
 bypassed without a notice.
 
+## Blocked on another agent's item
+
+`river blockers <id>` shows who holds what. Then:
+
+- Ready pieces nobody holds: `river next --unblocks <id> --claim`.
+- The useful work is held: `river offer "I am blocked on this; I can take ..." --item <their-id>`.
+  The holder answers with `river give <id> --to <you>` (the lease moves to you),
+  `river split <id> "<smaller piece>" ...` (new prerequisites anyone can take;
+  their item waits for them, still theirs), or
+  `river decline <msg-id> --message --note "why"`.
+
 ## Pushed items
 
 Someone can push an item to you (`river push <id> --to <you> --note "..."`):

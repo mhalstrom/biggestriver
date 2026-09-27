@@ -1201,5 +1201,51 @@ class Prompts(Base):
         self.assertIn("Nothing", core.prompt_for_all(self.c, "nobody"))
 
 
+class OfferGiveSplit(Base):
+    def setUp(self):
+        super().setUp()
+        core.project_add(self.c, "a")
+        for n in ("ag", "bo"):
+            core.register(self.c, n)
+        self.goal = self.add("a", "Stripe activation")
+        self.page = core.item_add(self.c, "a", "Privacy page", blocks=self.goal, actor="t")["id"]
+        core.claim(self.c, self.page, "bo")
+
+    def test_offer_split_then_helper_takes_a_piece(self):
+        o = core.offer(self.c, "I can take the draft", self.page, actor="ag")
+        self.assertEqual((o["kind"], o["to_agent"]), ("offer", "bo"))
+        res = core.split(self.c, self.page, ["draft text", "address"], "bo")
+        self.assertEqual(core._item(self.c, self.page)["status"], "held")
+        self.assertEqual(core.message_show(self.c, o["id"])["state"], "accepted")
+        got = core.next_item(self.c, unblocks=self.goal, claim=True, actor="ag")
+        self.assertIn(got[0]["id"], res["split_into"])
+        core.done(self.c, got[0]["id"], "drafted", "ag")
+        other = [n for n in res["split_into"] if n != got[0]["id"]][0]
+        core.done(self.c, other, "found", "t")
+        st = core._item(self.c, self.page)
+        self.assertEqual((st["status"], st["assignee"]), ("in_progress", "bo"))
+
+    def test_give_moves_the_lease_and_accepts_the_offer(self):
+        o = core.offer(self.c, "let me", self.page, actor="ag")
+        with self.assertRaises(RiverError):
+            core.give(self.c, self.page, "ag", "ag")
+        core.give(self.c, self.page, "ag", "bo")
+        it = core._item(self.c, self.page)
+        self.assertEqual((it["assignee"], it["status"]), ("ag", "in_progress"))
+        self.assertEqual(core.message_show(self.c, o["id"])["state"], "accepted")
+        with self.assertRaises(RiverError):
+            core.give(self.c, self.page, "ag", "bo")  # not bo's any more
+
+    def test_decline_offer_and_offer_refusals(self):
+        o = core.offer(self.c, "let me", self.page, actor="ag")
+        with self.assertRaises(RiverError):
+            core.decline_message(self.c, o["id"], "no", "ag")  # not for ag
+        core.decline_message(self.c, o["id"], "almost done", "bo")
+        self.assertEqual(core.message_show(self.c, o["id"])["state"], "declined")
+        self.assertTrue(any("almost done" in m["body"] for m in core.inbox(self.c, "ag")))
+        with self.assertRaises(RiverError):
+            core.offer(self.c, "x", self.goal, actor="ag")  # nobody holds it
+
+
 if __name__ == "__main__":
     unittest.main()

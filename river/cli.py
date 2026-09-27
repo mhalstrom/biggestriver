@@ -386,7 +386,15 @@ def build_parser():
     x = sub.add_parser("push", help="reserve an open item for one agent and alert it")
     x.add_argument("id", type=int); x.add_argument("--to", required=True); x.add_argument("--note")
     x = sub.add_parser("accept", help="take an item pushed to you"); x.add_argument("id", type=int)
-    x = sub.add_parser("decline", help="hand a pushed item back"); x.add_argument("id", type=int); x.add_argument("--note")
+    x = sub.add_parser("decline", help="hand a pushed item back, or with --message say no to an offer or alert")
+    x.add_argument("id", type=int); x.add_argument("--note")
+    x.add_argument("--message", action="store_true", help="the id is a message (an offer or alert), not an item")
+    x = sub.add_parser("offer", help="offer help to the agent that holds an item you are blocked on")
+    x.add_argument("text"); x.add_argument("--item", type=int, required=True); x.add_argument("--to", help="default: its holder")
+    x = sub.add_parser("give", help="hand an item you hold (or that is reserved for you) to another agent")
+    x.add_argument("id", type=int); x.add_argument("--to", required=True)
+    x = sub.add_parser("split", help="add smaller prerequisites anyone can take; your item waits for them, still yours")
+    x.add_argument("id", type=int); x.add_argument("titles", nargs="+"); x.add_argument("--doer", default="any", choices=core.DOERS)
     x = sub.add_parser("keep", help="hold an item again while you do its open prerequisites"); x.add_argument("id", type=int)
     x = sub.add_parser("undep", help="remove waits or conflict links"); x.add_argument("id", type=int); x.add_argument("--on", type=int, nargs="+", required=True)
     x = sub.add_parser("blocked", help="record a blocker outside the queue"); x.add_argument("id", type=int); x.add_argument("--reason", required=True)
@@ -680,7 +688,15 @@ def dispatch(conn, a, actor):
     if c == "accept":
         return core.accept(conn, a.id, actor)
     if c == "decline":
+        if a.message:
+            return core.decline_message(conn, a.id, a.note, actor)
         return core.decline(conn, a.id, a.note, actor)
+    if c == "offer":
+        return core.offer(conn, a.text, a.item, a.to, actor)
+    if c == "give":
+        return core.give(conn, a.id, a.to, actor)
+    if c == "split":
+        return core.split(conn, a.id, a.titles, actor, a.doer)
     if c == "undep":
         return core.dep_remove(conn, a.id, a.on, actor)
     if c == "blocked":
@@ -984,6 +1000,17 @@ def render(a, res):
         return
     if c == "blockers":
         _print_tree(res)
+        held = []
+        def walk(n):
+            for ch in n["children"]:
+                if ch["assignee"] and ch["assignee"] != a.actor:
+                    held.append(ch)
+                walk(ch)
+        walk(res)
+        if held:
+            h = held[0]
+            print(f"\nHeld by another agent? Offer help: river offer \"I am blocked on this; I can take ...\" --item {h['id']}"
+                  f"   Ready pieces nobody holds: river next --unblocks {res['id']} --claim")
         return
     if c == "status":
         return render_status(res)
@@ -1047,6 +1074,9 @@ def render(a, res):
                 bar = "#" * round(pct / 5) + "." * (20 - round(pct / 5))
                 recent = f", +{p['done_in_window']} in the {window}" if res["since"] else ""
                 print(f"  {p['project']:<{w}}  {bar} {pct:>3}%  {p['done']}/{p['total']} done{recent}")
+        return
+    if c in ("offer", "decline") and "kind" in res and "body" in res:
+        print(f"{'sent' if c == 'offer' else 'declined'} #{res['id']} {res['kind']}" + (f" to {res['to_agent']}" if c == "offer" else ""))
         return
     if c == "send":
         to = res["to_agent"] or f"the next holder of #{res['item_id']} (nobody holds it now)"

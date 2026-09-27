@@ -862,7 +862,8 @@ def _hold(conn, parent, actor, reserve):
                  (actor, iso(now() + ttl), parent))
     for r in reserve:
         conn.execute("UPDATE items SET reserved_for=? WHERE id=? AND status='open' AND reserved_for IS NULL", (actor, r))
-    _event(conn, parent, actor, f"held by {actor} while it does " + ", ".join(f"#{r}" for r in reserve))
+    _event(conn, parent, actor, f"held by {actor} while it does " + ", ".join(f"#{r}" for r in reserve) if reserve
+           else f"held by {actor} until its prerequisites are done")
 
 
 def _unhold(conn, parent, actor, why):
@@ -976,6 +977,107 @@ def decline(conn, item_id, note=None, actor=None):
             _send(conn, "notice", actor, f"{actor} declined #{it['id']} {it['title']}" + (f": {note}" if note else "")
                   + "; it is open to every agent again", to=it["reserved_by"], item_id=it["id"])
     return item_show(conn, item_id)
+
+
+def offer(conn, body, item, to=None, actor=None):
+    """Offer help to the agent that holds an item you are blocked on (design 7.5 step 4)."""
+    if not actor:
+        raise RiverError("offering needs an agent name: set RIVER_AGENT or pass --as <name>")
+    with tx(conn):
+        it = _item(conn, item)
+        to = to or it["assignee"] or it["reserved_for"]
+        if not to:
+            raise RiverError(f"nobody holds #{item}; take it yourself: river claim {item} (or river next --unblocks {item} --claim)")
+        if to == actor:
+            raise RiverError("you hold it yourself")
+        _agent(conn, to)
+        mid = _send(conn, "offer", actor, body.strip(), to=to, item_id=it["id"])
+        _event(conn, it["id"], actor, f"offer #{mid} to {to}")
+        conn.execute("UPDATE messages SET body=body || ? WHERE id=?", (
+            f"\n(answer: river give <id> --to {actor}   or: river split {it['id']} \"<smaller piece>\" ...   "
+            f"or: river decline {mid} --message --note \"why\")", mid))
+    return message_show(conn, mid)
+
+
+def _accept_offers(conn, holder, helper, t):
+    conn.execute("UPDATE messages SET state='accepted', read_at=COALESCE(read_at, ?), closed_at=? "
+                 "WHERE kind='offer' AND state='open' AND to_agent=? AND from_agent=?", (t, t, holder, helper))
+
+
+def give(conn, item_id, to, actor=None):
+    """Hand an item you hold (or that is reserved for you) to another agent; the lease moves with it."""
+    with tx(conn):
+        _sweep(conn)
+        it = _item(conn, item_id)
+        rec = _agent(conn, to)
+        if to == actor:
+            raise RiverError("you already have it")
+        t = now()
+        if it["assignee"] == actor and it["status"] in ("in_progress", "held"):
+            if rec["role"] == "planner":
+                raise RiverError(f"{to} is a planner session and takes no work")
+            limit = int(setting(conn, "max_leases", agent=to))
+            n = conn.execute("SELECT COUNT(*) c FROM items WHERE assignee=? AND status='in_progress'", (to,)).fetchone()["c"]
+            if it["status"] == "in_progress" and n >= limit:
+                raise RiverError(f"refused: {to} already holds {n} item(s) (max_leases {limit}); they can release one first")
+            ttl = parse_duration(setting(conn, "lease_ttl", item_id=it["id"], agent=to))
+            if it["status"] == "in_progress":
+                conn.execute("UPDATE items SET assignee=?, claimed_at=?, lease_expires_at=? WHERE id=?",
+                             (to, iso(t), iso(t + ttl), it["id"]))
+            else:
+                hold = parse_duration(setting(conn, "hold_ttl", item_id=it["id"], agent=to))
+                conn.execute("UPDATE items SET assignee=?, hold_expires_at=? WHERE id=?", (to, iso(t + hold), it["id"]))
+                for r in _open_prereqs(conn, it["id"]):
+                    conn.execute("UPDATE items SET reserved_for=? WHERE id=? AND reserved_for=?", (to, r, actor))
+        elif it["reserved_for"] == actor and it["status"] == "open":
+            conn.execute("UPDATE items SET reserved_for=? WHERE id=?", (to, it["id"]))
+        else:
+            raise RiverError(f"#{item_id} is not yours to give (" + (f"{it['status']} by {it['assignee']}" if it["assignee"]
+                             else f"reserved for {it['reserved_for']}" if it["reserved_for"] else it["status"]) + ")")
+        _event(conn, it["id"], actor, f"given to {to}")
+        _accept_offers(conn, actor, to, iso(t))
+        _send(conn, "notice", actor, f"{actor} gave you #{it['id']} {it['title']}; it is yours now "
+              f"(river show {it['id']})", to=to, item_id=it["id"])
+    return item_show(conn, item_id)
+
+
+def split(conn, item_id, titles, actor=None, doer="any"):
+    """Add smaller prerequisites anyone can take; if you hold the item it waits for them, still yours."""
+    if not titles:
+        raise RiverError("give at least one title for a smaller piece")
+    with tx(conn):
+        it = _item(conn, item_id)
+        pname = _project_name(conn, it["project_id"])
+    new = [item_add(conn, pname, t, it["priority"], "", doer, (), actor, found_during=None)["id"] for t in titles]
+    with tx(conn):
+        for n in new:
+            _dep_add(conn, it["id"], n, actor)
+            _event(conn, n, actor, f"split from #{it['id']}")
+        cur = _item(conn, item_id)
+        if cur["assignee"] == actor and cur["status"] in ("in_progress", "held"):
+            _hold(conn, it["id"], actor, [])
+        conn.execute("UPDATE messages SET state='accepted', closed_at=? WHERE kind='offer' AND state='open' "
+                     "AND to_agent=? AND item_id=?", (iso(now()), actor, it["id"]))
+    res = item_show(conn, item_id)
+    res["split_into"] = new
+    return res
+
+
+def decline_message(conn, msg_id, note=None, actor=None):
+    """Say no to an offer or alert; the sender hears why."""
+    with tx(conn):
+        m = _message(conn, msg_id)
+        if m["kind"] not in ("offer", "alert"):
+            raise RiverError(f"message {msg_id} is {'an' if m['kind'][0] in 'aeiou' else 'a'} {m['kind']}; only offers and alerts are declined")
+        if m["to_agent"] != actor:
+            raise RiverError(f"message {msg_id} is for {m['to_agent']}, not {actor}")
+        if m["state"] != "open":
+            raise RiverError(f"message {msg_id} is already {m['state']}")
+        t = iso(now())
+        conn.execute("UPDATE messages SET state='declined', read_at=COALESCE(read_at, ?), closed_at=? WHERE id=?", (t, t, m["id"]))
+        _send(conn, "note", actor, f"no to your {m['kind']} #{m['id']}" + (f": {note}" if note else ""),
+              to=m["from_agent"], item_id=m["item_id"], reply_to=m["id"])
+    return message_show(conn, msg_id)
 
 
 def cancel_push(conn, item_id, actor=None):
