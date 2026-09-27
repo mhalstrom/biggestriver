@@ -108,6 +108,7 @@ CREATE TABLE IF NOT EXISTS agents (
   name           TEXT PRIMARY KEY,
   kind           TEXT NOT NULL DEFAULT 'ai' CHECK (kind IN ('ai','human')),
   note           TEXT NOT NULL DEFAULT '',
+  role           TEXT,
   registered_at  TEXT NOT NULL,
   last_seen      TEXT NOT NULL
 );
@@ -200,6 +201,8 @@ def _migrate(conn):
         conn.execute("ALTER TABLE projects ADD COLUMN path TEXT")
     if "target" not in cols:
         conn.execute("ALTER TABLE projects ADD COLUMN target TEXT")
+    if "role" not in {r["name"] for r in conn.execute("PRAGMA table_info(agents)")}:
+        conn.execute("ALTER TABLE agents ADD COLUMN role TEXT")
     if "auto" not in {r["name"] for r in conn.execute("PRAGMA table_info(deps)")}:
         conn.execute("ALTER TABLE deps ADD COLUMN auto INTEGER NOT NULL DEFAULT 0")
     icols = {r["name"] for r in conn.execute("PRAGMA table_info(items)")}
@@ -1066,6 +1069,9 @@ def _claim_row(conn, item_id, actor):
     if not actor:
         raise RiverError("claiming needs an agent name: set RIVER_AGENT or pass --as <name>")
     ag = _agent(conn, actor)
+    if ag["role"] == "planner":
+        raise RiverError(f"refused: {actor} is a planner session; planners change the plan and do not take work. "
+                         f"To work instead, run: river --as {actor} go")
     limit = int(setting(conn, "max_leases", agent=actor))
     held = conn.execute("SELECT COUNT(*) c FROM items WHERE assignee=? AND status IN ('in_progress','held')",
                         (actor,)).fetchone()["c"]
@@ -1472,7 +1478,8 @@ def capacity(conn, ann=None):
             taken.add(a["id"])
     ready_human = [a for a in ready if a["doer"] == "human"]
     agents = [agent_status(conn, r["name"]) for r in conn.execute("SELECT name FROM agents")]
-    ai_active = [a for a in agents if a["kind"] == "ai" and a["state"] == "active"]
+    # Planner sessions change the plan and take no work, so they are not slots.
+    ai_active = [a for a in agents if a["kind"] == "ai" and a["state"] == "active" and a.get("role") != "planner"]
     ai_busy = [a for a in ai_active if a["holds"]]
     ai_idle = [a for a in ai_active if not a["holds"]]
     in_progress = [a for a in live if a["status"] in ("in_progress", "held")]
@@ -1643,6 +1650,8 @@ def go(conn, cwd, actor=None, project=None, role=None):
         register(conn, actor, note=f"started with river go in {area}")
         new_name = True
     activity(conn, actor)
+    with tx(conn):
+        conn.execute("UPDATE agents SET role=NULL WHERE name=? AND role='planner'", (actor,))
 
     ann = annotate(conn)
     descs = {p["name"]: p["notes"] for p in project_list(conn) if p["name"] in names}
@@ -1713,4 +1722,46 @@ def go(conn, cwd, actor=None, project=None, role=None):
 def _set_role_note(conn, actor, role, item_id):
     note = f"role: {role}" + (f" on #{item_id}" if item_id else "")
     with tx(conn):
-        conn.execute("UPDATE agents SET note=? WHERE name=?", (note, actor))
+        conn.execute("UPDATE agents SET note=?, role=? WHERE name=?", (note, role, actor))
+
+
+def plan(conn, cwd, actor=None, project=None):
+    """Start or continue a planner session: the overview plus the questions a planner should raise with the user."""
+    names = [n.strip() for n in project.split(",") if n.strip()] if project else projects_for_dir(conn, cwd)
+    for n in names:
+        _project(conn, n)
+    new_name = False
+    if not actor:
+        import secrets
+        actor = f"{names[0]}-plan-{secrets.token_hex(2)}" if names else f"planner-{secrets.token_hex(2)}"
+        new_name = True
+    if not conn.execute("SELECT 1 FROM agents WHERE name=?", (actor,)).fetchone():
+        register(conn, actor, note="role: planner")
+        new_name = True
+    activity(conn, actor)
+    held = conn.execute("SELECT id FROM items WHERE assignee=? AND status IN ('in_progress','held')", (actor,)).fetchall()
+    if held:
+        raise RiverError(f"{actor} holds {', '.join('#' + str(r['id']) for r in held)}; a planner holds no work. "
+                         f"Finish or release it first, or plan from a new session: river plan (without --as)")
+    _set_role_note(conn, actor, "planner", None)
+
+    ann = annotate(conn)
+    live = sorted((a for a in ann.values() if not a["project_archived"] and a["status"] in OPEN_STATES),
+                  key=lambda a: a["sort_key"])
+    focus = [a for a in live if not names or a["project"] in names]
+    brief_item = lambda a: {"id": a["id"], "project": a["project"], "title": a["title"]}
+    no_notes = [a for a in focus if not a["notes"].strip() and not a["context"].strip() and a["kind"] != "deploy"]
+    stuck = [dict(brief_item(a), reason=a["blocked_reason"], holds_up=a["unblocks_count"])
+             for a in focus if a["blocked_reason"]]
+    stuck.sort(key=lambda x: -x["holds_up"])
+    return {
+        "agent": actor, "new_name": new_name, "projects": names, "role": "planner",
+        "status": status(conn),
+        "questions": {
+            "projects_without_description": [p["name"] for p in project_list(conn)
+                                             if not p["notes"].strip() and (not names or p["name"] in names)],
+            "items_without_notes": [brief_item(a) for a in no_notes],
+            "human_waiting": [brief_item(a) for a in focus if a["ready"] and a["doer"] == "human"],
+            "stuck": stuck,
+        },
+    }

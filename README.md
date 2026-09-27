@@ -71,6 +71,7 @@ river next --near 12 --claim                     # take one linked to item 12
 river next --unblocks 12 --claim                 # take one that clears item 12's blockers
 river done 12 --output "merged in abc123"
 river blockers 12                                # tree of what item 12 waits on
+river plan                                       # planner session: overview, open questions; plans, takes no work
 river status                                     # every project's counts, recent completions, who works on what
 river log --since 7d                             # done items by day, with output and progress per project
 river who                                        # who holds what

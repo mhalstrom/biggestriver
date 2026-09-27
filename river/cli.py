@@ -20,7 +20,8 @@ most important ready item in the area you choose; `--claim` takes it.
 
 Agent sessions: run `river go` in the project folder. It names the session,
 picks a role (worker, unblocker, planner, idle), claims an item, and prints a
-briefing. Run it again after each item.
+briefing. Run it again after each item. To plan work with the user instead,
+run `river plan`: an overview, the open questions, and the planner's rules.
 
 By hand:
   river register <your-name> [--human] --note "what you work on"
@@ -310,6 +311,9 @@ def build_parser():
     x.add_argument("--project", help="project name(s) when this folder is not linked")
     x.add_argument("--role", choices=core.ROLES, help="ask for a role instead of letting river pick")
 
+    x = sub.add_parser("plan", help="start a planner session: overview, open questions, and the planner's rules")
+    x.add_argument("--project", help="project name(s) to focus on (default: this folder's, else all)")
+
     x = sub.add_parser("claim", help="take one ready item by id"); x.add_argument("id", type=int)
     x = sub.add_parser("done", help="finish an item"); x.add_argument("id", type=int); x.add_argument("--output")
     x.add_argument("--ship", action="store_true", help="also ask for it to be deployed (river ship)")
@@ -407,7 +411,7 @@ def run(argv=None):
         server.serve(port, open_browser=args.open, dev=args.dev)
         return 0
     actor = args.actor
-    if args.cmd != "go":
+    if args.cmd not in ("go", "plan"):
         core.activity(conn, actor)
     res = dispatch(conn, args, actor)
     if args.json:
@@ -415,7 +419,7 @@ def run(argv=None):
     else:
         render(args, res)
     sys.stdout.flush()
-    _footer(conn, res["agent"] if args.cmd == "go" else actor)
+    _footer(conn, res["agent"] if args.cmd in ("go", "plan") else actor)
     if not args.quiet and not args.json:
         h = _hint(args, res, actor)
         if h:
@@ -425,7 +429,7 @@ def run(argv=None):
 
 def _hint(a, res, actor):
     c = a.cmd
-    if c == "go":
+    if c in ("go", "plan"):
         return None
     if c == "register":
         return HINTS["register"].format(name=res["name"])
@@ -540,6 +544,8 @@ def dispatch(conn, a, actor):
         return core.completed(conn, a.project, None if a.since == "all" else a.since)
     if c == "go":
         return core.go(conn, os.getcwd(), actor, a.project, a.role)
+    if c == "plan":
+        return core.plan(conn, os.getcwd(), actor, a.project)
     if c == "next":
         return core.next_item(conn, a.project, a.unblocks, a.claim, actor, a.limit, a.near, a.mine)
     if c == "claim":
@@ -605,6 +611,81 @@ def dispatch(conn, a, actor):
             return core.config_set(conn, a.key, a.value, a.project, a.item, a.agent, actor)
         return core.config_unset(conn, a.key, a.project, a.item, a.agent, actor)
     raise RiverError(f"unknown command {c}")
+
+
+def render_status(res):
+    rows = res["projects"]
+    if not rows:
+        print("(no projects: river project add <name>)")
+    else:
+        w = max(4, *(len(p["project"]) for p in rows))
+        print(f"{'project':<{w}}  {'done':>4} {'open':>4} {'ready':>5} {'working':>7} {'human':>5} {'blocked':>7}")
+        for p in rows:
+            print(f"{p['project']:<{w}}  {p['done']:>4} {p['open']:>4} {p['ready']:>5} {p['in_progress']:>7} "
+                  f"{p['human_waiting']:>5} {p['blocked']:>7}" + (f"  [{p['target']}]" if p["target"] else ""))
+    print()
+    print(f"Recently done ({len(res['recent'])}):" if res["recent"] else "Recently done: nothing yet")
+    for it in res["recent"]:
+        by = f" by {it['by_agent']}" if it["by_agent"] not in (None, "?") else ""
+        print(f"  {it['closed_at'][:16].replace('T', ' ')}  #{it['id']:<4} [{it['project']}] {_cut(it['title'])}{by}")
+    print()
+    print("Working now:" if res["agents"] else "Working now: nobody registered")
+    for ag in res["agents"]:
+        holds = ", ".join(f"#{h['id']} {_cut(h['title'], 60)}" for h in ag["holds"]) or "nothing"
+        owns = f"; owns {', '.join(ag['owns'])}" if ag["owns"] else ""
+        print(f"  {ag['name']} ({ag['kind']}, {ag['state']}): {holds}{owns}")
+    if res["human_waiting"]:
+        print()
+        print("Waiting on a human:")
+        for h in res["human_waiting"]:
+            print(f"  #{h['id']:<4} [{h['project']}] {_cut(h['title'])}")
+    print()
+    print(f"Open slots: {res['spare_slots']}   sessions with nothing to do: {res['excess_sessions']}")
+    for adv in res["advice"]:
+        print(" -", adv["text"])
+
+
+PLAN_RULES = """You are a PLANNER. Talk with the user about what they want done, then write it into the queue.
+Change the plan only; do not take or do the work (claims refuse for this session).
+  Projects:      {r} project add <name> --description "..." [--path <dir>] [--target <t>]   (describe, rank, target)
+  Items:         {r} add <project> "<title>" --doer ai|human --context "..." --touches <files> --check "<cmd>"
+  Order:         {r} dep <id> --on <id> [--kind feeds|conflicts]   Importance: {r} prio <id> 0 (on the outcome only)
+  Fix:           {r} edit <id> ...   {r} move <id> --before <id>   {r} drop <id>   {r} blocked <id> --reason "..."
+  Progress:      river status   river log --since 7d   river blockers <id>
+Ask the user about each open question below that matters to what they want. The full guide: river guide planner
+When the user wants work done in this session instead: {r} go"""
+
+
+def render_plan(b):
+    me = b["agent"]
+    r = f"river --as {me}"
+    out = [f"You are river agent {me}. Role: PLANNER."
+           + (f" Focus: {', '.join(b['projects'])}." if b["projects"] else " Focus: every project.")]
+    if b["new_name"]:
+        out.append(f"Your shell may not keep environment variables, so pass --as {me} on every river command.")
+    out += ["", PLAN_RULES.format(r=r), "", "OVERVIEW"]
+    print("\n".join(out))
+    render_status(b["status"])
+    q = b["questions"]
+    out = ["", "OPEN QUESTIONS"]
+    def section(title, rows, fmt, limit=10):
+        if not rows:
+            return
+        out.append(f"{title} ({len(rows)}):")
+        out.extend("  " + fmt(x) for x in rows[:limit])
+        if len(rows) > limit:
+            out.append(f"  ... {len(rows) - limit} more")
+    section("Projects with no description", q["projects_without_description"],
+            lambda n: f"{n}   ({r} project describe {n} \"...\")")
+    section("Stuck on something outside the queue", q["stuck"],
+            lambda x: f"#{x['id']:<4} [{x['project']}] {_cut(x['title'], 60)}: {x['reason']}"
+                      + (f" (holds up {x['holds_up']})" if x["holds_up"] else ""))
+    section("Waiting on a human", q["human_waiting"], lambda x: f"#{x['id']:<4} [{x['project']}] {_cut(x['title'])}")
+    section("Items with no notes or context", q["items_without_notes"],
+            lambda x: f"#{x['id']:<4} [{x['project']}] {_cut(x['title'])}")
+    if len(out) == 2:
+        out.append("(none)")
+    print("\n".join(out))
 
 
 def render_go(b):
@@ -687,6 +768,8 @@ def render(a, res):
     c = a.cmd
     if c == "go":
         return render_go(res)
+    if c == "plan":
+        return render_plan(res)
     if c == "project":
         if isinstance(res, dict) and "ready_count" in res:
             print(f"{res['name']} (rank {res['rank']})")
@@ -753,36 +836,7 @@ def render(a, res):
         _print_tree(res)
         return
     if c == "status":
-        rows = res["projects"]
-        if not rows:
-            print("(no projects: river project add <name>)")
-        else:
-            w = max(4, *(len(p["project"]) for p in rows))
-            print(f"{'project':<{w}}  {'done':>4} {'open':>4} {'ready':>5} {'working':>7} {'human':>5} {'blocked':>7}")
-            for p in rows:
-                print(f"{p['project']:<{w}}  {p['done']:>4} {p['open']:>4} {p['ready']:>5} {p['in_progress']:>7} "
-                      f"{p['human_waiting']:>5} {p['blocked']:>7}" + (f"  [{p['target']}]" if p["target"] else ""))
-        print()
-        print(f"Recently done ({len(res['recent'])}):" if res["recent"] else "Recently done: nothing yet")
-        for it in res["recent"]:
-            by = f" by {it['by_agent']}" if it["by_agent"] not in (None, "?") else ""
-            print(f"  {it['closed_at'][:16].replace('T', ' ')}  #{it['id']:<4} [{it['project']}] {_cut(it['title'])}{by}")
-        print()
-        print("Working now:" if res["agents"] else "Working now: nobody registered")
-        for ag in res["agents"]:
-            holds = ", ".join(f"#{h['id']} {_cut(h['title'], 60)}" for h in ag["holds"]) or "nothing"
-            owns = f"; owns {', '.join(ag['owns'])}" if ag["owns"] else ""
-            print(f"  {ag['name']} ({ag['kind']}, {ag['state']}): {holds}{owns}")
-        if res["human_waiting"]:
-            print()
-            print("Waiting on a human:")
-            for h in res["human_waiting"]:
-                print(f"  #{h['id']:<4} [{h['project']}] {_cut(h['title'])}")
-        print()
-        print(f"Open slots: {res['spare_slots']}   sessions with nothing to do: {res['excess_sessions']}")
-        for adv in res["advice"]:
-            print(" -", adv["text"])
-        return
+        return render_status(res)
     if c == "log":
         window = f"last {res['since']}" if res["since"] else "all time"
         if not res["items"]:

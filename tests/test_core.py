@@ -617,5 +617,32 @@ class Ship(Base):
             core.ship(self.c, d["id"], "dev")
 
 
+class Plan(Base):
+    def test_plan_brief_refuses_claims_and_go_switches_back(self):
+        core.project_add(self.c, "a", notes="thing")
+        core.project_add(self.c, "b")
+        x = self.add("a", "x")
+        b = core.plan(self.c, self.dir.name)
+        me = b["agent"]
+        self.assertTrue(me.startswith("planner-"))
+        q = b["questions"]
+        self.assertEqual(q["projects_without_description"], ["b"])
+        self.assertEqual([i["id"] for i in q["items_without_notes"]], [x])
+        self.assertEqual(core.agent_status(self.c, me)["role"], "planner")
+        self.assertEqual(core.capacity(self.c)["agents_idle"], [])
+        with self.assertRaises(RiverError):
+            core.claim(self.c, x, me)
+        core.project_path(self.c, "a", self.dir.name)
+        g = core.go(self.c, self.dir.name, me)
+        self.assertEqual((g["role"], g["item"]["id"]), ("worker", x))
+
+    def test_plan_refuses_a_session_that_holds_work(self):
+        core.project_add(self.c, "a")
+        core.register(self.c, "ag")
+        core.claim(self.c, self.add("a", "x"), "ag")
+        with self.assertRaises(RiverError):
+            core.plan(self.c, self.dir.name, "ag")
+
+
 if __name__ == "__main__":
     unittest.main()
