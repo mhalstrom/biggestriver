@@ -46,6 +46,12 @@ DEFAULT_SETTINGS = {
     "ntfy_url": "https://ntfy.sh",
     "ntfy_topic": "",
     "ntfy_token": "",
+    "email_to": "",
+    "email_from": "",
+    "smtp_host": "",
+    "smtp_port": "587",
+    "smtp_user": "",
+    "email_batch_window": "10m",
 }
 
 SCHEMA = """
@@ -321,11 +327,14 @@ def config_set(conn, key, value, project=None, item=None, agent=None, actor=None
         raise RiverError(f"unknown setting {key!r}; known: {', '.join(sorted(DEFAULT_SETTINGS))}")
     if key.endswith(("_ttl", "_after", "_interval", "_window")):
         parse_duration(value)
-    elif key in ("keep_prereq_limit", "replan_threshold", "max_leases", "serve_port"):
+    elif key in ("keep_prereq_limit", "replan_threshold", "max_leases", "serve_port", "smtp_port"):
         if not value.isdigit():
             raise RiverError(f"{key} takes a whole number")
     elif key == "default_prerequisite_mode" and value not in ("keep", "release"):
         raise RiverError("default_prerequisite_mode is keep or release")
+    elif key in ("email_to", "email_from") and value and not all(
+            re.match(r"^[^@\s,]+@[^@\s,]+\.[^@\s,]+$", x.strip()) for x in value.split(",")):
+        raise RiverError(f"{key} is an email address" + (" (a comma list is fine)" if key == "email_to" else ""))
     elif key == "ntfy_url" and not re.match(r"^https?://[^\s/]+", value):
         raise RiverError("ntfy_url is the server address, for example https://ntfy.sh")
     elif key == "ntfy_topic" and value and not re.match(r"^[A-Za-z0-9_-]{1,64}$", value):
