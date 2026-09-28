@@ -696,6 +696,27 @@ class Plan(Base):
             core.plan(self.c, self.dir.name, "ag")
 
 
+class WhoFile(Base):
+    def test_who_file_matches_held_touches(self):
+        root = self.dir.name
+        core.project_add(self.c, "a", path=root)
+        core.register(self.c, "ag")
+        core.register(self.c, "bo")
+        x = core.item_add(self.c, "a", "core work", actor="ag", touches="river/core.py, tests/")["id"]
+        y = core.item_add(self.c, "a", "page work", actor="bo", touches="river/static/index.html")["id"]
+        core.item_add(self.c, "a", "open, not held", actor="bo", touches="river/core.py")
+        core.claim(self.c, x, "ag")
+        core.claim(self.c, y, "bo")
+        names = lambda f, cwd=None: [(a["name"], [t["id"] for t in a["touching"]]) for a in core.who(self.c, file=f, cwd=cwd)]
+        self.assertEqual(names("river/core.py"), [("ag", [x])])
+        self.assertEqual(names("tests/test_core.py"), [("ag", [x])])  # inside a touched directory
+        self.assertEqual(names("river"), [("ag", [x]), ("bo", [y])])  # a directory holds touched files
+        self.assertEqual(names(os.path.join(root, "river", "core.py")), [("ag", [x])])
+        self.assertEqual(names("core.py", cwd=os.path.join(root, "river")), [("ag", [x])])
+        self.assertEqual(names("/elsewhere/river/core.py"), [])
+        self.assertEqual(names("README.md"), [])
+
+
 class KeepRelease(Base):
     def setUp(self):
         super().setUp()

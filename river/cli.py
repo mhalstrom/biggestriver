@@ -421,6 +421,7 @@ def build_parser():
     x = sub.add_parser("unregister", help="remove an agent that holds nothing"); x.add_argument("name")
     x = sub.add_parser("note", help="set your status note"); x.add_argument("text")
     x = sub.add_parser("who", help="who is doing what"); x.add_argument("--item", type=int); x.add_argument("--project")
+    x.add_argument("--file", help="only agents whose held items touch this file or directory")
     sub.add_parser("heartbeat", help="renew your leases")
     sub.add_parser("capacity", help="how many agent sessions the graph can use now")
 
@@ -732,7 +733,7 @@ def dispatch(conn, a, actor):
             raise RiverError("set RIVER_AGENT or pass --as <name>")
         return core.agent_note(conn, actor, a.text)
     if c == "who":
-        return core.who(conn, a.item, a.project)
+        return core.who(conn, a.item, a.project, a.file, os.getcwd())
     if c == "heartbeat":
         return {"ok": True}
     if c == "capacity":
@@ -1123,6 +1124,8 @@ def render(a, res):
             note = f" — {ag['note']}" if ag["note"] else ""
             print(f"{ag['name']} ({ag['kind']}, {ag['state']}){note}\n    holds: {holds}"
                   + (f"\n    owns: {', '.join(o['name'] for o in ag['owns'])}" if ag.get("owns") else ""))
+            for t in ag.get("touching", []):
+                print(f"    touches: #{t['id']} {', '.join(t['paths'])}")
         return
     if c == "capacity":
         print(f"Ready for agents: {len(res['ready_for_agents'])}   ready for humans: {len(res['ready_for_humans'])}   "

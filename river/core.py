@@ -1731,8 +1731,42 @@ def agent_status(conn, name):
     return a
 
 
-def who(conn, item=None, project=None):
+def _rel_path(path, root, cwd=None):
+    """A path as the touches of a project in `root` write it: relative, no './'. A relative path is
+    taken from `cwd` when that lies inside the project, else as already relative to the project."""
+    p = os.path.expanduser(path)
+    r = os.path.realpath(os.path.expanduser(root)) if root else None
+    inside = lambda q: q == r or q.startswith(r.rstrip(os.sep) + os.sep)
+    if not os.path.isabs(p) and cwd and r and inside(os.path.realpath(os.path.join(cwd, p))):
+        p = os.path.join(cwd, p)
+    if os.path.isabs(p):
+        p = os.path.realpath(p)
+        if not r or not inside(p):
+            return None
+        p = os.path.relpath(p, r)
+    p = os.path.normpath(p)
+    return "" if p == "." else p
+
+
+def who(conn, item=None, project=None, file=None, cwd=None):
+    """Every agent and what it holds; or only the holder of an item, the agents in a project, or the
+    agents whose held items touch a file or directory (each with the matching `touching` paths)."""
     agents = [agent_status(conn, r["name"]) for r in conn.execute("SELECT name FROM agents ORDER BY name")]
+    if file is not None:
+        rows = conn.execute("SELECT i.id, i.title, i.assignee, i.touches, p.path FROM items i "
+                            "JOIN projects p ON p.id=i.project_id "
+                            "WHERE i.status IN ('in_progress','held') AND i.touches<>''").fetchall()
+        by = {}
+        for r in rows:
+            rel = _rel_path(file, r["path"], cwd)
+            if rel is None:
+                continue
+            hit = [t for t in touches_list(r["touches"]) if rel == "" or _paths_overlap(rel, t)]
+            if hit:
+                by.setdefault(r["assignee"], []).append({"id": r["id"], "title": r["title"], "paths": hit})
+        for a in agents:
+            a["touching"] = by.get(a["name"], [])
+        return [a for a in agents if a["touching"]]
     if item is not None:
         it = _item(conn, item)
         return [a for a in agents if a["name"] == it["assignee"]]

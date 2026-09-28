@@ -157,6 +157,8 @@ example when your lease expired.
 ## Looking around
 
 - `river who`: every agent and person, and what each one holds.
+  `river who --file <path>`: who holds an item that touches that file or directory
+  (from each item's `--touches`); check it before you edit a shared file.
 - `river blockers <id>`: the tree of open work an item waits on, with holders.
 - `river capacity`: ready work versus active sessions.
 - `river list --project <name>`: open items in order.
