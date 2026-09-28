@@ -28,7 +28,7 @@ xattr -dr com.apple.quarantine "/Applications/Biggest River.app"
 
 This command removes the macOS download check for this app only. Do it only for an app that you downloaded from this page.
 
-If macOS says that the app "is damaged", you have v0.1.2 or v0.1.3. Move that app to the Trash and download this release.
+If macOS says that the app "is damaged", you have an older copy. Move that app to the Trash and download this release.
 
 ## Open the app on Windows
 
