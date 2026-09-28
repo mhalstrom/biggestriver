@@ -916,6 +916,72 @@ class Goals(Base):
         self.assertIn("goal g1 expired", core.inbox(self.c, "ag")[0]["body"].replace("ownership of ", ""))
 
 
+class GoalOwners(Base):
+    def setUp(self):
+        super().setUp()
+        core.project_add(self.c, "shop", path=self.dir.name)
+        for n in ("ag", "bo", "cy"):
+            core.register(self.c, n)
+
+    def go(self, who):
+        return core.go(self.c, self.dir.name, actor=who)
+
+    def test_owner_takes_goal_items_then_unblockers_then_judges_then_next_goal(self):
+        core.goal_add(self.c, "shop", "checkout", "customers can pay", "a test order succeeds", "t")
+        core.goal_add(self.c, "shop", "speed", "fast pages", actor="t")
+        pre = core.item_add(self.c, "shop", "db index")["id"]  # outside the goal
+        pay = core.item_add(self.c, "shop", "pay button", after=[pre], goals=["checkout"])["id"]
+        b = self.go("ag")  # takes the top free goal; its only item waits, so it takes the unblocker
+        self.assertEqual((b["role"], b.get("took_goal"), b["item"]["id"]), ("owner", True, pre))
+        self.assertEqual(core.goal_show(self.c, "checkout")["owner"], "ag")
+        core.done(self.c, pre, "ok", "ag")
+        b = self.go("ag")
+        self.assertEqual((b["role"], b["item"]["id"]), ("owner", pay))
+        core.done(self.c, pay, "ok", "ag")
+        b = self.go("ag")
+        self.assertEqual((b["role"], b["item"], b["goal_action"]), ("owner", None, "judge"))
+        core.goal_done(self.c, "checkout", "orders work", "ag")
+        b = self.go("ag")
+        self.assertEqual((b["goal"]["name"], b.get("took_goal")), ("speed", True))
+        self.assertEqual(b["goal_action"], "judge")  # a goal with no items is not complete until its owner says so
+        b = self.go("bo")  # no free goal left: today's worker behavior
+        self.assertNotEqual(b["role"], "owner")
+
+    def test_waiting_goal_does_other_work_and_names_the_blocker_owner(self):
+        core.goal_add(self.c, "shop", "g1", "one", actor="t")
+        core.goal_add(self.c, "shop", "g2", "two", actor="t")
+        core.goal_own(self.c, "g2", "bo")
+        blocker = core.item_add(self.c, "shop", "shared lib", goals=["g2"])["id"]
+        mine = core.item_add(self.c, "shop", "feature", after=[blocker], goals=["g1"])["id"]
+        other = core.item_add(self.c, "shop", "unrelated")["id"]
+        core.claim(self.c, blocker, "bo")
+        b = self.go("ag")  # owns g1 now; its item waits on bo's work, so it takes other ready work
+        self.assertEqual((b["goal"]["name"], b["role"], b["item"]["id"]), ("g1", "worker", other))
+        held = b["goal"]["blockers_held"]
+        self.assertEqual([(x["id"], x["assignee"], x["goal"], x["goal_owner"]) for x in held], [(blocker, "bo", "g2", "bo")])
+        m = core.message(self.c, "question", "when is the lib ready?", goal="g2", actor="ag")[0]
+        self.assertEqual(m["to_agent"], "bo")
+        self.assertEqual(core.goal_show(self.c, "g1")["items_open"], [mine])
+
+    def test_owner_hears_when_others_add_claim_or_finish_its_items(self):
+        core.goal_add(self.c, "shop", "g1", actor="t")
+        core.goal_own(self.c, "g1", "ag")
+        x = core.item_add(self.c, "shop", "task", actor="bo", goals=["g1"])["id"]
+        core.claim(self.c, x, "bo")
+        core.done(self.c, x, "shipped", "bo")
+        notes = [m["body"] for m in core.inbox(self.c, "ag") if m["kind"] == "notice"]
+        self.assertEqual([n.split(" #")[0] for n in notes], ["bo added", "bo claimed", "bo finished"])
+        core.goal_give(self.c, "g1", "cy", "ag")
+        self.assertEqual(core.goal_show(self.c, "g1")["owner"], "cy")
+
+    def test_goal_frees_when_owner_is_away(self):
+        core.goal_add(self.c, "shop", "g1", actor="t")
+        core.goal_own(self.c, "g1", "ag")
+        self.c.execute("UPDATE goals SET owner_expires_at=?", (core.iso(core.now() - timedelta(seconds=1)),))
+        core.activity(self.c, "bo")
+        self.assertIsNone(core.goal_show(self.c, "g1")["owner"])
+
+
 class Sessions(Base):
     def test_session_name_recorded_and_shown(self):
         core.project_add(self.c, "a", path=self.dir.name)

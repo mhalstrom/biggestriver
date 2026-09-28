@@ -683,6 +683,21 @@ def _tag(conn, item_id, goal, actor):
     g = _goal(conn, goal)
     if conn.execute("INSERT OR IGNORE INTO item_goals(item_id, goal_id) VALUES (?,?)", (item_id, g["id"])).rowcount:
         _event(conn, item_id, actor, f"tagged goal {goal}")
+        if g["owner"] and actor and g["owner"] != actor:
+            it = _item(conn, item_id)
+            _send(conn, "notice", "river", f"{actor} added #{item_id} {it['title']} to your goal {goal}",
+                  to=g["owner"], item_id=item_id)
+
+
+def _goal_notice(conn, item_id, actor, verb, detail=None):
+    """Tell each goal's owner when someone else claims or finishes an item tagged with it."""
+    for g in conn.execute("SELECT g.name, g.owner FROM item_goals ig JOIN goals g ON g.id=ig.goal_id "
+                          "WHERE ig.item_id=? AND g.owner IS NOT NULL AND g.status='open'", (item_id,)).fetchall():
+        if actor and g["owner"] != actor:
+            it = _item(conn, item_id)
+            _send(conn, "notice", "river", f"{actor} {verb} #{item_id} {it['title']} (your goal {g['name']})"
+                  + (f": {detail}" if detail else ""),
+                  to=g["owner"], item_id=item_id)
 
 
 def _goal_view(conn, g, ann=None):
@@ -766,7 +781,8 @@ def goal_edit(conn, name, outcome=None, done_when=None, new_name=None, actor=Non
 
 
 def goal_own(conn, name, actor=None):
-    """Own a goal: create and take the items that reach it. One owner at a time, on a lease (owner_ttl)."""
+    """Own a goal: create and take the items that reach it. One owner at a time; the ownership frees
+    when the owner is away (away_after without a river command)."""
     if not actor:
         raise RiverError("owning a goal needs an agent name: set RIVER_AGENT or pass --as <name>")
     with tx(conn):
@@ -777,7 +793,7 @@ def goal_own(conn, name, actor=None):
         if g["owner"] and g["owner"] != actor:
             raise RiverError(f"goal {name} is owned by {g['owner']}; ask them (river send question --to {g['owner']} ...), "
                              f"or take another: river goal list")
-        ttl = parse_duration(setting(conn, "owner_ttl", agent=actor))
+        ttl = parse_duration(setting(conn, "away_after", agent=actor))
         conn.execute("UPDATE goals SET owner=?, owner_expires_at=? WHERE id=?", (actor, iso(now() + ttl), g["id"]))
         if g["owner"] != actor:
             _event(conn, None, actor, f"owns goal {name}")
@@ -792,6 +808,31 @@ def goal_release(conn, name, actor=None):
         conn.execute("UPDATE goals SET owner=NULL, owner_expires_at=NULL WHERE id=?", (g["id"],))
         _event(conn, None, actor, f"released goal {name}")
     return goal_show(conn, name)
+
+
+def goal_give(conn, name, to, actor=None):
+    """Hand a goal you own to another agent; they get a notice."""
+    with tx(conn):
+        g = _goal(conn, name)
+        if g["owner"] != actor:
+            raise RiverError(f"goal {name} is " + (f"owned by {g['owner']}" if g["owner"] else "not owned")
+                             + "; only its owner gives it")
+        rec = _agent(conn, to)
+        if to == actor:
+            raise RiverError("you own it already")
+        ttl = parse_duration(setting(conn, "away_after", agent=to))
+        conn.execute("UPDATE goals SET owner=?, owner_expires_at=? WHERE id=?", (rec["name"], iso(now() + ttl), g["id"]))
+        _event(conn, None, actor, f"gave goal {name} to {to}")
+        _send(conn, "notice", actor, f"{actor} gave you goal {name}: {g['outcome']} (river goal show {name})", to=to)
+    return goal_show(conn, name)
+
+
+def goal_owner(conn, name):
+    """The owner of a goal, for messages sent --goal <name>."""
+    g = _goal(conn, name)
+    if not g["owner"]:
+        raise RiverError(f"nobody owns goal {name}; message an item holder instead (river goal show {name})")
+    return g["owner"]
 
 
 def goal_done(conn, name, result, actor=None, drop_open=False):
@@ -1442,10 +1483,12 @@ def decline(conn, item_id, note=None, actor=None):
     return item_show(conn, item_id)
 
 
-def offer(conn, body, item, to=None, actor=None):
+def offer(conn, body, item, to=None, actor=None, goal=None):
     """Offer help to the agent that holds an item you are blocked on (design 7.5 step 4)."""
     if not actor:
         raise RiverError("offering needs an agent name: set RIVER_AGENT or pass --as <name>")
+    if goal is not None and to is None:
+        to = goal_owner(conn, goal)
     with tx(conn):
         it = _item(conn, item)
         to = to or it["assignee"] or it["reserved_for"]
@@ -1578,11 +1621,13 @@ def _holder_of(conn, item_id):
     return it["assignee"]
 
 
-def message(conn, kind, body, to=None, holder_of=None, item=None, file=None, cwd=None, actor=None):
+def message(conn, kind, body, to=None, holder_of=None, item=None, file=None, cwd=None, actor=None, goal=None):
     """The shortcuts river alert / ask / note (design 7.4): to an agent, to the holder of an item, or
     (questions) to every agent whose held items touch a file. Returns the messages sent."""
-    if sum(x is not None for x in (to, holder_of, file)) > 1:
-        raise RiverError("give one of: an agent name, --holder-of <id>, or --file <path>")
+    if sum(x is not None for x in (to, holder_of, file, goal)) > 1:
+        raise RiverError("give one of: an agent name, --holder-of <id>, --goal <name>, or --file <path>")
+    if goal is not None:
+        to = goal_owner(conn, goal)
     if file is not None:
         if kind != "question":
             raise RiverError("--file is for questions: river ask --file <path> \"...\"")
@@ -1905,7 +1950,9 @@ def _touch_agent(conn, actor):
         conn.execute("UPDATE items SET hold_expires_at=? WHERE id=?", (iso(t + ttl), r["id"]))
     owner_ttl = parse_duration(setting(conn, "owner_ttl", agent=actor))
     conn.execute("UPDATE targets SET owner_expires_at=? WHERE owner=?", (iso(t + owner_ttl), actor))
-    conn.execute("UPDATE goals SET owner_expires_at=? WHERE owner=? AND status='open'", (iso(t + owner_ttl), actor))
+    # A goal owner keeps the goal while it is active; it frees when the owner is away (away_after).
+    away = parse_duration(setting(conn, "away_after", agent=actor))
+    conn.execute("UPDATE goals SET owner_expires_at=? WHERE owner=? AND status='open'", (iso(t + away), actor))
     for r in conn.execute("SELECT id FROM items WHERE assignee=? AND status='in_progress'", (actor,)).fetchall():
         ttl = parse_duration(setting(conn, "lease_ttl", item_id=r["id"], agent=actor))
         conn.execute("UPDATE items SET lease_expires_at=? WHERE id=?", (iso(t + ttl), r["id"]))
@@ -2324,6 +2371,7 @@ def _claim_row(conn, item_id, actor):
         conn.execute("UPDATE messages SET state='accepted', read_at=COALESCE(read_at, ?) "
                      "WHERE kind='alert' AND item_id=? AND to_agent=? AND state='open'", (iso(t), item_id, actor))
     _event(conn, item_id, actor, f"claimed (lease {setting(conn, 'lease_ttl', item_id=item_id, agent=actor)})")
+    _goal_notice(conn, item_id, actor, "claimed")
     return ag
 
 
@@ -2390,6 +2438,7 @@ def _close(conn, item_id, status, actor, output=None, note=None):
                      "reserved_for=NULL, output=COALESCE(?, output) WHERE id=?",
                      (status, iso(now()), output, it["id"]))
         _event(conn, it["id"], actor, status + (f": {output}" if output else ""))
+        _goal_notice(conn, it["id"], actor, "finished" if status == "done" else status, output)
         newly, resumed = [], []
         if status in CLOSED_STATES:
             resumed = _resume_holds(conn, it["id"])
@@ -3034,7 +3083,37 @@ def state(conn):
 
 # ---------------------------------------------------------------- go
 
-ROLES = ("deployer", "worker", "unblocker", "planner", "idle")
+ROLES = ("deployer", "owner", "worker", "unblocker", "planner", "idle")
+
+
+def _owned_goal(conn, actor, names):
+    """The first open goal the actor owns, in these projects if any of them have one."""
+    rows = conn.execute("SELECT g.* FROM goals g JOIN projects p ON p.id=g.project_id WHERE g.owner=? AND "
+                        "g.status='open' ORDER BY p.rank, g.rank, g.id", (actor,)).fetchall()
+    here = [g for g in rows if _project_name(conn, g["project_id"]) in names]
+    return (here or rows or [None])[0]
+
+
+def _goal_brief(conn, name, actor):
+    """What a goal owner needs in the briefing: the outcome, the test, its items, and who holds its blockers."""
+    ann = annotate(conn)
+    g = _goal_view(conn, _goal(conn, name), ann)
+    open_items = sorted((ann[i] for i in g["items_open"]), key=lambda a: a["sort_key"])
+    blockers, seen = [], set()
+    for a in open_items:
+        for b in [a["id"]] + sorted(_prereq_closure(ann, a["id"])):
+            x = ann[b]
+            if b in seen or x["status"] not in ("in_progress", "held") or x["assignee"] in (None, actor):
+                continue
+            seen.add(b)
+            other = [n for n in x["goals"] if n != name]
+            owner = conn.execute("SELECT owner FROM goals WHERE name=?", (other[0],)).fetchone()["owner"] if other else None
+            blockers.append({"id": b, "title": x["title"], "assignee": x["assignee"],
+                             "goal": other[0] if other else None, "goal_owner": owner})
+    return {"name": g["name"], "project": g["project"], "outcome": g["outcome"], "done_when": g["done_when"],
+            "items_open": [{"id": a["id"], "title": a["title"], "status": a["status"], "ready": a["ready"],
+                            "assignee": a["assignee"], "doer": a["doer"]} for a in open_items],
+            "items_done": len(g["items_done"]), "blockers_held": blockers}
 
 
 def go(conn, cwd, actor=None, project=None, role=None, session=None):
@@ -3087,6 +3166,10 @@ def go(conn, cwd, actor=None, project=None, role=None, session=None):
              "session": _agent(conn, actor)["session"],
              "messages": unread(conn, actor),
              "humans": [r["name"] for r in conn.execute("SELECT name FROM agents WHERE kind='human' ORDER BY name")]}
+
+    mine_goal = _owned_goal(conn, actor, names)
+    if mine_goal is not None:
+        brief["goal"] = _goal_brief(conn, mine_goal["name"], actor)
 
     # Resume: an item already held.
     held = conn.execute("SELECT id FROM items WHERE assignee=? AND status IN ('in_progress','held') "
@@ -3150,10 +3233,57 @@ def go(conn, cwd, actor=None, project=None, role=None, session=None):
                          why=brief.get("claim_refused") or "no deploy item is ready for the targets you own")
             _set_role_note(conn, actor, "idle", None)
             return brief
+    if role in (None, "owner", "worker"):
+        g = _owned_goal(conn, actor, names)
+        if g is None and role in (None, "owner"):
+            # Agents own outcomes: take the highest-ranked open goal nobody owns.
+            for f in conn.execute(f"SELECT g.name FROM goals g JOIN projects p ON p.id=g.project_id WHERE g.status='open' "
+                                  f"AND g.owner IS NULL AND p.archived=0 AND p.name IN ({','.join('?' * len(names))}) "
+                                  f"ORDER BY p.rank, g.rank, g.id", names).fetchall():
+                try:
+                    goal_own(conn, f["name"], actor)
+                except RiverError as e:
+                    brief["claim_refused"] = str(e)
+                    continue
+                g = _goal(conn, f["name"])
+                brief["took_goal"] = True
+                break
+        if g is not None:
+            gb = brief["goal"] = _goal_brief(conn, g["name"], actor)
+            ann = annotate(conn)
+            tagged = sorted((a for a in ann.values() if g["name"] in a["goals"] and a["ready"] and a["doer"] != "human"
+                             and a["kind"] != "deploy" and a["reserved_for"] in (None, actor)), key=lambda a: a["sort_key"])
+            for a in tagged:  # (1) the next ready item of the goal
+                try:
+                    item = claim(conn, a["id"], actor)
+                except RiverError as e:
+                    brief["claim_refused"] = str(e)
+                    continue
+                brief.update(role="owner", item=item, why=f"#{item['id']} is the next ready item for your goal {g['name']}")
+                _set_role_note(conn, actor, "owner", item["id"])
+                return brief
+            for o in gb["items_open"]:  # (2) work outside the goal that unblocks it
+                item = try_claim(unblocks=str(o["id"]))
+                if item:
+                    brief.update(role="owner", item=item,
+                                 why=f"#{item['id']} unblocks #{o['id']} of your goal {g['name']}")
+                    _set_role_note(conn, actor, "owner", item["id"])
+                    return brief
+            if not gb["items_open"]:  # (3) nothing open: judge the outcome
+                brief.update(role="owner", item=None, goal_action="judge",
+                             why=f"your goal {g['name']} has no open items")
+                _set_role_note(conn, actor, "owner", None)
+                return brief
+            brief["goal_action"] = "wait"  # (4) its items wait on others: take other work meanwhile
+        elif role == "owner":
+            brief.update(role="idle", item=None, held_by_others=[], why="no goal here is free")
+            _set_role_note(conn, actor, "idle", None)
+            return brief
     if role in (None, "worker"):
         item = try_claim(project=area)
         if item:
-            brief.update(role="worker", item=item, why=f"#{item['id']} is the most important ready item in {area}")
+            brief.update(role="worker", item=item, why=f"#{item['id']} is the most important ready item in {area}"
+                         + ("; your goal waits on others meanwhile" if brief.get("goal_action") == "wait" else ""))
             _set_role_note(conn, actor, "worker", item["id"])
             return brief
     if role in (None, "unblocker"):
@@ -3169,6 +3299,11 @@ def go(conn, cwd, actor=None, project=None, role=None, session=None):
             _set_role_note(conn, actor, "unblocker", item["id"])
             return brief
 
+    if brief.get("goal_action") == "wait":
+        brief.update(role="owner", item=None,
+                     why=f"the open items of your goal {brief['goal']['name']} wait on other sessions or people")
+        _set_role_note(conn, actor, "owner", None)
+        return brief
     outside = [a for a in open_in_area if a["status"] == "open" and a["blocked_reason"]]
     held_by_others = [a for a in open_in_area if a["status"] in ("in_progress", "held")]
     needs_plan = not open_in_area or (not held_by_others and len(outside) == len([a for a in open_in_area if a["status"] == "open"]))

@@ -305,7 +305,10 @@ def build_parser():
     x = gls.add_parser("rank", help="move a goal among its project's goals (1 = first)"); x.add_argument("name"); x.add_argument("rank", type=int)
     x = gls.add_parser("edit"); x.add_argument("name"); x.add_argument("--outcome"); x.add_argument("--done-when", dest="done_when")
     x.add_argument("--rename")
-    x = gls.add_parser("own", help="own a goal: you create and take the items that reach it"); x.add_argument("name")
+    for verb in ("own", "take"):
+        x = gls.add_parser(verb, help="own a goal: you create and take the items that reach it"); x.add_argument("name")
+    x = gls.add_parser("give", help="hand a goal you own to another agent"); x.add_argument("name")
+    x.add_argument("--to", required=True)
     x = gls.add_parser("release", help="stop owning a goal"); x.add_argument("name")
     x = gls.add_parser("done", help="declare a goal complete (refused while its items are open)"); x.add_argument("name")
     x.add_argument("--result", required=True, help="one line: what the goal achieved")
@@ -442,6 +445,7 @@ def build_parser():
         x.add_argument("words", nargs="+", metavar="[agent] text")
         x.add_argument("--holder-of", type=int, help="send it to whoever holds this item")
         x.add_argument("--item", type=int, help="the item it is about (without an agent: its holder)")
+        x.add_argument("--goal", help="send it to the owner of this goal")
         if kind == "ask":
             x.add_argument("--file", help="ask every agent whose held items touch this file")
     x = sub.add_parser("decline", help="hand a pushed item back, or with --message say no to an offer or alert")
@@ -449,6 +453,7 @@ def build_parser():
     x.add_argument("--message", action="store_true", help="the id is a message (an offer or alert), not an item")
     x = sub.add_parser("offer", help="offer help to the agent that holds an item you are blocked on")
     x.add_argument("text"); x.add_argument("--item", type=int, required=True); x.add_argument("--to", help="default: its holder")
+    x.add_argument("--goal", help="send the offer to the owner of this goal instead")
     x = sub.add_parser("give", help="hand an item you hold (or that is reserved for you) to another agent")
     x.add_argument("id", type=int); x.add_argument("--to", required=True)
     x = sub.add_parser("split", help="add smaller prerequisites anyone can take; your item waits for them, still yours")
@@ -467,6 +472,7 @@ def build_parser():
     x.add_argument("kind", choices=core.SEND_KINDS); x.add_argument("text")
     x.add_argument("--to", help="agent name"); x.add_argument("--item", type=int, help="the item it is about; without --to it goes to the holder")
     x.add_argument("--reply", type=int, help="message id this replies to (goes to its sender)")
+    x.add_argument("--goal", help="send it to the owner of this goal")
     x = sub.add_parser("answer", help="answer a question"); x.add_argument("id", type=int); x.add_argument("text")
     x = sub.add_parser("inbox", help="your unread messages and questions waiting for your answer")
     x.add_argument("--all", action="store_true", help="read messages too")
@@ -484,6 +490,7 @@ def build_parser():
     x.add_argument("words", nargs="+", metavar="[agent] text")
     x.add_argument("--holder-of", type=int, help="send the note to whoever holds this item")
     x.add_argument("--item", type=int, help="the item it is about (without an agent: its holder)")
+    x.add_argument("--goal", help="send the note to the owner of this goal")
     x = sub.add_parser("who", help="who is doing what"); x.add_argument("--item", type=int); x.add_argument("--project")
     x.add_argument("--file", help="only agents whose held items touch this file or directory")
     sub.add_parser("heartbeat", help="renew your leases")
@@ -683,8 +690,10 @@ def dispatch(conn, a, actor):
             return core.goal_rank(conn, a.name, a.rank, actor)
         if g == "edit":
             return core.goal_edit(conn, a.name, a.outcome, a.done_when, a.rename, actor)
-        if g == "own":
+        if g in ("own", "take"):
             return core.goal_own(conn, a.name, actor)
+        if g == "give":
+            return core.goal_give(conn, a.name, a.to, actor)
         if g == "release":
             return core.goal_release(conn, a.name, actor)
         if g == "done":
@@ -799,18 +808,19 @@ def dispatch(conn, a, actor):
         if a.message:
             return core.accept_message(conn, a.id, actor)
         return core.accept(conn, a.id, actor)
-    if c in ("alert", "ask") or (c == "note" and (len(a.words) > 1 or a.holder_of or a.item)):
+    if c in ("alert", "ask") or (c == "note" and (len(a.words) > 1 or a.holder_of or a.item or a.goal)):
         if len(a.words) > 2:
             raise RiverError("put the text in quotes: river " + c + " [<agent>] \"...\"")
         to, text = (a.words[0], a.words[1]) if len(a.words) == 2 else (None, a.words[0])
         kind = {"ask": "question", "alert": "alert", "note": "note"}[c]
-        return core.message(conn, kind, text, to, a.holder_of, a.item, getattr(a, "file", None), os.getcwd(), actor)
+        return core.message(conn, kind, text, to, a.holder_of, a.item, getattr(a, "file", None), os.getcwd(), actor,
+                            a.goal)
     if c == "decline":
         if a.message:
             return core.decline_message(conn, a.id, a.note, actor)
         return core.decline(conn, a.id, a.note, actor)
     if c == "offer":
-        return core.offer(conn, a.text, a.item, a.to, actor)
+        return core.offer(conn, a.text, a.item, a.to, actor, a.goal)
     if c == "give":
         return core.give(conn, a.id, a.to, actor)
     if c == "split":
@@ -826,7 +836,8 @@ def dispatch(conn, a, actor):
     if c == "blockers":
         return core.blockers(conn, a.id)
     if c == "send":
-        return core.send(conn, a.kind, a.text, a.to, a.item, a.reply, actor)
+        return core.send(conn, a.kind, a.text, a.to or (core.goal_owner(conn, a.goal) if a.goal else None),
+                         a.item, a.reply, actor)
     if c == "answer":
         return core.answer(conn, a.id, a.text, actor)
     if c == "inbox":
@@ -975,6 +986,27 @@ def render_go(b):
         d = b["descriptions"].get(n)
         out.append(f"Project {n}: {d}" if d else f"Project {n}.")
     out.append("")
+    gb = b.get("goal")
+    if gb:
+        out.append(f"YOUR GOAL {gb['name']} [{gb['project']}]: {gb['outcome'] or '(no outcome written)'}"
+                   + ("   (you took it now: nobody owned it)" if b.get("took_goal") else ""))
+        if gb["done_when"]:
+            out.append(f"  done when: {gb['done_when']}")
+        def st(o):
+            return ("ready" if o["ready"] else o["status"].replace("_", " ")
+                    + (f" by {o['assignee']}" if o["assignee"] else "")) + ("; human" if o["doer"] == "human" else "")
+        out.append(f"  items: {gb['items_done']} done, {len(gb['items_open'])} open"
+                   + (": " + ", ".join(f"#{o['id']} {_cut(o['title'], 40)} ({st(o)})" for o in gb["items_open"][:6])
+                      if gb["items_open"] else ""))
+        for x in gb["blockers_held"][:5]:
+            to = (f"--goal {x['goal']}" if x["goal"] and x["goal_owner"] else f"--item {x['id']}")
+            out.append(f"  held by another session: #{x['id']} {_cut(x['title'], 40)} ({x['assignee']}"
+                       + (f"; goal {x['goal']}, " + (f"owner {x['goal_owner']}" if x["goal_owner"] else "no owner")
+                          if x["goal"] else "") + ")"
+                       + f"   ask: {r} ask \"...\" {to}   or offer help: {r} offer \"...\" --item {x['id']}")
+        out.append(f"  You own this outcome: add the items it needs ({r} add \"<title>\" tags them with it), take them, "
+                   f"and when done-when holds: {r} goal done {gb['name']} --result \"<one line>\"")
+        out.append("")
     it = b.get("item")
     if it:
         out.append(f"YOUR ITEM #{it['id']}: {it['title']}")
@@ -1037,6 +1069,16 @@ def render_go(b):
         ]
         if b.get("auto_continue"):
             out.append("Keep taking items until go gives you none or you need the user; then report what you finished.")
+    elif b["role"] == "owner":
+        if b.get("goal_action") == "judge":
+            out += ["YOUR GOAL HAS NO OPEN ITEMS. Check its done-when test yourself.",
+                    f"  It holds:        {r} goal done {gb['name']} --result \"<what it achieved>\"",
+                    f"  It does not:     add the next items ({r} add \"<title>\" --context \"...\"), then {r} go",
+                    f"  Not yours to do: {r} goal release {gb['name']}"]
+        else:
+            out += ["YOUR GOAL WAITS ON OTHERS, and nothing else here is ready for you.",
+                    "  Ask or offer help to the holders above, then run go again later.",
+                    f"  Or hand it on: {r} goal give {gb['name']} --to <agent>   or: {r} goal release {gb['name']}"]
     elif b["role"] == "planner":
         out.append("NO READY WORK. Your job: plan the project into items that agents and people can take.")
         if b.get("open_items"):
