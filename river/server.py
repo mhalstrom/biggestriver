@@ -219,16 +219,19 @@ KNOWN_AGENTS = [
 
 
 def _block_state(path):
-    from .cli import AGENT_SNIPPET
+    from .cli import AGENT_SNIPPET, _imports_agents
     if not path.exists():
         return "missing"
     text = path.read_text(errors="replace")
+    if path.name == "CLAUDE.md" and _imports_agents(text):
+        return _block_state(path.with_name("AGENTS.md"))  # Claude Code reads AGENTS.md through the import
     return "current" if AGENT_SNIPPET in text else "old" if "Biggest River" in text else "missing"
 
 
 def setup_status(conn):
     """What the setup guide shows: each check, and whether it is done."""
     import shutil
+    from .cli import instructions_layout
     folders = {}
     for p in core.project_list(conn):
         if p["path"]:
@@ -239,7 +242,8 @@ def setup_status(conn):
     return {
         "done": core.setting(conn, "setup_done") == "on",
         "folders": [{"path": d, "projects": names, "exists": Path(d).is_dir(),
-                     "claude_md": _block_state(Path(d, "CLAUDE.md")), "agents_md": _block_state(Path(d, "AGENTS.md"))}
+                     "claude_md": _block_state(Path(d, "CLAUDE.md")), "agents_md": _block_state(Path(d, "AGENTS.md")),
+                     "layout": instructions_layout(d) if Path(d).is_dir() else None}
                     for d, names in folders.items()],
         "projects_without_folder": [p["name"] for p in core.project_list(conn) if not p["path"]],
         "people": [r["name"] for r in conn.execute("SELECT name FROM agents WHERE kind='human' ORDER BY name")],
@@ -253,15 +257,16 @@ def setup_status(conn):
     }
 
 
-def setup_block(conn, path):
-    """Add or update the work queue block in CLAUDE.md and AGENTS.md of a registered project folder."""
-    from .cli import _append_block
+def setup_block(conn, path, move=None):
+    """Add or update the work queue block for every agent in a registered project folder (river init):
+    AGENTS.md holds it and CLAUDE.md imports it; move=True first moves the rules in CLAUDE.md to AGENTS.md."""
+    from .cli import setup_instructions
     folder = Path(path).expanduser().resolve()
     if folder not in {Path(p["path"]).resolve() for p in core.project_list(conn) if p["path"]}:
         raise RiverError(f"{path} is not the folder of a river project")
     if not folder.is_dir():
         raise RiverError(f"{path} does not exist")
-    return [_append_block(folder / f) for f in ("CLAUDE.md", "AGENTS.md")]
+    return setup_instructions(folder, move)
 
 
 def setup_skills():
@@ -340,7 +345,7 @@ OPS = {
     "offer": lambda c, a, who: core.offer(c, a["body"], int(a["item"]), a.get("to"), who),
     "give": lambda c, a, who: core.give(c, int(a["id"]), a["to"], who),
     "split": lambda c, a, who: core.split(c, int(a["id"]), [t for t in a["titles"] if t.strip()], who),
-    "setup_block": lambda c, a, who: setup_block(c, a["path"]),
+    "setup_block": lambda c, a, who: setup_block(c, a["path"], a.get("move")),
     "setup_skills": lambda c, a, who: setup_skills(),
     "setup_agent_add": lambda c, a, who: setup_agent_add(c, a["label"], who),
     "setup_ntfy": lambda c, a, who: setup_ntfy(c, who),

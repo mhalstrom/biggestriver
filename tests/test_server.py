@@ -197,6 +197,14 @@ class SetupGuide(unittest.TestCase):
         f = server.setup_status(self.c)["folders"][0]
         self.assertEqual((f["claude_md"], f["agents_md"]), ("current", "current"))
 
+    def test_block_fix_can_move_claude_rules_to_agents_md(self):
+        with open(os.path.join(self.folder, "CLAUDE.md"), "w") as f:
+            f.write("# Rules\n")
+        self.assertEqual(server.setup_status(self.c)["folders"][0]["layout"], "claude_only")
+        server.setup_block(self.c, self.folder, move=True)
+        f = server.setup_status(self.c)["folders"][0]
+        self.assertEqual((f["claude_md"], f["agents_md"], f["layout"]), ("current", "current", "shared"))
+
     def test_block_fix_refuses_a_folder_that_is_not_a_project(self):
         with self.assertRaises(RiverError):
             server.setup_block(self.c, self.dir.name)

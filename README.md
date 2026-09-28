@@ -78,9 +78,14 @@ river init --description "what this project covers and what context helps"
 ```
 
 This creates the project (named after the folder), links it to the folder, and
-adds a short block to `CLAUDE.md` (Claude Code) and `AGENTS.md` (Codex,
-OpenCode, and other agents) that tells agents to run `river go` when you say
-"go". Running `river init` again updates an older block. Then add work and start agents:
+adds a short block that tells agents to run `river go` when you say "go".
+Every agent reads one file: `AGENTS.md` (Codex, OpenCode, and other agents)
+holds the project rules and the block, and `CLAUDE.md` is the one line
+`@AGENTS.md`, which Claude Code reads as an import. When only `CLAUDE.md` holds
+your rules, `river init` asks whether to move them to `AGENTS.md`
+(`river init --move` or `--no-move` answers in advance). When both files hold
+their own rules, river adds the block to both and says that they differ.
+Running `river init` again updates an older block. Then add work and start agents:
 
 ```sh
 river add <project> "first item" --doer ai

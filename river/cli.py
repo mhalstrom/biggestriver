@@ -92,7 +92,8 @@ SETUP = """Setting up agents to use river
 
 """ + "\n".join("     " + line for line in AGENT_SNIPPET.splitlines()) + """
 
-   Or let river add it:  river setup-agent --append CLAUDE.md
+   Or let river add it:  river init   (AGENTS.md holds the rules and the block;
+   CLAUDE.md imports it with the line @AGENTS.md, so every agent reads one file)
 
 3. Claude Code only, optional: install the skills so they load when needed:
      ln -s <repo>/skills/river ~/.claude/skills/river
@@ -452,7 +453,10 @@ def build_parser():
     x = sub.add_parser("init", help="set up the current folder: link or create its project, add the agent block")
     x.add_argument("--project", help="project name (default: the folder name)")
     x.add_argument("--description", default="", help="what the project covers, for agents")
-    x.add_argument("--file", action="append", help="instructions file to add the block to (default CLAUDE.md and AGENTS.md)")
+    x.add_argument("--file", action="append", help="add the block to this file only (repeatable)")
+    x.add_argument("--move", action="store_true", default=None,
+                   help="move the rules in CLAUDE.md to AGENTS.md; CLAUDE.md becomes @AGENTS.md")
+    x.add_argument("--no-move", dest="move", action="store_false", help="keep CLAUDE.md and AGENTS.md apart")
     x.add_argument("--tracker", help="the outside tracker it uses: \"github owner/repo via gh\", \"jira PROJ via the Jira MCP server\"")
 
     x = sub.add_parser("go", help="start or continue an agent session: name, role, item, briefing")
@@ -771,6 +775,72 @@ def _append_block(f):
     return f"{f.name}: added the work queue block"
 
 
+def _imports_agents(text):
+    """CLAUDE.md that imports AGENTS.md (a line @AGENTS.md): Claude Code reads the same rules as other agents."""
+    return any(line.strip() == "@AGENTS.md" for line in text.splitlines())
+
+
+def _only_block(text):
+    for prev in (AGENT_SNIPPET, *OLD_SNIPPETS):
+        text = text.replace(prev, "")
+    return not text.strip()
+
+
+def instructions_layout(folder):
+    """How a folder's agent instructions are laid out:
+    shared: CLAUDE.md imports AGENTS.md, so every agent reads one file.
+    none: no rules (no file, or only the river block).  agents_only: the rules are in AGENTS.md.
+    claude_only: the rules are in CLAUDE.md, and AGENTS.md is missing or holds only the river block.
+    both: each file holds its own rules."""
+    c, a = Path(folder, "CLAUDE.md"), Path(folder, "AGENTS.md")
+    ct = c.read_text(errors="replace") if c.exists() else None
+    at = a.read_text(errors="replace") if a.exists() else None
+    if ct is not None and _imports_agents(ct):
+        return "shared"
+    c_rules = ct is not None and not _only_block(ct)
+    a_rules = at is not None and not _only_block(at)
+    return "both" if c_rules and a_rules else "claude_only" if c_rules else "agents_only" if a_rules else "none"
+
+
+MOVE_HINT = ("CLAUDE.md holds this folder's rules, but Codex and other agents read AGENTS.md and miss them. "
+             "To give every agent one file: river init --move (the text of CLAUDE.md goes to AGENTS.md, and "
+             "CLAUDE.md becomes the one line @AGENTS.md, which Claude Code reads as an import)")
+
+
+def setup_instructions(folder, move=None):
+    """Add the work queue block so that every agent reads it, and, when asked, one set of rules for all.
+
+    AGENTS.md holds the rules and the block; CLAUDE.md imports it with @AGENTS.md. move=True moves the
+    rules from CLAUDE.md into AGENTS.md; move=False keeps both files as they are (the block goes in each);
+    move=None does what needs no choice and says the choice. Returns one line per change."""
+    folder = Path(folder)
+    c, a = folder / "CLAUDE.md", folder / "AGENTS.md"
+    layout = instructions_layout(folder)
+    out = []
+    if layout == "claude_only" and move:
+        a.write_text(c.read_text())
+        out += ["AGENTS.md: now holds the rules from CLAUDE.md", _append_block(a)]
+        c.write_text("@AGENTS.md\n")
+        out.append("CLAUDE.md: now the one line @AGENTS.md, so Claude Code and every other agent read the same rules")
+        return out
+    if layout in ("none", "agents_only", "shared"):
+        if layout != "shared" and c.exists():  # CLAUDE.md holds only an old river block: AGENTS.md has it now
+            c.write_text("@AGENTS.md\n")
+            out.append("CLAUDE.md: now the one line @AGENTS.md (it held only the work queue block)")
+        out.append(_append_block(a))
+        if not c.exists():
+            c.write_text("@AGENTS.md\n")
+            out.append("CLAUDE.md: created as the one line @AGENTS.md, so Claude Code reads AGENTS.md too")
+        return out
+    out += [_append_block(c), _append_block(a)]
+    if layout == "claude_only":
+        out.append(MOVE_HINT if move is None else "AGENTS.md: kept apart from CLAUDE.md; it holds only the work queue block")
+    else:
+        out.append("CLAUDE.md and AGENTS.md hold different rules, and each agent reads only one of them. To share "
+                   "them: move the rules from CLAUDE.md into AGENTS.md and make CLAUDE.md the one line @AGENTS.md")
+    return out
+
+
 def init_folder(args):
     import re
     conn = core.connect()
@@ -799,10 +869,16 @@ def init_folder(args):
         for n in [name] if name else linked_here:
             core.project_tracker(conn, n, args.tracker, args.actor)
             lines.append(f"project {n}: tracker {args.tracker}")
-    # CLAUDE.md for Claude Code; AGENTS.md for Codex, OpenCode, and the other agents that read it.
-    files = [Path(f) for f in (args.file or [])] or [here / "CLAUDE.md", here / "AGENTS.md"]
-    for f in files:
-        lines.append(_append_block(f))
+    # AGENTS.md for Codex, OpenCode, and the other agents that read it; CLAUDE.md imports it for Claude Code.
+    if args.file:
+        lines += [_append_block(Path(f)) for f in args.file]
+    else:
+        move = args.move
+        if move is None and instructions_layout(here) == "claude_only" and sys.stdin.isatty():
+            ans = input("CLAUDE.md holds this folder's rules; Codex and other agents read AGENTS.md. Move the rules "
+                        "to AGENTS.md and make CLAUDE.md import it (@AGENTS.md), so every agent reads them? [Y/n] ")
+            move = ans.strip().lower() in ("", "y", "yes")
+        lines += setup_instructions(here, move)
     shown = name or linked_here[0]
     if not core._project(conn, shown)["notes"]:
         lines.append(f'next: describe it for agents: river project describe {shown} "what it covers, where, what helps"')

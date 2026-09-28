@@ -765,10 +765,17 @@ function renderSetup(st) {
   out.push(step(st.people.length > 0, "Register yourself as a person",
     st.people.length ? "People: " + st.people.map(esc).join(", ") + ". Pick your name in the top bar." : "River shows you what needs you and sends you notifications.",
     `<input id="suName" placeholder="your name" style="width:140px"><button class="btn" data-su="register">Register</button>`));
+  // One instructions file for every agent: AGENTS.md holds the rules, CLAUDE.md imports it (@AGENTS.md).
   const blocks = st.folders.filter(f => f.exists && (f.claude_md !== "current" || f.agents_md !== "current"));
-  const state = (f) => `CLAUDE.md ${f.claude_md}, AGENTS.md ${f.agents_md}`;
+  const layouts = { shared: "one file for every agent (CLAUDE.md imports AGENTS.md)",
+    claude_only: "the rules are only in CLAUDE.md; Codex and other agents miss them",
+    both: "CLAUDE.md and AGENTS.md hold different rules; each agent reads only one" };
+  const state = (f) => `CLAUDE.md ${f.claude_md}, AGENTS.md ${f.agents_md}` + (layouts[f.layout] ? `; ${layouts[f.layout]}` : "");
   out.push(step(st.folders.length > 0 && blocks.length === 0, "Tell agents about the queue in each project folder",
-    st.folders.length ? st.folders.map(f => `<div>${esc(f.path)} (${f.projects.map(esc).join(", ")}): ${f.exists ? esc(state(f)) : "folder not found"}</div>`).join("")
+    st.folders.length ? st.folders.map(f => `<div>${esc(f.path)} (${f.projects.map(esc).join(", ")}): ${f.exists ? esc(state(f)) : "folder not found"}`
+      + (f.layout === "claude_only" ? ` <button class="btn" data-su="block" data-move="1" data-path="${esc(f.path)}"
+          title="The text of CLAUDE.md goes to AGENTS.md; CLAUDE.md becomes the one line @AGENTS.md">Move the rules to AGENTS.md</button>` : "")
+      + `</div>`).join("")
       + (st.projects_without_folder.length ? `<div>No folder: ${st.projects_without_folder.map(esc).join(", ")}</div>` : "")
       : "No project has a folder yet. In a project folder, run <code>river init</code>.",
     blocks.map(f => `<button class="btn" data-su="block" data-path="${esc(f.path)}">Update ${esc(f.path.split("/").pop())}</button>`).join("")));
@@ -803,7 +810,8 @@ $("#setupSteps").addEventListener("click", async (e) => {
       const n = $("#suName").value.trim(); if (!n) return toast("Type your name first", true);
       await act("register", { name: n, human: true, note: "" });
       $("#actor").value = n; store("river.actor", n);
-    } else if (k === "block") await act("setup_block", { path: b.dataset.path });
+    } else if (k === "block") await act("setup_block", { path: b.dataset.path,
+      move: b.dataset.move === undefined ? null : b.dataset.move === "1" });
     else if (k === "tracker") {
       const v = document.querySelector(`[data-tracker-for="${CSS.escape(b.dataset.project)}"]`).value.trim();
       if (!v) return toast("Say which tracker, for example: github owner/repo via gh", true);

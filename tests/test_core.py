@@ -1833,6 +1833,44 @@ class AgentBlock(unittest.TestCase):
             self.assertIn("already", cli._append_block(old))
             self.assertEqual(new.read_text(), cli.AGENT_SNIPPET)
 
+    def test_instructions_one_file_for_every_agent(self):
+        from pathlib import Path
+        from river import cli
+        with tempfile.TemporaryDirectory() as d:
+            c, a = Path(d, "CLAUDE.md"), Path(d, "AGENTS.md")
+            cli.setup_instructions(d)  # nothing yet: AGENTS.md holds the block, CLAUDE.md imports it
+            self.assertEqual((c.read_text(), a.read_text()), ("@AGENTS.md\n", cli.AGENT_SNIPPET))
+            self.assertEqual(cli.instructions_layout(d), "shared")
+            cli.setup_instructions(d)  # again: nothing changes
+            self.assertEqual((c.read_text(), a.read_text()), ("@AGENTS.md\n", cli.AGENT_SNIPPET))
+        with tempfile.TemporaryDirectory() as d:
+            c, a = Path(d, "CLAUDE.md"), Path(d, "AGENTS.md")
+            c.write_text("# Rules\n\nPush to main deploys.\n")
+            a.write_text(cli.AGENT_SNIPPET)  # what an older river init made
+            self.assertEqual(cli.instructions_layout(d), "claude_only")
+            lines = cli.setup_instructions(d)  # no choice given: both get the block, and the choice is named
+            self.assertIn("river init --move", lines[-1])
+            self.assertIn("Push to main", c.read_text())
+            cli.setup_instructions(d, move=True)
+            self.assertEqual(c.read_text(), "@AGENTS.md\n")
+            text = a.read_text()
+            self.assertIn("Push to main deploys", text)
+            self.assertEqual(text.count("## Work queue"), 1)
+            self.assertEqual(cli.instructions_layout(d), "shared")
+        with tempfile.TemporaryDirectory() as d:
+            c, a = Path(d, "CLAUDE.md"), Path(d, "AGENTS.md")
+            c.write_text("claude rules\n"); a.write_text("codex rules\n")
+            self.assertEqual(cli.instructions_layout(d), "both")
+            lines = cli.setup_instructions(d, move=True)  # two sets of rules: river never merges them
+            self.assertIn("different rules", lines[-1])
+            self.assertIn(cli.AGENT_SNIPPET, c.read_text()); self.assertIn(cli.AGENT_SNIPPET, a.read_text())
+            self.assertIn("claude rules", c.read_text())
+        with tempfile.TemporaryDirectory() as d:
+            c, a = Path(d, "CLAUDE.md"), Path(d, "AGENTS.md")
+            c.write_text("claude rules\n")
+            cli.setup_instructions(d, move=False)  # keep apart
+            self.assertEqual((c.read_text().count("## Work queue"), a.read_text()), (1, cli.AGENT_SNIPPET))
+
 
 class ReleaseReview(Base):
     """With review on, a release waits on one review of everything it ships, not on a review per item."""
