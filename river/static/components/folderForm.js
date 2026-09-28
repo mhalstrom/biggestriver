@@ -1,0 +1,64 @@
+// Add a project folder: what `river init` does in a folder, from the page (server folder_add). The same form
+// in the setup guide and on the Projects tab. In the desktop app, "Choose folder…" opens the system folder
+// picker (window.riverDesktop, from the app's preload script); in a browser, people type or paste the path.
+import { esc, act, toast } from "../lib.js";
+
+export function folderForm() {
+  const pick = window.riverDesktop && window.riverDesktop.pickFolder;
+  return `<div class="folderForm">
+    <div class="ff-row">
+      ${pick ? `<button class="btn" data-ff-pick="1">Choose folder…</button>` : ""}
+      <input data-ff="path" placeholder="${pick ? "or paste the folder's path" : "the folder's full path, for example ~/Projects/shop"}" spellcheck="false">
+    </div>
+    <div class="ff-row">
+      <input data-ff="name" placeholder="project name (default: the folder's name)" spellcheck="false">
+      <input data-ff="description" placeholder="what it is, in a few words (helps agents)">
+      <button class="btn primary" data-ff-go="1">Add folder</button>
+    </div>
+    <div class="ff-out sub"></div>
+  </div>`;
+}
+
+// The name river gives a folder when none is typed (as river init does).
+function defaultName(path) {
+  const base = path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "";
+  return base.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "project";
+}
+
+// Once per page. onAdded(result) runs after a folder is added (for example to refresh the setup guide).
+export function wireFolderForms(onAdded) {
+  const hint = (form, p) => { form.querySelector('[data-ff="name"]').placeholder = `project name (default: ${p ? defaultName(p) : "the folder's name"})`; };
+  const setPath = (form, p) => { form.querySelector('[data-ff="path"]').value = p; hint(form, p); };
+  // Typing only updates the name hint; it never rewrites what the person types.
+  document.addEventListener("input", (e) => {
+    if (e.target.dataset && e.target.dataset.ff === "path") hint(e.target.closest(".folderForm"), e.target.value.trim());
+  });
+  document.addEventListener("click", async (e) => {
+    const form = e.target.closest(".folderForm"); if (!form) return;
+    if (e.target.closest("[data-ff-pick]")) {
+      const p = await window.riverDesktop.pickFolder();
+      if (p) setPath(form, p);
+      return;
+    }
+    const go = e.target.closest("[data-ff-go], [data-ff-move]"); if (!go || go.disabled) return;
+    const v = (k) => form.querySelector(`[data-ff="${k}"]`).value.trim();
+    const move = go.dataset.ffMove === undefined ? undefined : go.dataset.ffMove === "1";
+    go.disabled = true;
+    try {
+      const r = await act("folder_add", { path: v("path"), name: v("name") || undefined, description: v("description"), move });
+      const out = form.querySelector(".ff-out");
+      // CLAUDE.md holds this folder's rules: ask once whether every agent should read them (AGENTS.md).
+      out.innerHTML = r.layout === "claude_only"
+        ? `Added <b>${esc(r.project)}</b>. This folder's CLAUDE.md has rules that Codex and other agents do not read.
+           <button class="btn" data-ff-move="1">Share them with every agent</button><button class="btn" data-ff-move="0">Keep CLAUDE.md as it is</button>`
+        : `Added <b>${esc(r.project)}</b> (${esc(r.path)}). Agents started there now use the queue.`;
+      // Keep the fields while the CLAUDE.md choice is open: its buttons send the same folder again.
+      if (!(r.layout === "claude_only" && move === undefined)) {
+        for (const k of ["path", "name", "description"]) form.querySelector(`[data-ff="${k}"]`).value = "";
+        if (move !== undefined) out.innerHTML = `Added <b>${esc(r.project)}</b> (${esc(r.path)}). Agents started there now use the queue.`;
+      }
+      toast(`Added the folder for ${r.project}`);
+      if (onAdded) onAdded(r);
+    } catch (err) { /* act shows the error */ } finally { go.disabled = false; }
+  });
+}

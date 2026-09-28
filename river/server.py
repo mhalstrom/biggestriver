@@ -385,6 +385,32 @@ def setup_block(conn, path, move=None):
     return setup_instructions(folder, move)
 
 
+def folder_add(conn, path, name=None, description="", move=None, actor=None):
+    """Add a project folder from the page: what river init does in that folder, without a terminal. The
+    project is created (default name: the folder's) or linked; a project linked to another folder that
+    still exists is refused (only the user moves it: river project path --move). Then the agent block
+    goes in AGENTS.md, and CLAUDE.md imports it; move is the CLAUDE.md rules choice (None: ask)."""
+    from .cli import link_folder, setup_instructions, instructions_layout, folder_project_name
+    if not (path or "").strip():
+        raise RiverError("choose a folder")
+    folder = Path(path.strip()).expanduser()
+    if not folder.is_absolute():
+        raise RiverError(f"{path} is not a full path; start it with / or ~")
+    if not folder.is_dir():
+        raise RiverError(f"{folder} is not a folder on this computer")
+    folder = folder.resolve()
+    name = (name or "").strip() or None
+    if name:
+        row = conn.execute("SELECT path FROM projects WHERE name=?", (name,)).fetchone()
+        if row and row["path"] and Path(row["path"]) != folder and Path(row["path"]).is_dir():
+            raise RiverError(f"project {name} is linked to {row['path']}. Pick another name for this folder, "
+                             f"or move the project in a terminal: river project path {name} {folder} --move")
+    name, linked_here, lines = link_folder(conn, folder, name, description.strip(), actor)
+    lines += setup_instructions(folder, move)
+    return {"project": name or linked_here[0], "path": str(folder), "lines": lines,
+            "layout": instructions_layout(folder), "default_name": folder_project_name(folder)}
+
+
 def setup_skills():
     from .cli import install_skills
     return install_skills(Path("~/.claude/skills").expanduser())
@@ -462,6 +488,7 @@ OPS = {
     "give": lambda c, a, who: core.give(c, int(a["id"]), a["to"], who),
     "split": lambda c, a, who: core.split(c, int(a["id"]), [t for t in a["titles"] if t.strip()], who),
     "setup_block": lambda c, a, who: setup_block(c, a["path"], a.get("move")),
+    "folder_add": lambda c, a, who: folder_add(c, a.get("path"), a.get("name"), a.get("description") or "", a.get("move"), who),
     "setup_skills": lambda c, a, who: setup_skills(),
     "setup_agent_add": lambda c, a, who: setup_agent_add(c, a["label"], who),
     "setup_ntfy": lambda c, a, who: setup_ntfy(c, who),

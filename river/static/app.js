@@ -8,6 +8,7 @@ import { makeDrawer, itemDrawerHtml, msgLine } from "./components/drawer.js";
 import { makeDialog } from "./components/dialog.js";
 import { agentStart, agentPick, pickedAgent, wireAgentPicks } from "./components/agentStart.js";
 import { makePanZoom } from "./components/panZoom.js";
+import { folderForm, wireFolderForms } from "./components/folderForm.js";
 hooks.refresh = refresh;
 let S = null, openItem = null, tab = "board", graphSig = "";
 const drawer = makeDrawer($("#drawer"));
@@ -878,6 +879,8 @@ $("#readyDlg").addEventListener("click", async (e) => {
   } catch (err) { b.disabled = false; /* toast shown */ }
 });
 
+$("#projFolderForm").innerHTML = folderForm();
+wireFolderForms(() => { if (setupDialog.isOpen()) openSetup(); });
 async function openSetup() {
   const r = await fetch("/api/setup"); if (!r.ok) return;
   renderSetup(await r.json()); setupDialog.open();
@@ -903,7 +906,8 @@ function renderSetup(st) {
           title="The text of CLAUDE.md goes to AGENTS.md; CLAUDE.md becomes the one line @AGENTS.md">Move the rules to AGENTS.md</button>` : "")
       + `</div>`).join("")
       + (st.projects_without_folder.length ? `<div>No folder: ${st.projects_without_folder.map(esc).join(", ")}</div>` : "")
-      : "No project has a folder yet. In a project folder, run <code>river init</code>.",
+      + `<details style="margin-top:6px"><summary>Add another project folder</summary>${folderForm()}</details>`
+      : "Pick a folder you work in. River links it as a project and tells agents there about the queue (in AGENTS.md)." + folderForm(),
     blocks.map(f => `<button class="btn" data-su="block" data-path="${esc(f.path)}">Update ${esc(f.path.split("/").pop())}</button>`).join("")));
   const missing = Object.entries(st.skills).filter(([, v]) => v !== "installed").map(([k]) => k);
   if (st.claude_home) out.push(step(missing.length === 0, "Install the Claude Code skills",

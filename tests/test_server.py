@@ -329,6 +329,32 @@ class SetupGuide(unittest.TestCase):
         f = server.setup_status(self.c)["folders"][0]
         self.assertEqual((f["claude_md"], f["agents_md"], f["layout"]), ("current", "current", "shared"))
 
+    def test_add_a_project_folder_from_the_page(self):
+        blog = os.path.join(self.dir.name, "My Blog")
+        os.mkdir(blog)
+        with open(os.path.join(blog, "CLAUDE.md"), "w") as f:
+            f.write("# Rules\nNo tabs.\n")
+        r = server.folder_add(self.c, blog, description="my writing")
+        self.assertEqual((r["project"], r["layout"]), ("my-blog", "claude_only"))
+        self.assertEqual(core._project(self.c, "my-blog")["path"], os.path.realpath(blog))
+        self.assertEqual(core._project(self.c, "my-blog")["notes"], "my writing")
+        self.assertIn("Biggest River", open(os.path.join(blog, "AGENTS.md")).read())
+        # the rules choice, then the same folder again: nothing new, still one project
+        r = server.folder_add(self.c, blog, move=True)
+        self.assertEqual((r["project"], r["layout"]), ("my-blog", "shared"))
+        self.assertEqual(open(os.path.join(blog, "CLAUDE.md")).read().strip(), "@AGENTS.md")
+        self.assertEqual(sum(p["name"] == "my-blog" for p in core.project_list(self.c)), 1)
+
+    def test_add_a_project_folder_refuses_bad_paths_and_a_name_in_use_elsewhere(self):
+        for bad in ("", "relative/path", os.path.join(self.dir.name, "missing")):
+            with self.assertRaises(RiverError):
+                server.folder_add(self.c, bad)
+        other = os.path.join(self.dir.name, "other")
+        os.mkdir(other)
+        with self.assertRaisesRegex(RiverError, "--move"):
+            server.folder_add(self.c, other, name="shop")
+        self.assertEqual(core._project(self.c, "shop")["path"], os.path.realpath(self.folder))
+
     def test_block_fix_refuses_a_folder_that_is_not_a_project(self):
         with self.assertRaises(RiverError):
             server.setup_block(self.c, self.dir.name)

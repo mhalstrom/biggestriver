@@ -880,30 +880,44 @@ def setup_instructions(folder, move=None):
     return out
 
 
-def init_folder(args):
+def folder_project_name(folder):
+    """The project name river init gives a folder: its name in lower case, other characters as dashes."""
     import re
-    conn = core.connect()
-    here = Path.cwd()
+    return re.sub(r"[^a-z0-9._-]+", "-", Path(folder).name.lower()).strip("-") or "project"
+
+
+def link_folder(conn, here, project=None, description="", actor=None):
+    """The project part of river init: create or link the project of a folder. project names one (it may
+    move from another folder); else a project already linked here is kept, or one named after the folder
+    is made. Returns (name or None when projects are linked here already, linked_here, lines)."""
+    here = Path(here).resolve()
     lines = []
     linked = core.projects_for_dir(conn, here)
-    linked_here = [n for n in linked if Path(core._project(conn, n)["path"]) == here.resolve()]
-    if args.project:
-        name = args.project
+    linked_here = [n for n in linked if Path(core._project(conn, n)["path"]) == here]
+    if project:
+        name = project
     elif linked_here:
         name = None
         lines.append(f"projects already linked to this folder: {', '.join(linked_here)}")
     else:
-        name = re.sub(r"[^a-z0-9._-]+", "-", here.name.lower()).strip("-") or "project"
+        name = folder_project_name(here)
     if name:
         exists = conn.execute("SELECT 1 FROM projects WHERE name=?", (name,)).fetchone()
         if exists:
-            core.project_path(conn, name, str(here), args.actor, move=bool(args.project))
+            core.project_path(conn, name, str(here), actor, move=bool(project))
             lines.append(f"project {name}: linked to {here}")
         else:
-            core.project_add(conn, name, notes=args.description, actor=args.actor, path=str(here))
+            core.project_add(conn, name, notes=description, actor=actor, path=str(here))
             lines.append(f"project {name}: created and linked to {here}")
-        if args.description and exists:
-            core.project_describe(conn, name, args.description, args.actor)
+        if description and exists:
+            core.project_describe(conn, name, description, actor)
+    return name, linked_here, lines
+
+
+def init_folder(args):
+    conn = core.connect()
+    here = Path.cwd()
+    name, linked_here, lines = link_folder(conn, here, args.project, args.description, args.actor)
     if args.tracker:
         for n in [name] if name else linked_here:
             core.project_tracker(conn, n, args.tracker, args.actor)

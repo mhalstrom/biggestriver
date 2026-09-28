@@ -1,5 +1,5 @@
 // Biggest River desktop app: runs `river serve` on a free local port and shows the page in a window.
-const { app, BrowserWindow, dialog, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const path = require("node:path");
 const { startRiver } = require("./server");
 
@@ -17,7 +17,14 @@ async function open() {
   }
   console.log(`Biggest River app: ${river.url}`);
   const win = new BrowserWindow({ width: 1400, height: 900, title: "Biggest River",
-    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: path.join(__dirname, "preload.js") } });
+  // "Add a project folder" on the page: the system folder picker, only for the page river serves.
+  ipcMain.handle("river:pick-folder", async (e) => {
+    if (!e.senderFrame || !e.senderFrame.url.startsWith(river.url)) return null;
+    const r = await dialog.showOpenDialog(win, { title: "Choose a project folder", buttonLabel: "Choose",
+      properties: ["openDirectory", "createDirectory"] });
+    return r.canceled ? null : r.filePaths[0];
+  });
   // Links out of the page (GitHub, session links) open in the browser, not in the app window.
   win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: "deny" }; });
   win.webContents.on("will-navigate", (e, url) => { if (!url.startsWith(river.url)) { e.preventDefault(); shell.openExternal(url); } });
