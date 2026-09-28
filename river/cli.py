@@ -503,7 +503,7 @@ def _hint(a, res, actor):
     if c in ("go", "plan"):
         return None
     if actor and c == "done":
-        return f"next: river --as {actor} go"
+        return f"next: river --as {actor} go   (now: keep going while go gives you items, unless auto_continue is off)"
     if actor and c == "release":
         return f"next: river --as {actor} go"
     if c == "register":
@@ -896,8 +896,11 @@ def render_go(b):
             ]
         out += [
             f"When finished:  {r} done {it['id']} --output \"<what changed, commit id>\"",
-            f"Then continue:  {r} go",
+            f"Then continue:  {r} go" + ("   at once, in the same turn: do not stop to report between items."
+                                         if b.get("auto_continue") else ""),
         ]
+        if b.get("auto_continue"):
+            out.append("Keep taking items until go gives you none or you need the user; then report what you finished.")
     elif b["role"] == "planner":
         out.append("NO READY WORK. Your job: plan the project into items that agents and people can take.")
         if b.get("open_items"):

@@ -252,6 +252,14 @@ class Go(Base):
         core.block(self.c, x, "waiting on design")
         self.assertEqual(core.go(self.c, self.web)["role"], "planner")
 
+    def test_auto_continue_setting(self):
+        self.add("web", "x")
+        self.assertTrue(core.go(self.c, self.web)["auto_continue"])
+        core.config_set(self.c, "auto_continue", "off")
+        self.assertFalse(core.go(self.c, self.web)["auto_continue"])
+        with self.assertRaises(RiverError):
+            core.config_set(self.c, "auto_continue", "maybe")
+
     def test_idle_when_others_hold_everything(self):
         self.add("web", "x", doer="ai")
         first = core.go(self.c, self.web)

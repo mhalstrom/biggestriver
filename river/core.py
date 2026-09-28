@@ -54,6 +54,7 @@ DEFAULT_SETTINGS = {
     "smtp_user": "",
     "email_batch_window": "10m",
     "timezone": "",
+    "auto_continue": "on",
 }
 
 SCHEMA = """
@@ -448,6 +449,8 @@ def config_set(conn, key, value, project=None, item=None, agent=None, actor=None
     elif key in ("keep_prereq_limit", "replan_threshold", "max_leases", "serve_port", "smtp_port"):
         if not value.isdigit():
             raise RiverError(f"{key} takes a whole number")
+    elif key == "auto_continue" and value not in ("on", "off"):
+        raise RiverError("auto_continue is on or off")
     elif key == "default_prerequisite_mode" and value not in ("keep", "release"):
         raise RiverError("default_prerequisite_mode is keep or release")
     elif key in ("email_to", "email_from") and value and not all(
@@ -2515,6 +2518,7 @@ def go(conn, cwd, actor=None, project=None, role=None):
                                            for d in a["unblocks"] if ann[d]["status"] in OPEN_STATES]}
                                for a in human_ready],
              "has_history": bool(history(conn, actor, limit=1)),
+             "auto_continue": setting(conn, "auto_continue", agent=actor) == "on",
              "messages": unread(conn, actor),
              "humans": [r["name"] for r in conn.execute("SELECT name FROM agents WHERE kind='human' ORDER BY name")]}
 
