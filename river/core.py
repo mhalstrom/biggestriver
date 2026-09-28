@@ -366,8 +366,8 @@ def _migrate(conn):
             conn.execute(f"ALTER TABLE items ADD COLUMN {col} {typ}")
     if "found_during" not in icols:
         conn.execute("ALTER TABLE items ADD COLUMN found_during INTEGER REFERENCES items(id)")
-    if "blocked_until" not in icols:
-        for col in ("blocked_at", "blocked_until", "blocked_set_by"):
+    for col in ("blocked_at", "blocked_until", "blocked_set_by"):
+        if col not in icols:
             conn.execute(f"ALTER TABLE items ADD COLUMN {col} TEXT")
     if "reserved_for" not in icols:
         conn.execute("ALTER TABLE items ADD COLUMN reserved_for TEXT")
