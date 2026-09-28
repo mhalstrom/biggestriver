@@ -157,6 +157,36 @@ An agent that cannot run shell commands can use river through MCP:
 same text as the command, and the server keeps the agent name that `go` gives.
 For Claude Code: `claude mcp add river -- river mcp`.
 
+## Outside trackers
+
+River works next to an issue tracker (GitHub Issues, Jira, Linear, and
+others) without any tracker code. Your agents read and update the tracker
+with their own tools; river keeps the links and reminds them.
+
+1. Give your agents access to the tracker: `gh auth login` for GitHub, a Jira
+   or Linear MCP server, or a command line tool.
+2. Tell river once which tracker a project uses, in words an agent can act on:
+
+   ```sh
+   river project tracker shop "github acme/shop via gh"
+   river project tracker api "jira API via the Jira MCP server"
+   river project tracker web "linear team WEB via the Linear MCP server"
+   ```
+
+   `river init --tracker "..."` does the same when you set up a folder.
+3. Import: `river plan` names the tracker and tells the planner to add each
+   open issue that river does not have yet, with a link:
+   `river add "Fix login" --ref github:acme/shop#12` (GitHub links get a URL
+   by themselves), or `--ref jira:API-7 --ref-url https://acme.atlassian.net/browse/API-7`.
+   `river list --ref <ref>` finds the items of an issue. River refuses a
+   second open item with the same link in a project.
+4. Write back: `river go` asks the agent to mark linked issues in progress.
+   `river done` prints each link with the output to post as a comment, and
+   asks the agent to close the issue. `river synced <id>` (or
+   `river done --synced`) records that. Until then, the agent's next `go` and
+   `river status` show the reminder, and the page marks the link
+   "tracker not updated".
+
 ## Tests
 
 ```sh
