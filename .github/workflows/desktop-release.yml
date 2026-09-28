@@ -60,6 +60,37 @@ jobs:
           name: mac
           path: desktop/out/*.dmg
           if-no-files-found: error
+  # The x64 .dmg is built on an Apple silicon runner; run it on an Intel Mac before it is published.
+  mac-intel:
+    needs: mac
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - name: Tests on Intel (standard library only)
+        run: python -m unittest discover -s tests -t .
+      - uses: actions/download-artifact@v4
+        with:
+          name: mac
+          path: dmg
+      - name: The Intel app from the .dmg is signed and starts river with its own Python
+        working-directory: desktop
+        run: |
+          [ "$(uname -m)" = x86_64 ] || { echo "not an Intel runner: $(uname -m)"; exit 1; }
+          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/app" ../dmg/*-x64.dmg
+          app="$RUNNER_TEMP/app/Biggest River.app"
+          codesign --verify --deep --strict "$app" && echo "signature OK"
+          file "$app/Contents/MacOS/Biggest River" "$app/Contents/Resources/river-app/python/bin/python3"
+          RIVER_DB="$RUNNER_TEMP/q.db" node -e '
+            const { startRiver } = require("./server");
+            startRiver({ riverRoot: process.argv[1], find: () => null }).then(async (r) => { console.log("river answers on", r.url, "with", r.child.spawnargs[0]); await r.stop(); })
+              .catch((e) => { console.error(e.message); process.exit(1); });' "$app/Contents/Resources/river-app"
+          hdiutil detach "$RUNNER_TEMP/app"
   windows:
     runs-on: windows-latest
     defaults:
@@ -102,7 +133,7 @@ jobs:
           path: desktop/out/*-setup.exe
           if-no-files-found: error
   publish:
-    needs: [mac, windows]
+    needs: [mac, mac-intel, windows]
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
