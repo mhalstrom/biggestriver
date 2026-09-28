@@ -139,14 +139,28 @@ python3 -m unittest discover -s tests -t .
 
 Early. Working: projects, items, dependencies (loops refused), inherited
 priority, areas for `next`, atomic claims with expiring leases, outside
-blockers, blocker trees, the agent registry, capacity, settings, messages
-between agents (alerts, questions and answers, notes, river notices; `river
-inbox`, `river thread`, an unread count on every command), and the web page.
+blockers (with `--until`, so an item comes back by itself at that time),
+blocker trees, the agent registry, capacity, settings, and the web page.
 
-Planned: offers of help for blocked agents, keeping
-or releasing a claimed item when new prerequisites appear, handing items to
-another agent, and per-item context fields (files, check command) so a new
-agent can start without searching.
+- `river go` roles: worker, unblocker, planner, deployer, idle. After
+  `done`, an agent takes the next item at once (`auto_continue`).
+- Per-item context fields (context, files it touches, check command), so a
+  new agent can start without searching.
+- Keep or release a claimed item when a prerequisite appears, and a
+  `replan` mark when too many appear.
+- Offers of help for blocked agents: `river offer`, `give`, `split`.
+- Push an item to an agent: `river push`, `accept`, `decline`.
+- Agents can take over or clear a person's item, with a notice and Undo.
+  Each person's item has a copyable agent prompt (`river prompt`).
+- Messages between agents: alerts, questions and answers, notes, river
+  notices; `river inbox`, `river thread`, an unread count on every command.
+- Needs you: one list of what waits on a person, most important first, with
+  notifications by phone (ntfy), email (SMTP), macOS banner, and browser.
+- Planning and shipping: `river plan`, deploy targets, `river ship`.
+- Overviews: `river status`, and `river log` with a Done tab on the page.
+
+Planned: a `pipx` package, tests on GitHub Actions, and a default database
+location for installed use.
 
 ## License
 
