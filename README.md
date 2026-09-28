@@ -123,6 +123,12 @@ After each command, river prints one hint line with the likely next command
 (for example, how to finish or release the item just claimed). Hints go to
 stderr, never into `--json` output; `-q` or `RIVER_QUIET=1` turns them off.
 
+An agent that cannot run shell commands can use river through MCP:
+`river mcp` is a stdio MCP server with the tools `go`, `done`, `show`,
+`inbox`, and `river` (any command, as a list of words). Each tool returns the
+same text as the command, and the server keeps the agent name that `go` gives.
+For Claude Code: `claude mcp add river -- river mcp`.
+
 ## Tests
 
 ```sh

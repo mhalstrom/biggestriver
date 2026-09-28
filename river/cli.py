@@ -470,6 +470,7 @@ def build_parser():
     x = sub.add_parser("serve", help="the web page on 127.0.0.1")
     x.add_argument("--port", type=int); x.add_argument("--open", action="store_true")
     x.add_argument("--dev", action="store_true", help="restart on code change; the page reloads itself")
+    sub.add_parser("mcp", help="an MCP server on stdin/stdout, for agents that cannot run shell commands")
     x = sub.add_parser("guide", help="how to use river: worker loop, planner, or agent setup")
     x.add_argument("which", nargs="?", default="river", choices=["river", "planner", "river-planner", "setup"])
     x = sub.add_parser("setup-agent", help="print (or append) the instructions block for CLAUDE.md / AGENTS.md")
@@ -492,6 +493,10 @@ def run(argv=None):
         return 0
     if args.cmd == "init":
         return init_folder(args)
+    if args.cmd == "mcp":
+        from . import mcp
+        mcp.serve()
+        return 0
     if args.cmd == "setup-agent":
         if not args.append:
             print(AGENT_SNIPPET)
@@ -505,6 +510,13 @@ def run(argv=None):
         print(f"added the work queue block to {f}")
         return 0
     conn = core.connect()
+    try:
+        return _run(args, conn)
+    finally:
+        conn.close()
+
+
+def _run(args, conn):
     if args.cmd == "serve":
         from . import server
         port = args.port or int(core.setting(conn, "serve_port"))
