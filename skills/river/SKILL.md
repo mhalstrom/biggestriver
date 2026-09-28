@@ -118,6 +118,21 @@ first only when neither applies (`river add <project> "<title>"`).
   `river synced <id>` (or `river done <id> --output "..." --synced` when you
   did it first). Until then, `go` and `status` remind you.
 
+## Items that may be done already
+
+When a session stops mid-item, its lease runs out and the item goes back to
+the queue, but the work may be partly or fully done. The go briefing then
+says CHECK FIRST: read `river show <id>`, `git log --grep '#<id>'`, and the
+touched files before you start. `river cleanup` lists every suspect item
+(expired leases, commits that name an item, stale items, old notices).
+Record what you found:
+
+- `river check <id> done --note "<commits or files>"`: closes it.
+- `river check <id> partial --note "<what is left>"`: the note goes on the item.
+- `river check <id> open`: not started; it leaves the cleanup list.
+
+Name the item in commit messages (`Fix the header (#12)`), so a check finds it.
+
 ## When you find other work
 
 - Something this item needs first: `river add <project> "<title>" --blocks <your-id>`

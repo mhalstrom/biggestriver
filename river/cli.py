@@ -449,6 +449,11 @@ def build_parser():
     x.add_argument("--ship", action="store_true", help="also ask for it to be deployed (river ship)")
     x.add_argument("--note", help="why an agent may close a person's item (required then; the user is told)")
     x.add_argument("--synced", action="store_true", help="you already posted the result to its tracker issues")
+    x = sub.add_parser("cleanup", help="open items that may be done or stale: expired leases, commits that name them, ...")
+    x.add_argument("--project"); x.add_argument("--no-git", action="store_true", help="skip the git log checks")
+    x = sub.add_parser("check", help="record what a check of a suspect item found: done, partial, or open")
+    x.add_argument("id", type=int); x.add_argument("result", choices=core.CHECK_RESULTS)
+    x.add_argument("--note", help="where the work is (done), what is left (partial), or what you looked at (open)")
     x = sub.add_parser("synced", help="record that a done item's tracker issues got the result (comment, close)")
     x.add_argument("id", type=int); x.add_argument("--ref", help="only this link (default: all of the item's links)")
     x = sub.add_parser("ship", help="ask for an item to be deployed: it joins its target's next deploy item")
@@ -896,6 +901,10 @@ def dispatch(conn, a, actor):
         return core.done(conn, a.id, a.output, actor, a.ship, a.note, a.synced)
     if c == "synced":
         return core.synced(conn, a.id, a.ref, actor)
+    if c == "cleanup":
+        return core.cleanup(conn, a.project, not a.no_git)
+    if c == "check":
+        return core.check(conn, a.id, a.result, a.note, actor)
     if c == "ship":
         return core.ship(conn, a.id, actor)
     if c == "review":
@@ -1102,6 +1111,8 @@ def render_plan(b):
     section("Due dates", q.get("due", []), lambda x: f"#{x['id']:<4} [{x['project']}] {_cut(x['title'], 60)}  "
             f"({'OVERDUE' if x['due_state'] == 'overdue' else 'due soon' if x['due_state'] == 'soon' else 'due'} "
             f"{x['due_text']}; {x['open_before']} open before it)")
+    section("May be done or stale (check each, then river check <id> done|partial|open)", q.get("suspect", []),
+            lambda x: f"#{x['id']:<4} [{x['project']}] {_cut(x['title'], 60)}  ({', '.join(x['reasons'])})")
     section("Waiting on a human", q["human_waiting"], lambda x: f"#{x['id']:<4} [{x['project']}] {_cut(x['title'])}")
     section("Items with no notes or context", q["items_without_notes"],
             lambda x: f"#{x['id']:<4} [{x['project']}] {_cut(x['title'])}")
@@ -1159,6 +1170,10 @@ def render_go(b):
         out += _context_lines(it)
         if it.get("refs"):
             out.append("  It comes from the tracker issue(s) above: mark them in progress there, if the tracker has that state.")
+        if it.get("needs_check"):
+            out += [f"  CHECK FIRST: a session held this item before and its lease ran out without done. Look at",
+                    f"  {r} show {it['id']} (history), git log --grep '#{it['id']}', and the files it touches.",
+                    f"  Already done: {r} check {it['id']} done --note \"<commits>\"   Partly: work on, and say so in --output."]
         if it["waits_on_detail"] and b["role"] != "reviewer":
             out.append("  waited on (all done): " + ", ".join(f"#{d['id']} {d['title']}" for d in it["waits_on_detail"]))
         if it["unblocks_detail"]:
@@ -1296,8 +1311,24 @@ def _writeback_lines(it, r="river", tracker=""):
     return out
 
 
+def render_cleanup(rows, r="river"):
+    if not rows:
+        print("Nothing suspect: every open item looks as the queue says.")
+        return
+    print(f"{len(rows)} item(s) may be done or stale. Check each one: its history (river show <id>), "
+          f"git log --grep '#<id>', and the files it touches. Then record what you found.")
+    for s in rows:
+        print(f"#{s['id']:<4} [{s['project']}] {_cut(s['title'], 70)}" + ("  (person's item)" if s["doer"] == "human" else "")
+              + f"  ({', '.join(s['reasons'])})")
+        for e in s["evidence"][:4]:
+            print(f"       {e}")
+    print(f"Record it: {r} check <id> done --note \"<commits or files>\"   |   partial --note \"<what is left>\"   |   open")
+
+
 def render(a, res):
     c = a.cmd
+    if c == "cleanup":
+        return render_cleanup(res, f"river --as {a.actor}" if a.actor else "river")
     if c == "done" and isinstance(res, dict) and res.get("refs"):
         _print_show(res)
         lines = _writeback_lines(res, f"river --as {a.actor}" if a.actor else "river", res.get("tracker", ""))

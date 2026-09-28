@@ -1985,3 +1985,56 @@ class Version(unittest.TestCase):
         with contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as e:
             cli.build_parser().parse_args(["--version"])
         self.assertEqual((e.exception.code, out.getvalue().strip()), (0, f"river {__version__}"))
+
+
+class Cleanup(Base):
+    def setUp(self):
+        super().setUp()
+        core.project_add(self.c, "a", path=self.dir.name)
+        core.register(self.c, "ag")
+
+    def _expire(self, i):
+        core.claim(self.c, i, "ag")
+        self.c.execute("UPDATE items SET lease_expires_at='2000-01-01T00:00:00Z' WHERE id=?", (i,))
+        with core.tx(self.c):
+            core._sweep(self.c)
+
+    def test_expired_lease_is_suspect_until_checked(self):
+        i = self.add("a", "half done")
+        self._expire(i)
+        self.assertTrue(core.item_show(self.c, i)["needs_check"])
+        self.assertEqual(core.cleanup(self.c, git=False)[0]["reasons"], ["lease expired"])
+        b = core.go(self.c, self.dir.name, "other")
+        self.assertTrue(b["item"]["needs_check"])
+        core.release(self.c, i, None, "other")
+        with self.assertRaises(RiverError):
+            core.check(self.c, i, "partial", actor="t")  # partial needs a note
+        core.check(self.c, i, "partial", "tests missing", "t")
+        self.assertIn("[checked partial] tests missing", core.item_show(self.c, i)["notes"])
+        self.assertEqual(core.cleanup(self.c, git=False), [])
+
+    def test_commit_naming_the_item_and_check_done(self):
+        import subprocess
+        i = self.add("a", "write the page")
+        git = lambda *a: subprocess.run(["git", "-C", self.dir.name, *a], capture_output=True, check=True)
+        git("init", "-q"); git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty",
+                               "-m", f"Write the page (#{i})")
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", f"unrelated #{i}0")
+        rows = core.cleanup(self.c)
+        self.assertEqual((rows[0]["id"], rows[0]["reasons"]), (i, ["commit names it"]))
+        self.assertEqual(len(rows[0]["evidence"]), 1)  # #{i}0 is another item
+        self.assertEqual(core.cleanup(self.c, git=False), [])
+        with self.assertRaises(RiverError):
+            core.check(self.c, i, "done", actor="t")  # done needs where the work is
+        res = core.check(self.c, i, "done", "commit abc", "t")
+        self.assertEqual((res["status"], res["output"]), ("done", "found done in a check: commit abc"))
+
+    def test_stale_ready_item(self):
+        i = self.add("a", "old")
+        self.c.execute("UPDATE items SET created_at='2020-01-01T00:00:00Z' WHERE id=?", (i,))
+        self.assertEqual(core.cleanup(self.c, git=False)[0]["reasons"], ["stale"])
+        core.config_set(self.c, "stale_after", "100000d")
+        self.assertEqual(core.cleanup(self.c, git=False), [])
+        core.config_set(self.c, "stale_after", "14d")
+        core.check(self.c, i, "open", None, "t")  # still wanted: the check restarts the clock
+        self.assertEqual(core.cleanup(self.c, git=False), [])

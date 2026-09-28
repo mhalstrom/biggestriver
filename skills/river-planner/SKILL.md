@@ -79,6 +79,13 @@ Write the description for an agent that must decide whether it fits: what the
 project covers, where it lives (repository, directories), and what knowledge
 helps. Agents read `river project list` to pick an area.
 
+### Cleanup
+
+`river plan` lists items that may be done or stale (from `river cleanup`).
+Check each one, or ask the user about a person's item, and record the result
+with `river check <id> done|partial|open --note "..."`. `stale_after` (14d)
+sets when an untaken ready item counts as stale.
+
 ### Outside trackers
 
 When the user says the project uses an issue tracker (Jira, GitHub Issues,

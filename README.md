@@ -228,6 +228,10 @@ blocker trees, the agent registry, capacity, settings, and the web page.
   The reviewer runs `river review pass <id>`, or `river review fail <id>
   "<fix>" ...`, which adds fix items the review waits on.
 - Overviews: `river status`, and `river log` with a Done tab on the page.
+- Cleanup: `river cleanup` lists open items that may be done or stale (a
+  lease ran out without done, a commit names the item, a person's files
+  changed, nobody took it for `stale_after`, an old notice);
+  `river check <id> done|partial|open` records what a check found.
 
 Planned: a `pipx` package, tests on GitHub Actions, and a default database
 location for installed use.

@@ -74,6 +74,8 @@ DEFAULT_SETTINGS = {
     # what tool, e.g. "github owner/shop via gh" or "jira PROJ via the Jira MCP server". Set it per
     # project (river project tracker). River has no tracker API code: agents use their own tools.
     "tracker": "",
+    # river cleanup lists a ready item that nobody claimed for this long.
+    "stale_after": "14d",
     "review": "off",
     "review_prompt": "",
     "review_cmd": "",
@@ -137,6 +139,7 @@ CREATE TABLE IF NOT EXISTS items (
   takeover_note     TEXT,
   takeover_at       TEXT,
   takeover_seen     INTEGER NOT NULL DEFAULT 0,
+  needs_check       INTEGER NOT NULL DEFAULT 0,
   created_at        TEXT NOT NULL,
   closed_at         TEXT
 );
@@ -501,6 +504,8 @@ def _migrate(conn):
     for col in ("blocked_at", "blocked_until", "blocked_set_by"):
         if col not in icols:
             conn.execute(f"ALTER TABLE items ADD COLUMN {col} TEXT")
+    if "needs_check" not in icols:
+        conn.execute("ALTER TABLE items ADD COLUMN needs_check INTEGER NOT NULL DEFAULT 0")
     if "synced_at" not in {r["name"] for r in conn.execute("PRAGMA table_info(item_refs)")}:
         conn.execute("ALTER TABLE item_refs ADD COLUMN synced_at TEXT")
     if "reserved_for" not in icols:
@@ -2131,8 +2136,9 @@ def _sweep(conn):
     expired = conn.execute(
         "SELECT id, assignee FROM items WHERE status='in_progress' AND lease_expires_at < ?", (t,)).fetchall()
     for r in expired:
-        conn.execute("UPDATE items SET status='open', assignee=NULL, claimed_at=NULL, lease_expires_at=NULL WHERE id=?",
-                     (r["id"],))
+        # The session may have done part or all of the work: the next taker checks first (river check).
+        conn.execute("UPDATE items SET status='open', assignee=NULL, claimed_at=NULL, lease_expires_at=NULL, "
+                     "needs_check=1 WHERE id=?", (r["id"],))
         _event(conn, r["id"], "river", f"lease expired (was {r['assignee']}); back to open")
         _send(conn, "notice", "river", f"your lease on #{r['id']} expired; the item is open again. "
               f"Claim it again if you still work on it: river claim {r['id']}", to=r["assignee"], item_id=r["id"])
@@ -2633,7 +2639,7 @@ def _close(conn, item_id, status, actor, output=None, note=None):
         if it["assignee"] and actor and it["assignee"] != actor:
             raise RiverError(f"item {item_id} is held by {it['assignee']}; ask them, or release it first")
         conn.execute("UPDATE items SET status=?, closed_at=?, lease_expires_at=NULL, hold_expires_at=NULL, "
-                     "reserved_for=NULL, output=COALESCE(?, output) WHERE id=?",
+                     "reserved_for=NULL, needs_check=0, output=COALESCE(?, output) WHERE id=?",
                      (status, iso(now()), output, it["id"]))
         _event(conn, it["id"], actor, status + (f": {output}" if output else ""))
         _goal_notice(conn, it["id"], actor, "finished" if status == "done" else status, output)
@@ -2850,6 +2856,113 @@ def _review_claim(conn, actor, names, any_project=False, brief=None):
             if brief is not None:
                 brief["claim_refused"] = str(e)
     return None
+
+
+CHECK_RESULTS = ("done", "partial", "open")
+# The last event that says who holds an item: when it is a lease expiry, a session stopped mid-item.
+LAST_HOLD_EVENT = ("SELECT at, change FROM events WHERE item_id=? AND (change LIKE 'claimed%' OR change LIKE "
+                   "'lease expired%' OR change LIKE 'released%' OR change LIKE 'checked:%') ORDER BY id DESC LIMIT 1")
+
+
+def check(conn, item_id, result, note=None, actor=None):
+    """Record what a check of a suspect item found: done (close it), partial (note what is left), or open."""
+    if result not in CHECK_RESULTS:
+        raise RiverError(f"check result is one of {', '.join(CHECK_RESULTS)}")
+    it = _item(conn, item_id)
+    if it["status"] in CLOSED_STATES:
+        raise RiverError(f"#{item_id} is already {it['status']}")
+    note = (note or "").strip()
+    if result == "done":
+        if not note:
+            raise RiverError(f"say where the work is (commits, files): river check {item_id} done --note \"...\"")
+        return done(conn, item_id, f"found done in a check: {note}", actor, note=note)
+    if result == "partial" and not note:
+        raise RiverError(f"say what is done and what is left: river check {item_id} partial --note \"...\"")
+    with tx(conn):
+        if note:
+            conn.execute("UPDATE items SET notes=? WHERE id=?",
+                         ((it["notes"] + "\n" if it["notes"] else "") + f"[checked {result}] {note}", it["id"]))
+        conn.execute("UPDATE items SET needs_check=0 WHERE id=?", (it["id"],))
+        _event(conn, it["id"], actor, f"checked: {result}" + (f": {note}" if note else ""))
+    return item_show(conn, item_id)
+
+
+def _git_log(path, *args):
+    """Commits as (short id, UTC time like river's, subject); empty when the folder is not a git repository."""
+    import subprocess
+    try:
+        r = subprocess.run(["git", "-C", path, "log", "--format=%h%x09%cd%x09%s",
+                            "--date=format-local:%Y-%m-%dT%H:%M:%SZ", *args],
+                           capture_output=True, text=True, timeout=20, env={**os.environ, "TZ": "UTC"})
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if r.returncode != 0:
+        return []
+    return [tuple(line.split("\t", 2)) for line in r.stdout.splitlines() if line.count("\t") >= 2]
+
+
+def cleanup(conn, project=None, git=True):
+    """Open items that may be done or stale although the queue says otherwise, with the evidence.
+
+    Suspect: a lease ran out without done; a commit in the project folder names the item (#id);
+    a person's item whose touched files changed after it was made; ready and never claimed for
+    stale_after; a needs-you notice whose title is out of date. A check (river check) after the
+    evidence clears the item."""
+    ann = annotate(conn)
+    t = now()
+    items = [a for a in ann.values() if a["status"] == "open" and not a["project_archived"]
+             and (project is None or a["project"] == project) and a["kind"] == "work"]
+    if project is not None:
+        _project(conn, project)
+    ids = {a["id"] for a in items}
+    last_check = {r["item_id"]: r["at"] for r in conn.execute(
+        "SELECT item_id, MAX(at) at FROM events WHERE change LIKE 'checked:%' GROUP BY item_id")}
+    out = {}
+
+    def flag(a, kind, evidence):
+        e = out.setdefault(a["id"], {"id": a["id"], "title": a["title"], "project": a["project"], "doer": a["doer"],
+                                     "reasons": [], "evidence": []})
+        if kind not in e["reasons"]:
+            e["reasons"].append(kind)
+        e["evidence"].append(evidence)
+
+    for a in items:
+        since = max(a["created_at"], last_check.get(a["id"], ""))
+        r = conn.execute(LAST_HOLD_EVENT, (a["id"],)).fetchone()
+        if a["needs_check"] or (r and r["change"].startswith("lease expired")):
+            flag(a, "lease expired", f"{r['change']} at {r['at'][:16]}" if r and r["change"].startswith("lease")
+                 else "a lease ran out without done")
+        if a["ready"] and not a["claimed_at"]:
+            ready_since = max([since] + [ann[b]["closed_at"] or "" for b in a["waits_on"]])
+            took = conn.execute("SELECT 1 FROM events WHERE item_id=? AND change LIKE 'claimed%' AND at > ?",
+                                (a["id"], ready_since)).fetchone()
+            stale = parse_duration(setting(conn, "stale_after", item_id=a["id"]))
+            if not took and parse_iso(ready_since) < t - stale:
+                flag(a, "stale", f"ready since {ready_since[:10]} and nobody took it")
+    for r in conn.execute("SELECT n.item_id, n.summary FROM needs_you n WHERE n.closed_at IS NULL AND n.kind='item'"):
+        a = ann.get(r["item_id"])
+        if a and a["id"] in ids and a["title"] not in r["summary"]:
+            flag(a, "old notice", f"the needs-you notice says: {r['summary']}")
+    if git:
+        by_path: dict[str, list] = {}
+        for a in items:
+            p = _project(conn, a["project"])
+            if p["path"] and Path(p["path"]).is_dir():
+                by_path.setdefault(p["path"], []).append(a)
+        for path, group in by_path.items():
+            oldest = min(a["created_at"] for a in group)
+            commits = _git_log(path, f"--since={oldest}", "-n", "2000")
+            for a in group:
+                since = max(a["created_at"], last_check.get(a["id"], ""))
+                pat = re.compile(rf"#{a['id']}(?!\d)")
+                hits = [c for c in commits if pat.search(c[2]) and c[1] >= since[:19]]
+                for c in hits[:3]:
+                    flag(a, "commit names it", f"commit {c[0]} {c[1][:10]}: {c[2][:80]}")
+                if a["doer"] == "human" and a["touches"]:
+                    changed = _git_log(path, f"--since={since}", "-n", "3", "--", *a["touches"])
+                    for c in changed:
+                        flag(a, "files changed", f"commit {c[0]} {c[1][:10]} changed its files: {c[2][:80]}")
+    return sorted(out.values(), key=lambda e: ann[e["id"]]["sort_key"])
 
 
 def drop(conn, item_id, actor=None, note=None):
@@ -3847,6 +3960,7 @@ def plan(conn, cwd, actor=None, project=None):
             "human_waiting": [brief_item(a) for a in focus if a["ready"] and a["doer"] == "human"],
             "stuck": stuck,
             "replan": [dict(brief_item(a), late_prereqs=a["late_prereqs"]) for a in focus if a["replan"]],
+            "suspect": [s for s in cleanup(conn) if not names or s["project"] in names],
             "due": [dict(brief_item(a), due_text=a["due_text"], due_state=a["due_state"],
                          open_before=len(a["open_blockers"])) for a in sorted(
                         (a for a in focus if a["due"]), key=lambda a: a["due"])],
