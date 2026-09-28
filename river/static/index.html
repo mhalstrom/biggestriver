@@ -117,7 +117,7 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; padding
 #drawer .sec { margin-top: 14px; }
 #drawer .sec h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
 .actions { display: flex; gap: 6px; flex-wrap: wrap; }
-.tree { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: pre; overflow-x: auto; background: var(--bg); border-radius: 6px; padding: 8px; }
+.tree { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg); border-radius: 6px; padding: 8px; }
 .link { color: var(--accent); cursor: pointer; }
 #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 8px; display: none; z-index: 20; max-width: 90vw; }
 #toast.err { background: var(--warn); color: #fff; }
@@ -495,8 +495,16 @@ async function renderLog(force) {
   }).join("") || `<div class="muted">No items.</div>`;
 }
 
+let graphDefaulted = false;
 async function renderGraph(force) {
   if (tab !== "graph" || !window.mermaid) return;
+  // A big queue draws as an unreadable wall: the first time, show only the project of the top ready item.
+  if (!graphDefaulted) {
+    graphDefaulted = true;
+    const open = S.items.filter(i => !["done", "dropped"].includes(i.status));
+    const top = S.items.find(i => i.ready) || open[0];
+    if (open.length > 40 && top && !$("#graphProject").value) $("#graphProject").value = top.project;
+  }
   const proj = $("#graphProject").value, withDone = $("#graphDone").checked;
   const items = S.items.filter(i => (withDone || !["done", "dropped"].includes(i.status)));
   const ids = new Set(items.map(i => i.id));
@@ -530,8 +538,8 @@ window.riverOpen = (id) => openDrawer(id);
 
 function treeText(n, prefix = "", last = true, root = true) {
   const who = n.assignee ? `, ${n.assignee}${n.lease_seconds_left != null ? ", " + Math.floor(n.lease_seconds_left / 60) + "m left" : ""}` : "";
-  const st = (n.ready ? "ready" : n.status) + (n.blocked_reason ? `, blocked: "${n.blocked_reason}"` : "");
-  let out = (root ? "" : prefix + (last ? "└─ " : "├─ ")) + `#${n.id} ${n.title}  (${st}${who})\n`;
+  const st = (n.ready ? "ready" : n.status.replace("_", " ")) + (n.blocked_reason ? ", " + clip(n.blocked_text || "blocked: " + n.blocked_reason, 60) : "");
+  let out = (root ? "" : prefix + (last ? "└─ " : "├─ ")) + `#${n.id} ${root ? n.title : clip(n.title, 60)}  (${st}${who})\n`;
   n.children.forEach((c, i) => { out += treeText(c, prefix + (root ? "" : last ? "   " : "│  "), i === n.children.length - 1, false); });
   return out;
 }
