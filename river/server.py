@@ -66,6 +66,11 @@ OPS = {
     "config_unset": lambda c, a, who: core.config_unset(c, a["key"], a.get("project"), a.get("item"), a.get("agent"), who),
     "answer": lambda c, a, who: core.answer(c, int(a["msg"]), a["body"], who),
     "message_read": lambda c, a, who: _message_read(c, int(a["msg"])),
+    "send": lambda c, a, who: core.send(c, a["kind"], a["body"], a.get("to"), a.get("item"), a.get("reply"), who),
+    "offer": lambda c, a, who: core.offer(c, a["body"], int(a["item"]), a.get("to"), who),
+    "give": lambda c, a, who: core.give(c, int(a["id"]), a["to"], who),
+    "split": lambda c, a, who: core.split(c, int(a["id"]), [t for t in a["titles"] if t.strip()], who),
+    "decline_message": lambda c, a, who: core.decline_message(c, int(a["msg"]), a.get("note"), who),
 }
 
 
@@ -146,12 +151,32 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, {"error": str(e)})
             finally:
                 conn.close()
+        if path == "/api/inbox":
+            from urllib.parse import parse_qs, urlsplit
+            q = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+            conn = core.connect()
+            try:
+                # The page only looks: messages turn read when the person acts on them (Mark read, answer, reply).
+                return self._send(200, {"messages": core.inbox(conn, q.get("agent"), bool(q.get("all")), mark_read=False)})
+            except RiverError as e:
+                return self._send(400, {"error": str(e)})
+            finally:
+                conn.close()
+        if path.startswith("/api/thread/"):
+            conn = core.connect()
+            try:
+                return self._send(200, core.thread(conn, int(path.rsplit("/", 1)[1])))
+            except (RiverError, ValueError) as e:
+                return self._send(404, {"error": str(e)})
+            finally:
+                conn.close()
         if path.startswith("/api/item/"):
             conn = core.connect()
             try:
                 iid = int(path.rsplit("/", 1)[1])
                 res = core.item_show(conn, iid)
                 res["tree"] = core.blockers(conn, iid)
+                res["messages"] = core.item_messages(conn, iid)
                 return self._send(200, res)
             except (RiverError, ValueError) as e:
                 return self._send(404, {"error": str(e)})

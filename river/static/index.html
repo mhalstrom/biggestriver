@@ -74,6 +74,10 @@ main { padding: 16px; max-width: 1500px; margin: 0 auto; }
 .row .t { overflow: hidden; }
 .row .t .title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row .t .why { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.msg .body { white-space: pre-wrap; margin: 4px 0; }
+.msg.read { opacity: .65; }
+.msg .actions input { flex: 1; min-width: 120px; }
+.thread { margin: 6px 0 0 12px; padding-left: 8px; border-left: 2px solid var(--line); font-size: 13px; }
 .row .t .blk { color: var(--wait); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chips { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
 .chip { font-size: 11px; padding: 1px 7px; border-radius: 999px; white-space: nowrap; border: 1px solid transparent; }
@@ -171,6 +175,17 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
     <div class="panel hidden" id="needsYouPanel">
       <h2>Needs you <span class="spacer"></span><button class="btn" id="copyAll" title="One prompt for an agent that walks you through all of these">Copy prompt for all</button><button class="btn hidden" id="notifyOn">Turn on browser notifications</button></h2>
       <div id="needsYou"></div>
+    </div>
+    <div class="panel hidden" id="inboxPanel">
+      <h2><span id="inboxTitle">Inbox</span> <span class="spacer"></span><label class="sub"><input type="checkbox" id="inboxAll"> show read</label></h2>
+      <div id="inbox"></div>
+      <div class="actions" style="margin-top:8px">
+        <select id="sendKind"><option value="note">note</option><option value="question">question</option><option value="alert">alert</option></select>
+        <select id="sendTo"></select>
+        <input id="sendItem" placeholder="or item #" style="width:80px">
+        <input id="sendBody" placeholder="message" style="flex:1;min-width:160px">
+        <button class="btn" id="sendGo">Send</button>
+      </div>
     </div>
     <div class="panel hidden" id="blockedPanel">
       <h2>Blocked outside the queue</h2>
@@ -538,7 +553,12 @@ async function openDrawer(id) {
       ${it.waits_on_detail.map(w => `<div><span class="link" data-open="${w.id}">#${w.id} ${esc(w.title)}</span> <span class="muted">(${w.status})</span> <span class="link" data-undep="${w.id}">remove</span></div>`).join("") || '<div class="muted">nothing</div>'}
       <div class="actions" style="margin-top:6px"><input id="dDep" placeholder="ids, e.g. 4, 9" style="width:140px"><button class="btn" data-do="dep">Add</button></div>
     </div>
-    <div class="sec"><h4>Blocker tree</h4><div class="tree">${esc(treeText(it.tree))}</div></div>
+    <div class="sec"><h4>Blocker tree</h4><div class="tree">${esc(treeText(it.tree))}</div>${offerHelpHtml(it)}</div>
+    <div class="sec"><h4>Messages</h4>
+      ${(it.messages || []).map(m => msgLine(m)).join("") || '<div class="muted">none</div>'}
+      <div class="actions" style="margin-top:6px"><select id="dMsgKind"><option value="note">note</option><option value="question">question</option><option value="alert">alert</option></select>
+        <input id="dMsgBody" placeholder="${it.assignee ? "to " + esc(it.assignee) : "to whoever takes it next"}" style="flex:1"><button class="btn" data-do="msg">Send</button></div>
+    </div>
     <div class="sec"><h4>Unblocks</h4>${it.unblocks_detail.map(w => `<div><span class="link" data-open="${w.id}">#${w.id} ${esc(w.title)}</span> <span class="muted">(${w.status})</span></div>`).join("") || '<div class="muted">nothing</div>'}</div>
     ${it.status === "open" ? `<div class="sec"><h4>Push to agent</h4>
       ${it.reserved_until ? `<div>Pushed to <b>${esc(it.reserved_for)}</b> by ${esc(it.reserved_by || "?")} · ${left(it.reserved_until)} left · <span class="link" data-unpush="${it.id}">cancel</span></div>`
@@ -566,6 +586,7 @@ async function drawerAction(what) {
     if (what === "reopen") await act("reopen", { id });
     if (what === "unblock") await act("unblock", { id });
     if (what === "replanned") await act("replanned", { id });
+    if (what === "msg") { const body = $("#dMsgBody").value.trim(); if (!body) return; if (!actor()) return toast("Choose who you are in 'Acting as' first", true); await act("send", { kind: $("#dMsgKind").value, body, item: id }); toast("Sent"); }
     if (what === "push") { const to = $("#dPushTo").value; if (to) { await act("push", { id, to, note: $("#dPushNote").value.trim() || undefined }); toast(`Pushed #${id} to ${to}`); } }
     if (what === "block") { const r = $("#dBlock").value.trim(), u = $("#dUntil").value.trim(); if (r || u) await act("block", { id, reason: r || undefined, until: u || undefined }); }
     if (what === "dep") { const on = $("#dDep").value.split(/[\s,]+/).filter(Boolean).map(Number); if (on.length) await act("dep_add", { id, on }); }
@@ -582,6 +603,88 @@ async function drawerAction(what) {
     document.activeElement && document.activeElement.blur();
     await openDrawer(id);
   } catch (e) { /* toast shown */ }
+}
+
+// ---- Inbox: messages for the person in "Acting as", with the answer each kind needs.
+let IB = [], ibSig = "";
+function msgLine(m) {
+  return `<div class="ev"><span class="chip c-p">${esc(m.kind)}</span> <b>${esc(m.from_agent)}</b> → ${esc(m.to_agent || "next holder")} · ${ago(m.created_at)}${m.state !== "open" && m.state !== "read" ? " · " + esc(m.state) : ""}<div class="body" style="white-space:pre-wrap">${esc(clip(m.body, 600))}</div></div>`;
+}
+function offerHelpHtml(it) {
+  const me = actor(), held = [];
+  (function walk(n, root) { if (!root && n.assignee && n.assignee !== me && ["in_progress", "held"].includes(n.status)) held.push(n); n.children.forEach(c => walk(c, false)); })(it.tree, true);
+  if (!held.length || ["done", "dropped"].includes(it.status)) return "";
+  return `<div style="margin-top:6px">${held.map(n => `<div class="actions"><span class="muted">#${n.id} held by ${esc(n.assignee)}</span>
+      <input id="offer-${n.id}" placeholder="I am blocked on this; I can take …" style="flex:1"><button class="btn" data-offer="${n.id}">Offer help</button></div>`).join("")}</div>`;
+}
+
+async function pollInbox() {
+  const me = actor();
+  $("#inboxPanel").classList.toggle("hidden", !me);
+  if (!me) return;
+  const r = await fetch(`/api/inbox?agent=${encodeURIComponent(me)}${$("#inboxAll").checked ? "&all=1" : ""}`); if (!r.ok) return;
+  IB = (await r.json()).messages;
+  renderInbox();
+}
+
+function renderInbox() {
+  const me = actor();
+  $("#inboxTitle").textContent = `Inbox for ${me}` + (IB.length ? ` (${IB.filter(m => m.unread || (["question", "offer"].includes(m.kind) && m.state === "open")).length})` : "");
+  fillSelect("#sendTo", S.agents.map(a => a.name).filter(n => n !== me), false);
+  const ib = $("#inbox");
+  if (ib.contains(document.activeElement) && document.activeElement.tagName === "INPUT") return;  // do not wipe what they type
+  const sig = JSON.stringify([me, IB.map(m => [m.id, m.state, m.unread])]);
+  if (sig === ibSig) return;
+  ibSig = sig;
+  ib.innerHTML = IB.map(m => {
+    const open = m.state === "open", it = m.item_id ? S.items.find(i => i.id === m.item_id) : null;
+    let acts = "";
+    if (m.kind === "question" && open)
+      acts = `<input id="ans-${m.id}" placeholder="your answer"><button class="btn primary" data-ib="answer" data-msg="${m.id}">Answer</button>`;
+    else if (m.kind === "offer" && open) {
+      const mine = it && it.assignee === me;
+      acts = (mine ? `<button class="btn primary" data-ib="give" data-msg="${m.id}" data-id="${m.item_id}" data-to="${esc(m.from_agent)}">Give #${m.item_id} to ${esc(m.from_agent)}</button>
+          <input id="split-${m.id}" placeholder="smaller pieces, separated by ;"><button class="btn" data-ib="split" data-msg="${m.id}" data-id="${m.item_id}">Split</button>` : "")
+        + `<input id="dec-${m.id}" placeholder="why not (optional)"><button class="btn" data-ib="decline" data-msg="${m.id}">Decline</button>`;
+    } else {
+      const pushed = m.kind === "alert" && it && it.status === "open" && it.reserved_for === me && it.reserved_until;
+      if (pushed) acts += `<button class="btn primary" data-ib="accept" data-id="${it.id}">Accept #${it.id}</button><button class="btn" data-ib="decline-push" data-id="${it.id}">Decline #${it.id}</button>`;
+      else if (m.kind === "alert" && open) acts += `<input id="dec-${m.id}" placeholder="why not (optional)"><button class="btn" data-ib="decline" data-msg="${m.id}">Decline</button>`;
+      acts += `<input id="rep-${m.id}" placeholder="reply"><button class="btn" data-ib="reply" data-msg="${m.id}">Reply</button>`;
+      if (m.unread) acts += `<button class="btn" data-ib="read" data-msg="${m.id}">Mark read</button>`;
+    }
+    return `<div class="ny msg ${m.unread || (open && ["question", "offer"].includes(m.kind)) ? "" : "read"}">
+      <div class="ny-h"><span class="chip ${m.kind === "alert" ? "c-p0" : "c-p"}">${esc(m.kind)}</span><b>${esc(m.from_agent)}</b>
+        ${m.item_id ? `<span class="link" data-open="${m.item_id}">#${m.item_id} ${esc(clip(m.item_title || "", 60))}</span>` : ""}
+        <span class="muted" style="font-size:12px">${ago(m.created_at)} · #${m.id}${m.state !== "open" && m.state !== "read" ? " · " + esc(m.state) : ""}</span>
+        <span class="link" data-thread="${m.id}">thread</span></div>
+      <div class="body">${esc(m.body)}</div>
+      <div class="actions">${acts}</div>
+      <div class="thread hidden" id="thr-${m.id}"></div></div>`;
+  }).join("") || `<div class="muted">No messages${$("#inboxAll").checked ? "" : " waiting"}.</div>`;
+}
+
+async function inboxAction(t) {
+  const what = t.dataset.ib, msg = +t.dataset.msg, id = +t.dataset.id, val = (p) => ($("#" + p + "-" + msg) || {}).value?.trim();
+  try {
+    if (what === "answer") { const body = val("ans"); if (!body) return toast("Write the answer first", true); await act("answer", { msg, body }); toast("Answered"); }
+    if (what === "give") { await act("give", { id, to: t.dataset.to }); toast(`Gave #${id} to ${t.dataset.to}`); }
+    if (what === "split") { const titles = (val("split") || "").split(";").map(x => x.trim()).filter(Boolean); if (!titles.length) return toast("Write the smaller pieces, separated by ;", true); await act("split", { id, titles }); toast(`Split #${id} into ${titles.length}`); }
+    if (what === "decline") { await act("decline_message", { msg, note: val("dec") || undefined }); toast("Declined"); }
+    if (what === "accept") { await act("accept", { id }); toast(`#${id} is yours`); }
+    if (what === "decline-push") { await act("decline", { id }); toast(`Handed #${id} back`); }
+    if (what === "reply") { const body = val("rep"); if (!body) return toast("Write the reply first", true); await act("send", { kind: "note", body, reply: msg }); toast("Sent"); }
+    if (what === "read") await act("message_read", { msg });
+  } catch (e) { /* toast shown */ }
+  ibSig = ""; document.activeElement && document.activeElement.blur(); await pollInbox();
+}
+
+async function toggleThread(msg) {
+  const box = $("#thr-" + msg); if (!box) return;
+  if (!box.classList.contains("hidden")) return box.classList.add("hidden");
+  const r = await fetch(`/api/thread/${msg}`); if (!r.ok) return;
+  box.innerHTML = (await r.json()).messages.map(msgLine).join("");
+  box.classList.remove("hidden");
 }
 
 // ---- Needs you: decisions and steps waiting for a person, with browser notifications.
@@ -667,7 +770,7 @@ async function refresh() {
   const r = await fetch("/api/state"); S = await r.json();
   if (S.dev_build) { if (window._build && window._build !== S.dev_build) return location.reload(); window._build = S.dev_build; }
   renderSelects(); renderCapacity(); renderNext(); renderProjects(); renderAgents(); renderEvents(); renderSettings(); renderTakeovers(); renderBlocked();
-  renderGraph(false); renderLog(false); pollNeedsYou().catch(() => {});
+  renderGraph(false); renderLog(false); pollNeedsYou().catch(() => {}); pollInbox().catch(() => {});
   $("#stamp").textContent = "updated " + new Date().toLocaleTimeString();
   if (openItem != null && $("#drawer").classList.contains("open")) openDrawer(openItem);
 }
@@ -679,6 +782,11 @@ document.addEventListener("click", async (e) => {
   if (t.id === "dClose") { $("#drawer").classList.remove("open"); openItem = null; return; }
   if (t.dataset.do) return drawerAction(t.dataset.do);
   if (t.dataset.ny) return needsYouAction(t);
+  if (t.dataset.ib) return inboxAction(t);
+  if (t.dataset.thread) return toggleThread(+t.dataset.thread);
+  if (t.id === "sendGo") return sendForm();
+  if (t.dataset.offer) { const n = +t.dataset.offer, body = $("#offer-" + n).value.trim(); if (!body) return toast("Say what you can take", true);
+    return act("offer", { item: n, body }).then(() => toast(`Offer sent to the holder of #${n}`)).catch(() => {}); }
   if (t.dataset.copyPrompt) return copyPrompt(`/api/item/${t.dataset.copyPrompt}/prompt`);
   if (t.id === "copyAll") return copyPrompt("/api/prompt-all");
   if (t.id === "notifyOn") { await Notification.requestPermission(); return renderNeedsYou(); }
@@ -699,7 +807,16 @@ document.addEventListener("click", async (e) => {
   }
 });
 
-$("#actor").addEventListener("change", () => store("river.actor", $("#actor").value));
+$("#actor").addEventListener("change", () => { store("river.actor", $("#actor").value); ibSig = ""; pollInbox().catch(() => {}); });
+$("#inboxAll").addEventListener("change", () => { ibSig = ""; pollInbox().catch(() => {}); });
+async function sendForm() {
+  if (!actor()) return toast("Choose who you are in 'Acting as' first", true);
+  const body = $("#sendBody").value.trim(), item = $("#sendItem").value.replace("#", "").trim();
+  if (!body) return toast("Write the message first", true);
+  const args = { kind: $("#sendKind").value, body };
+  if (item) args.item = +item; else args.to = $("#sendTo").value;
+  try { await act("send", args); $("#sendBody").value = ""; $("#sendItem").value = ""; toast("Sent"); } catch (e) { /* toast shown */ }
+}
 $("#area").addEventListener("change", renderNext);
 $("#showDone").addEventListener("change", renderProjects);
 $("#graphProject").addEventListener("change", () => renderGraph(true));
