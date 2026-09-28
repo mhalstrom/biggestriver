@@ -80,6 +80,9 @@ helps. Agents read `river project list` to pick an area.
 ```
 river add <project> "<title>" [-p 0-4] [--doer any|ai|human] [--after <id> ...] [--feeds <id> ...] [--notes "..."]
           [--context "..."] [--touches <file> ...] [--check "<command>"]
+river add [project] --from plan.md [--dry-run]   # one item per line of an outline: a line waits on
+                                    # the lines indented under it; 'P0' at the start and '(human)' or
+                                    # '(ai)' at the end set priority and doer; '[x]' lines are skipped
 river dep <id> --on <id> ...        # <id> waits on the others
 river dep <id> --on <id> --kind feeds      # waits, then reads their output in its context
                                            # (changes an existing --after link to feeds; show marks it)

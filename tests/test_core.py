@@ -823,6 +823,41 @@ class DueDates(Base):
         self.assertIsNone(core.parse_due("none"))
 
 
+class PlanFile(Base):
+    PLAN = """# Launch
+- P0 Live test order (human)
+  - Deploy the site (human)
+    1. Menu page
+    2. [ ] Preorder form (ai)
+        - Friday list
+    3. [x] Pick a host
+        - Stale child
+
+> a quote
+"""
+
+    def test_parse_plan(self):
+        rows = core.parse_plan(self.PLAN)
+        self.assertEqual([(r["title"], r["priority"], r["doer"], r["parent"]) for r in rows], [
+            ("Live test order", 0, "human", None), ("Deploy the site", 2, "human", 0), ("Menu page", 2, "any", 1),
+            ("Preorder form", 2, "ai", 1), ("Friday list", 2, "any", 3), ("Stale child", 2, "any", 1)])
+        with self.assertRaises(RiverError):
+            core.parse_plan("# only a heading\n")
+
+    def test_add_plan_links_children_to_parents(self):
+        core.project_add(self.c, "shop")
+        res = core.add_plan(self.c, "shop", self.PLAN, "t")
+        ids = {r["title"]: r["id"] for r in res["items"]}
+        ann = core.annotate(self.c)
+        self.assertEqual(ann[ids["Live test order"]]["waits_on"], [ids["Deploy the site"]])
+        self.assertEqual(ann[ids["Deploy the site"]]["waits_on"],
+                         sorted([ids["Menu page"], ids["Preorder form"], ids["Stale child"]]))
+        self.assertEqual(ann[ids["Preorder form"]]["waits_on"], [ids["Friday list"]])
+        self.assertEqual(ann[ids["Friday list"]]["effective_priority"], 0)  # the outcome's P0 flows down
+        self.assertEqual(core.add_plan(self.c, "shop", "a\n  b\n", dry_run=True)["items"][1]["parent"], 0)
+        self.assertEqual(len(core.item_list(self.c, "shop")), 6)
+
+
 class Sessions(Base):
     def test_session_name_recorded_and_shown(self):
         core.project_add(self.c, "a", path=self.dir.name)

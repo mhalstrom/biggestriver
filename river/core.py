@@ -847,6 +847,62 @@ def _project_name(conn, pid):
     return conn.execute("SELECT name FROM projects WHERE id=?", (pid,)).fetchone()["name"]
 
 
+_PLAN_BULLET = re.compile(r"^(?:[-*+]|\d+[.)])\s+")
+_PLAN_BOX = re.compile(r"^\[( |x|X)\]\s+")
+_PLAN_PRIO = re.compile(r"^[Pp]([0-4])\b[:\s]*")
+_PLAN_DOER = re.compile(r"\s*\((human|ai|agent|anyone|any)\)\s*$", re.I)
+
+
+def parse_plan(text, priority=2, doer="any"):
+    """Lines of a plan file as items, read as an outline: one item per line, and a line waits on the
+    lines indented under it (its steps come first; `parent` is the line it is a step of). Markdown bullets, numbers, and '[ ]' boxes are dropped; a '[x]' line
+    is skipped (already done), and so are blank lines, '#' headings, and '>' quotes. A leading 'P0'..'P4'
+    sets the priority; a trailing '(human)', '(ai)', or '(anyone)' sets who can do it."""
+    rows, stack = [], []  # stack: (indent, row index)
+    for n, raw in enumerate(text.splitlines(), 1):
+        line = raw.expandtabs(4)
+        body = line.strip()
+        if not body or body.startswith(("#", ">")):
+            continue
+        indent = len(line) - len(line.lstrip())
+        body = _PLAN_BULLET.sub("", body)
+        box = _PLAN_BOX.match(body)
+        if box:
+            body = body[box.end():]
+        m = _PLAN_PRIO.match(body)
+        prio = int(m.group(1)) if m else priority
+        body = body[m.end():] if m else body
+        d = _PLAN_DOER.search(body)
+        who = doer if not d else {"agent": "ai", "anyone": "any"}.get(d.group(1).lower(), d.group(1).lower())
+        body = body[:d.start()] if d else body
+        while stack and stack[-1][0] >= indent:
+            stack.pop()
+        parent = stack[-1][1] if stack else None
+        if box and box.group(1) in "xX":
+            continue  # done already; its children wait on nothing from it
+        if not body.strip():
+            raise RiverError(f"plan line {n} has no title: {raw.strip()!r}")
+        rows.append({"line": n, "title": body.strip(), "priority": prio, "doer": who, "parent": parent})
+        stack.append((indent, len(rows) - 1))
+    if not rows:
+        raise RiverError("the plan has no items: one item per line; indent a line to make it wait on the line above")
+    return rows
+
+
+def add_plan(conn, project, text, actor=None, priority=2, doer="any", dry_run=False):
+    """Add every item of a plan file (see parse_plan) to one project; each line waits on its steps."""
+    rows = parse_plan(text, priority, doer)
+    _project(conn, project)
+    if dry_run:
+        return {"project": project, "dry_run": True, "items": rows}
+    ids = [item_add(conn, project, r["title"], r["priority"], "", r["doer"], (), actor)["id"] for r in rows]
+    for r, i in zip(rows, ids):
+        r["id"] = i
+        if r["parent"] is not None:
+            dep_add(conn, ids[r["parent"]], [i], actor)
+    return {"project": project, "dry_run": False, "items": rows}
+
+
 def item_edit(conn, item_id, title=None, notes=None, doer=None, project=None, actor=None,
               context=None, touches=None, check=None, due=None):
     with tx(conn):

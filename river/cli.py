@@ -295,7 +295,10 @@ def build_parser():
     tgs.add_parser("list")
 
     x = sub.add_parser("add", help="add an item: river add [project] \"title\" (project from --blocks/--found-during or the folder)")
-    x.add_argument("words", nargs="+", metavar="[project] title")
+    x.add_argument("words", nargs="*", metavar="[project] title")
+    x.add_argument("--from", dest="plan_file", metavar="FILE",
+                   help="add every line of a plan file (an outline) as an item; a line waits on the lines indented under it")
+    x.add_argument("--dry-run", action="store_true", help="with --from: show what would be added")
     x.add_argument("--priority", "-p", type=int, default=2, help="0 highest .. 4 lowest (default 2)")
     x.add_argument("--after", type=int, nargs="*", default=[], help="items this one waits on")
     x.add_argument("--feeds", type=int, nargs="*", default=[], help="items this one waits on and whose output it reads")
@@ -639,6 +642,14 @@ def dispatch(conn, a, actor):
     if c == "add":
         if a.mode and a.blocks is None:
             raise RiverError("--keep and --release go with --blocks <id>")
+        if a.plan_file:
+            if len(a.words) > 1:
+                raise RiverError("with --from, give at most a project: river add [project] --from plan.md")
+            text = sys.stdin.read() if a.plan_file == "-" else Path(a.plan_file).expanduser().read_text()
+            project = a.words[0] if a.words else core.project_for_add(conn, os.getcwd(), None)
+            return core.add_plan(conn, project, text, actor, a.priority, a.doer, a.dry_run)
+        if not a.words:
+            raise RiverError("give a title: river add [project] \"title\"   (or a plan file: river add --from plan.md)")
         if len(a.words) > 2:
             raise RiverError("put the title in quotes: river add [project] \"title\"")
         if len(a.words) == 2:
@@ -1007,6 +1018,17 @@ def render(a, res):
         return render_go(res)
     if c == "plan":
         return render_plan(res)
+    if c == "add" and isinstance(res, dict) and "dry_run" in res:
+        rows = res["items"]
+        print(("Would add" if res["dry_run"] else "Added") + f" {len(rows)} item(s) to {res['project']}:")
+        ref = lambda r: f"#{r['id']}" if "id" in r else f"line {r['line']}"
+        for i, r in enumerate(rows):
+            steps = [ref(x) for x in rows if x["parent"] == i]
+            print(f"  {ref(r):<8} P{r['priority']} {r['doer']:<5} {r['title']}"
+                  + (f"  waits on {', '.join(steps)}" if steps else ""))
+        if res["dry_run"]:
+            print("Run it again without --dry-run to add them.")
+        return
     if c == "project":
         if isinstance(res, dict) and "ready_count" in res:
             print(f"{res['name']} (rank {res['rank']})")
