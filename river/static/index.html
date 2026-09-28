@@ -239,7 +239,7 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
   </nav>
   <span class="spacer"></span>
   <button class="btn" id="updateBtn" title="Pull the latest Biggest River from git and restart this page's server">Update</button>
-  <label class="sub">Acting as
+  <label class="sub" title="Who you are on this page. What you do here (claim, done, messages) is recorded under this name, and Needs you shows your items. Agents name themselves on the command line.">You are
     <select id="actor"></select>
   </label>
   <span class="sub" id="stamp"></span>
@@ -424,6 +424,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":
 let S = null, openItem = null, tab = "board", graphSig = "";
 
 function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } }
+let actorPicked = false;
 function actor() { return $("#actor").value || null; }
 
 function toast(msg, err) {
@@ -514,7 +515,7 @@ function renderCapacity() {
 
 function renderNext() {
   const area = $("#area").value;
-  if (area === "__mine") { $("#next").innerHTML = `<div class="muted">Use <b>Claim next</b>: the server picks the ready item closest to what "${esc(actor() || "(choose Acting as)")}" claimed or finished before.</div>`; return; }
+  if (area === "__mine") { $("#next").innerHTML = `<div class="muted">Use <b>Claim next</b>: the server picks the ready item closest to what "${esc(actor() || "(choose your name in You are)")}" claimed or finished before.</div>`; return; }
   const ready = S.items.filter(i => i.ready && (!area || i.project === area) && inGoal(i));
   $("#next").innerHTML = ready.slice(0, 5).map(i => rowHtml(i, i.reason)).join("") || `<div class="muted">Nothing is ready${area ? " in " + esc(area) : ""}.</div>`;
 }
@@ -688,8 +689,11 @@ function renderSelects() {
   const names = S.projects.map(p => p.name);
   { const el = $("#area"), cur = el.value; el.innerHTML = `<option value="">All projects</option><option value="__mine">Near my earlier work</option>` + names.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join(""); if ([...el.options].some(o => o.value === cur)) el.value = cur; } fillSelect("#logProject", names, true); fillSelect("#addProject", names, false);
   const a = $("#actor"), cur = a.value || store("river.actor") || "";
-  a.innerHTML = `<option value="">(nobody)</option>` + S.agents.map(x => `<option value="${esc(x.name)}">${esc(x.name)}${x.kind === "human" ? " (human)" : ""}</option>`).join("");
-  if ([...a.options].some(o => o.value === cur)) a.value = cur;
+  // Only people act from this page; agents act through the river command.
+  const people = S.agents.filter(x => x.kind === "human");
+  a.innerHTML = `<option value="">(choose your name)</option>` + people.map(x => `<option value="${esc(x.name)}">${esc(x.name)}</option>`).join("");
+  if (people.some(x => x.name === cur)) a.value = cur;
+  else if (!a.value && people.length === 1 && !actorPicked) { a.value = people[0].name; actorPicked = true; store("river.actor", a.value); }
   fillSelect("#setKey", Object.keys(S.settings.defaults), false);
   fillSelect("#goalProject", names, false);
   const openGoals = (S.goals || []).filter(g => g.status === "open");
@@ -925,7 +929,7 @@ async function drawerAction(what) {
     if (what === "reopen") await act("reopen", { id });
     if (what === "unblock") await act("unblock", { id });
     if (what === "replanned") await act("replanned", { id });
-    if (what === "msg") { const body = $("#dMsgBody").value.trim(); if (!body) return; if (!actor()) return toast("Choose who you are in 'Acting as' first", true); await act("send", { kind: $("#dMsgKind").value, body, item: id }); toast("Sent"); }
+    if (what === "msg") { const body = $("#dMsgBody").value.trim(); if (!body) return; if (!actor()) return toast("Choose your name in 'You are' first", true); await act("send", { kind: $("#dMsgKind").value, body, item: id }); toast("Sent"); }
     if (what === "push") { const to = $("#dPushTo").value; if (to) { await act("push", { id, to, note: $("#dPushNote").value.trim() || undefined }); toast(`Pushed #${id} to ${to}`); } }
     if (what === "block") { const r = $("#dBlock").value.trim(), u = $("#dUntil").value.trim(); if (r || u) await act("block", { id, reason: r || undefined, until: u || undefined }); }
     if (what === "tag") { const g = $("#dGoal").value; if (g) await act("item_edit", { id, goals: [g] }); }
@@ -945,7 +949,7 @@ async function drawerAction(what) {
   } catch (e) { /* toast shown */ }
 }
 
-// ---- Inbox: messages for the person in "Acting as", with the answer each kind needs.
+// ---- Inbox: messages for the person in "You are", with the answer each kind needs.
 let IB = [], ibSig = "";
 function msgLine(m) {
   return `<div class="ev"><span class="chip c-p">${esc(m.kind)}</span> <b>${esc(m.from_agent)}</b> → ${esc(m.to_agent || "next holder")} · ${ago(m.created_at)}${m.state !== "open" && m.state !== "read" ? " · " + esc(m.state) : ""}<div class="body" style="white-space:pre-wrap">${esc(clip(m.body, 600))}</div></div>`;
@@ -1100,10 +1104,10 @@ async function copyPrompt(url) {
 async function needsYouAction(t) {
   const what = t.dataset.ny, id = +t.dataset.id, msg = +t.dataset.msg;
   try {
-    if (what === "claim") { if (!actor()) return toast("Choose who you are in 'Acting as' first", true); await act("claim", { id }); }
+    if (what === "claim") { if (!actor()) return toast("Choose your name in 'You are' first", true); await act("claim", { id }); }
     if (what === "done") { const out = prompt("What did you decide or do? (saved as the item's output)"); if (out === null) return; await act("done", { id, output: out || undefined }); }
     if (what === "answer") {
-      if (!actor()) return toast("Choose who you are in 'Acting as' first", true);
+      if (!actor()) return toast("Choose your name in 'You are' first", true);
       const body = prompt("Your answer"); if (!body) return; await act("answer", { msg, body });
     }
     if (what === "read") await act("message_read", { msg });
@@ -1177,7 +1181,7 @@ $("#actor").addEventListener("change", () => { store("river.actor", $("#actor").
 document.addEventListener("change", (e) => { if (e.target.id === "launchAgent") store("river.launch.agent", e.target.value); });
 $("#inboxAll").addEventListener("change", () => { ibSig = ""; pollInbox().catch(() => {}); });
 async function sendForm() {
-  if (!actor()) return toast("Choose who you are in 'Acting as' first", true);
+  if (!actor()) return toast("Choose your name in 'You are' first", true);
   const body = $("#sendBody").value.trim(), item = $("#sendItem").value.replace("#", "").trim();
   if (!body) return toast("Write the message first", true);
   const args = { kind: $("#sendKind").value, body };
@@ -1194,7 +1198,7 @@ async function goalAction(what, name) {
       if (to >= 1 && to <= sib.length) await act("goal_rank", { name, rank: to });
     }
     if (what === "own" || what === "release") {
-      if (!actor()) return toast("Choose who you are in 'Acting as' first", true);
+      if (!actor()) return toast("Choose your name in 'You are' first", true);
       await act("goal_" + what, { name }); toast(what === "own" ? `You own ${name}` : `Released ${name}`);
     }
     if (what === "edit") {
@@ -1228,7 +1232,7 @@ $("#graphDone").addEventListener("change", () => renderGraph(true));
 $("#logProject").addEventListener("change", () => renderLog(true));
 $("#logSince").addEventListener("change", () => renderLog(true));
 $("#claimNext").addEventListener("click", async () => {
-  if (!actor()) return toast("Choose who you are in 'Acting as' first", true);
+  if (!actor()) return toast("Choose your name in 'You are' first", true);
   const area = $("#area").value;
   const res = await act("next_claim", area === "__mine" ? { mine: true } : { project: area || undefined }).catch(() => null);
   if (res && res.length) { toast(`Claimed #${res[0].id}`); openDrawer(res[0].id); } else if (res) toast("Nothing is ready in that area");
