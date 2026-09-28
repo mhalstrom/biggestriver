@@ -28,6 +28,16 @@ jobs:
           /tmp/v/bin/pip install --quiet dist/*.whl
           RIVER_DB=/tmp/q.db /tmp/v/bin/river guide | head -1
           RIVER_DB=/tmp/q.db /tmp/v/bin/river project add demo
+      - uses: actions/setup-node@v5
+        if: runner.os == 'macOS'
+        with:
+          node-version: "22"
+      - name: Desktop smoke test (river serve starts and stops)
+        if: runner.os == 'macOS'
+        working-directory: desktop
+        run: |
+          npm ci --ignore-scripts
+          npm test
   # Windows: river and the desktop app starter work there too (#273, #274).
   windows:
     runs-on: windows-latest

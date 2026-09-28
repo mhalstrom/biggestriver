@@ -63,7 +63,7 @@ async function startRiver({ riverRoot, python, env = process.env, timeoutMs = 20
   if (!fs.existsSync(bin)) throw new Error(`river is missing from ${riverRoot}`);
   const port = await freePort();
   const child = spawn(pyCmd, [...pyArgs, bin, "serve", "--port", String(port)],
-    { cwd: riverRoot, env: { ...env, RIVER_DESKTOP: "1",
+    { cwd: riverRoot, env: { ...env, RIVER_DESKTOP: "1", PYTHONFAULTHANDLER: "1",
       // The app's own Python writes no .pyc files into the app bundle (they would break its signature).
       ...(own ? { PYTHONDONTWRITEBYTECODE: "1", PYTHONNOUSERSITE: "1" } : {}) }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   let log = "";
@@ -82,8 +82,12 @@ async function startRiver({ riverRoot, python, env = process.env, timeoutMs = 20
     if (await get(url + "api/state") === 200) return { url, port, child, stop };
     await new Promise((r) => setTimeout(r, 200));
   }
+  // A server that hangs: SIGABRT makes Python (PYTHONFAULTHANDLER) print where each thread is.
+  if (process.platform !== "win32" && child.exitCode === null) {
+    await new Promise((resolve) => { child.once("exit", resolve); child.kill("SIGABRT"); setTimeout(resolve, 2000).unref(); });
+  }
   await stop();
-  throw new Error(`river serve did not answer on ${url} within ${timeoutMs / 1000}s:\n${log.trim().slice(-800)}`);
+  throw new Error(`river serve did not answer on ${url} within ${timeoutMs / 1000}s:\n${log.trim().slice(0, 4000)}`);
 }
 
 module.exports = { findPython, bundledPython, freePort, startRiver };
