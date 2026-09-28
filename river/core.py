@@ -1487,9 +1487,15 @@ def dep_remove(conn, item_id, on, actor=None):
     return item_show(conn, item_id)
 
 
+def _norm_path(p):
+    """One form for comparing paths: forward slashes (Windows gives backslashes), and no case on Windows."""
+    p = p.replace("\\", "/")
+    return p.lower() if os.name == "nt" else p
+
+
 def _paths_overlap(a, b):
     """Same file, or one path is a directory that holds the other."""
-    a, b = a.rstrip("/"), b.rstrip("/")
+    a, b = _norm_path(a).rstrip("/"), _norm_path(b).rstrip("/")
     return a == b or b.startswith(a + "/") or a.startswith(b + "/")
 
 

@@ -1128,6 +1128,13 @@ class WhoFile(Base):
         self.assertEqual(names("README.md"), [])
 
 
+class PathsOverlap(unittest.TestCase):
+    def test_windows_backslashes_match_forward_slashes(self):
+        self.assertTrue(core._paths_overlap("C:\\repo\\river\\core.py", "C:/repo/river"))
+        self.assertTrue(core._paths_overlap("river\\static\\app.js", "river/static/"))
+        self.assertFalse(core._paths_overlap("river\\static2", "river/static"))
+
+
 class KeepRelease(Base):
     def setUp(self):
         super().setUp()
