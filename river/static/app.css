@@ -222,6 +222,11 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
 .tabulator .tabulator-row .tabulator-cell { border-right: 0; padding: 6px 8px; }
 .tabulator .tabulator-row .tabulator-cell.wrap { white-space: normal; overflow-wrap: anywhere; }
 .tabulator .tabulator-row .tabulator-cell.muted { color: var(--muted); font-size: 12px; }
+.tabulator .tabulator-cell .title, .tabulator .tabulator-cell .why, .tabulator .tabulator-cell .blk { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tabulator .tabulator-cell .why, .tabulator .tabulator-cell .blk { font-size: 12px; margin-top: 2px; }
+.tabulator .tabulator-cell .why { color: var(--muted); }
+.tabulator .tabulator-cell .blk { color: var(--wait); }
+.tabulator .tabulator-cell .chip { margin: 1px 4px 1px 0; }
 .tabulator .tabulator-row.tabulator-group { background: var(--bg); border: 0; border-bottom: 1px solid var(--line); color: var(--ink); font-weight: normal; padding: 6px 8px; }
 .tabulator .tabulator-row .tabulator-cell .clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
 .tabulator .tabulator-row.tabulator-group span { margin-left: 6px; color: var(--muted); }

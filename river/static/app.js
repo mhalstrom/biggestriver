@@ -2,7 +2,7 @@ import { $, esc, store, actor, toast, act, ago, left, clip, copyText, fillSelect
 import { chip, prioNumChip, doerChip, projectChip, ownerChip, countChip } from "./components/chip.js";
 import { bar, pct, capacityBars } from "./components/bar.js";
 import { nyCard, goalCard, projCard, agentCard } from "./components/card.js";
-import { itemRow, itemOrder } from "./components/itemRow.js";
+import { itemRow, itemOrder, itemTableRows, itemTableColumns } from "./components/itemRow.js";
 import { makeTable } from "./components/table.js";
 import { makeDrawer, itemDrawerHtml, msgLine } from "./components/drawer.js";
 import { makeDialog } from "./components/dialog.js";
@@ -65,13 +65,28 @@ function renderProjects() {
         <div class="pwho">${who.length ? "Working here now: " + who.map(n => `<b>${esc(n)}</b>`).join(", ") : "Nobody works here now."}</div>
         <div class="psec">Goals</div>
         <div class="goals">${pg.map(g => goalCard(g, { selected: G === g.name, me })).join("")}<span class="link" style="font-size:12px;align-self:center" data-addgoal="${esc(p.name)}">${pg.length ? "+ goal" : "No goals yet. + Add a goal"}</span></div>
-        <div class="psec">Open items (${open.length})${ready ? `, ready first` : ""}</div>
-        ${open.sort(itemOrder).map(i => itemRow(i, i.notes)).join("") || '<div class="muted" style="font-size:12px">No open items.</div>'}
-        ${showDone && closed.length ? `<div class="psec">Done (${closed.length})</div>` + closed.map(i => itemRow(i, i.output)).join("") : ""}
+        <div class="psec">Open items (${open.length})${showDone && closed.length ? `, ${closed.length} done` : ""}</div>
+        <div class="ptable" data-ptable="${esc(p.name)}"></div>
       </div>`);
   }).join("");
-  $("#projects").innerHTML = html || `<div class="muted">No projects yet.</div>`;
+  // The cards redraw only when they change; each project's item table lives on between redraws.
+  const box = $("#projects"), full = html || `<div class="muted">No projects yet.</div>`;
+  if (box.dataset.sig !== full) {
+    box.innerHTML = full; box.dataset.sig = full;
+    box.querySelectorAll("[data-ptable]").forEach(ph => {
+      const name = ph.dataset.ptable, known = projTables.get(name);
+      if (known) ph.replaceWith(known.el);
+      else projTables.set(name, { el: ph, table: makeTable(ph, { key: "proj:" + name, sort: [{ column: "order", dir: "asc" }],
+        columns: itemTableColumns((it) => ["done", "dropped"].includes(it.status) ? it.output : it.notes),
+        placeholder: "No open items.", onRow: (r) => openDrawer(r.id) }) });
+    });
+  }
+  for (const [name, t] of projTables) {
+    if (!box.contains(t.el)) { t.table.tabulator.destroy(); projTables.delete(name); continue; }
+    t.table.set(itemTableRows(S.items.filter(i => i.project === name && inGoal(i) && (showDone || !["done", "dropped"].includes(i.status)))));
+  }
 }
+const projTables = new Map();
 
 // An agent session not seen for away_after, holding and owning nothing, has most likely stopped: hide it.
 // People always show, and so does any agent that still holds an item, owns a goal or target, or has a push waiting.

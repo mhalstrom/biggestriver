@@ -30,7 +30,9 @@ function column({ filter = "text", html, ...c }) {
 export function makeTable(el, { key, columns, index = "id", sort = [], onRow, placeholder = "Nothing here.", height, ...options } = {}) {
   const keep = saved(key);
   const t = new window.Tabulator(el, {
-    index, height, placeholder, data: [], layout: "fitColumns", ...options,
+    index, height, placeholder, data: [], layout: "fitColumns",
+    // Without a fixed height the table grows with its rows: draw them all (no virtual scrolling).
+    renderVertical: height ? "virtual" : "basic", ...options,
     columns: columns.map(column),
     initialSort: keep.sort || sort,
     initialHeaderFilter: keep.filter || [],
@@ -41,6 +43,13 @@ export function makeTable(el, { key, columns, index = "id", sort = [], onRow, pl
     filter: t.getHeaderFilters().map((f) => ({ field: f.field, value: f.value })),
   }));
   built.then(() => { t.on("dataSorted", remember); t.on("dataFiltered", remember); });
+  // A table built while hidden (another tab, a folded card) has no height: redraw it when it shows.
+  let shown = el.offsetWidth > 0;
+  new ResizeObserver(() => {
+    const now = el.offsetWidth > 0;
+    if (now && !shown) built.then(() => t.redraw(true));
+    shown = now;
+  }).observe(el);
   if (onRow) t.on("rowClick", (e, row) => { if (!e.target.closest("a, button, input, select, textarea, .link")) onRow(row.getData()); });
 
   let last = null, loaded = false;
