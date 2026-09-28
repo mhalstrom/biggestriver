@@ -140,6 +140,29 @@ class LaunchAgent(unittest.TestCase):
         r = server.dispatch_item(self.c, top, runner=sent.append)
         self.assertEqual((r["pushed_to"], len(sent)), ("idle", 1))  # a waiting session gets it; no new Terminal
 
+    def test_open_agent_on_a_person_item_or_a_waiting_item(self):
+        from river import cli
+        import contextlib, io
+        core.project_add(self.c, "shop", path=self.dir.name)
+        h = core.item_add(self.c, "shop", "sign the contract", doer="human")["id"]
+        blocker = core.item_add(self.c, "shop", "draft the contract")["id"]
+        waits = core.item_add(self.c, "shop", "ship it", after=[blocker])["id"]
+        sent = []
+        t = server.open_agent_on(self.c, h, runner=sent.append)
+        self.assertIn(f"RIVER_FOCUS=help:{h} claude go", sent[-1])
+        b = core.go(self.c, self.dir.name, None, focus=t["focus"])
+        self.assertEqual((b["role"], b["help"]["id"], b["item"]), ("helper", h, None))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cli.render_go(b)
+        self.assertIn(f"HELP THE PERSON WITH #{h}", out.getvalue())
+        t = server.open_agent_on(self.c, waits, runner=sent.append)
+        self.assertIn(f"RIVER_FOCUS=unblock:{waits}", sent[-1])
+        b = core.go(self.c, self.dir.name, None, focus=t["focus"])
+        self.assertEqual((b["role"], b["item"]["id"]), ("unblocker", blocker))
+        with self.assertRaises(RiverError):
+            server.open_agent_on(self.c, blocker, runner=sent.append)  # held now: message the holder
+
     def test_opens_terminal_in_the_folder_of_the_top_ready_item(self):
         folder = os.path.join(self.dir.name, 'my "shop" app')
         core.project_add(self.c, "shop", path=self.dir.name)

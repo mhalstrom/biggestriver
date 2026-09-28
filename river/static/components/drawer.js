@@ -45,6 +45,18 @@ function offerHelpHtml(it, me) {
       <input id="offer-${n.id}" placeholder="I am blocked on this; I can take …" style="flex:1"><button class="btn" data-offer="${n.id}">Offer help</button></div>`).join("")}</div>`;
 }
 
+// Open an agent session on this item (server open_agent_on): with the person on a person's item,
+// on what blocks an item that waits, or Dispatch on a ready item.
+function agentButton(it) {
+  if (["done", "dropped", "in_progress"].includes(it.status)) return "";
+  const [label, title] = it.doer === "human"
+    ? ["Work on it with an agent", "Open an agent in the project folder that helps you do this item together"]
+    : !it.ready ? ["Open an agent to unblock it", "Open an agent in the project folder that first takes what this item waits on"]
+    : it.status === "open" && !it.reserved_for ? ["Dispatch an agent", "Give it to a session waiting in its project, or start a new agent for it"]
+    : [];
+  return label ? `<button class="btn" data-do="agent" title="${title}">▶ ${label}</button>` : "";
+}
+
 // The drawer for one item (it from /api/item/<id>). S: the page state; me: who acts.
 export function itemDrawerHtml(it, { S, me }) {
   const closed = ["done", "dropped"].includes(it.status);
@@ -63,6 +75,7 @@ export function itemDrawerHtml(it, { S, me }) {
       ${["in_progress", "held"].includes(it.status) ? `<button class="btn primary" data-do="done">Done</button><button class="btn" data-do="release">Release</button>` : ""}
       ${it.status === "open" ? `<button class="btn" data-do="done">Mark done</button>` : ""}
       ${!closed ? `<button class="btn" data-do="drop">Drop</button>` : `<button class="btn" data-do="reopen">Reopen</button>`}
+      ${agentButton(it)}
     </div>
     <div class="sec"><h4>Details</h4><div class="form">
       ${input({ id: "dTitle", value: it.title })}

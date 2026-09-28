@@ -412,6 +412,11 @@ async function drawerAction(what) {
     if (what === "unblock") await act("unblock", { id });
     if (what === "replanned") await act("replanned", { id });
     if (what === "msg") { const body = $("#dMsgBody").value.trim(); if (!body) return; if (!actor()) return toast("Choose your name in 'You are' first", true); await act("send", { kind: $("#dMsgKind").value, body, item: id }); toast("Sent"); }
+    if (what === "agent") {
+      const r = await act("open_agent_on", { id, agent: $("#launchAgent") ? $("#launchAgent").value : undefined });
+      toast(r.pushed_to ? `Gave #${id} to ${r.pushed_to}, which was waiting for work`
+        : `Started ${r.agent} in ${r.project}` + (r.focus && r.focus.startsWith("help") ? `, to do #${id} with you` : r.focus ? `, to unblock #${id}` : `, for #${id}`));
+    }
     if (what === "push") { const to = $("#dPushTo").value; if (to) { await act("push", { id, to, note: $("#dPushNote").value.trim() || undefined }); toast(`Pushed #${id} to ${to}`); } }
     if (what === "block") { const r = $("#dBlock").value.trim(), u = $("#dUntil").value.trim(); if (r || u) await act("block", { id, reason: r || undefined, until: u || undefined }); }
     if (what === "tag") { const g = $("#dGoal").value; if (g) await act("item_edit", { id, goals: [g] }); }

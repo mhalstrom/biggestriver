@@ -117,6 +117,35 @@ def dispatch_item(conn, item_id, runner=None, agent=None):
     return {**t, "session_name": name}
 
 
+def open_agent_on(conn, item_id, runner=None, agent=None):
+    """Open an agent session for one item from its drawer. A ready item: Dispatch. A person's item: a
+    session that does it together with the person. An item that waits: a session that first takes what
+    blocks it. The session learns which from RIVER_FOCUS, which its river go reads."""
+    import shlex
+    it = core.item_show(conn, item_id)
+    if it["status"] not in core.OPEN_STATES:
+        raise RiverError(f"#{item_id} is {it['status']}; there is nothing to open an agent on")
+    if it["status"] == "in_progress":
+        raise RiverError(f"#{item_id} is in progress by {it['assignee']}; message them instead")
+    if it["doer"] == "human":
+        focus = f"help:{it['id']}"
+    elif it["ready"]:
+        return dispatch_item(conn, it["id"], runner, agent)
+    else:
+        focus = f"unblock:{it['id']}"
+    p = core._project(conn, it["project"])
+    if not p["path"]:
+        raise RiverError(f"project {p['name']} has no folder, so river cannot start a session there: "
+                         f"river project path {p['name']} <folder>")
+    if sys.platform != "darwin" and runner is None:
+        raise RiverError("starting an agent from the page works on macOS only (it opens Terminal); start one "
+                         f"yourself: cd {p['path']} && RIVER_FOCUS={focus} claude go")
+    t = {"project": p["name"], "path": p["path"], "item": {"id": it["id"], "title": it["title"]}, "focus": focus,
+         **core._launch_agent_cmd(conn, p["id"], agent), "launch_in": core.setting(conn, "launch_in", project_id=p["id"])}
+    _open_terminal(t, f"cd {shlex.quote(p['path'])} && RIVER_FOCUS={focus} {t['command']}", runner)
+    return t
+
+
 def _open_terminal(t, shell, runner=None):
     """Run a shell line in a new Terminal tab (or window, per launch_in). macOS only."""
     import subprocess
@@ -379,6 +408,7 @@ OPS = {
     "setup_ntfy": lambda c, a, who: setup_ntfy(c, who),
     "launch_agent": lambda c, a, who: launch_agent(c, a.get("project"), agent=a.get("agent")),
     "dispatch_item": lambda c, a, who: dispatch_item(c, int(a["id"]), agent=a.get("agent")),
+    "open_agent_on": lambda c, a, who: open_agent_on(c, int(a["id"]), agent=a.get("agent")),
     "decline_message": lambda c, a, who: core.decline_message(c, int(a["msg"]), a.get("note"), who),
     "update": lambda c, a, who: _no_update_in_app() or update_apply(),
     "restart": lambda c, a, who: _no_update_in_app() or (_restart_soon(), {"restarting": True})[1],

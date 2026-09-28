@@ -1031,7 +1031,7 @@ def dispatch(conn, a, actor):
     if c == "log":
         return core.completed(conn, a.project, None if a.since == "all" else a.since)
     if c == "go":
-        res = core.go(conn, os.getcwd(), actor, a.project, a.role, a.session)
+        res = core.go(conn, os.getcwd(), actor, a.project, a.role, a.session, os.environ.get("RIVER_FOCUS"))
         res["old_blocks"] = old_blocks(conn, os.getcwd())
         return res
     if c == "plan":
@@ -1296,6 +1296,26 @@ def render_go(b):
         if (b.get("trackers") or {}).get(n):
             out.append(f"  tracker: {b['trackers'][n]} (items link its issues with --ref)")
     out.append("")
+    if b.get("focus_note"):
+        out += [b["focus_note"], ""]
+    if b.get("help"):
+        h = b["help"]
+        out += [f"HELP THE PERSON WITH #{h['id']}: {h['title']}  (an item for a person; you work on it together)"]
+        if h["notes"]:
+            out.append(f"  notes: {h['notes']}")
+        out += _context_lines(h)
+        out += ["",
+                "How:",
+                f"  1. Read {r} show {h['id']} and the files or pages it names.",
+                "  2. Explain to the person what the item asks, and the steps, in plain words.",
+                "  3. Do the parts an agent may do (research, drafts, commands, checks); leave the rest to the person:",
+                "     decisions, approvals, accounts, payments, and signatures are theirs.",
+                f"  4. When the person has done it: {r} done {h['id']} --note \"<what the person did>\" --output \"<result>\"",
+                f"     Only if the person says you do the whole item: {r} takeover {h['id']} --note \"<how>\" (they are told).",
+                f"  Do not take other work in this session unless the person asks: then run {r} go --role worker.",
+                ""]
+        print("\n".join(out).rstrip())
+        return
     for u in b.get("unsynced") or []:
         out += _writeback_lines(u, r, u.get("tracker", "")) + ["  Do this before your item below.", ""]
     gb = b.get("goal")

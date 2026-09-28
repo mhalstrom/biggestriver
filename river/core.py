@@ -3870,8 +3870,11 @@ def _goal_brief(conn, name, actor):
             "items_done": len(g["items_done"]), "blockers_held": blockers}
 
 
-def go(conn, cwd, actor=None, project=None, role=None, session=None):
-    """One call for a fresh agent session: find the project, name the session, pick a role, and brief it."""
+def go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None):
+    """One call for a fresh agent session: find the project, name the session, pick a role, and brief it.
+
+    focus (RIVER_FOCUS, set when the page opens an agent on one item): "help:<id>" briefs the session to
+    do a person's item together with the person; "unblock:<id>" takes work that unblocks that item first."""
     if role is not None and role not in ROLES:
         raise RiverError(f"role is one of {', '.join(ROLES)}")
     if project:
@@ -3968,6 +3971,23 @@ def go(conn, cwd, actor=None, project=None, role=None, session=None):
             return None
         return got[0] if got else None
 
+    kind, _, fid = (focus or "").partition(":")
+    if role is None and fid.isdigit() and int(fid) in annotate(conn):
+        f = item_show(conn, int(fid))
+        if f["status"] in OPEN_STATES and kind == "help" and f["doer"] == "human":
+            brief.update(role="helper", item=None, help=f,
+                         why=f"the page opened this session to do #{f['id']} together with the person")
+            _set_role_note(conn, actor, "helper", f["id"])
+            return brief
+        if f["status"] in OPEN_STATES and kind == "unblock":
+            got = try_claim(unblocks=str(f["id"]))
+            if got:
+                brief.update(role="unblocker", item=got,
+                             why=f"the page opened this session to unblock #{f['id']} {f['title']}")
+                _set_role_note(conn, actor, "unblocker", got["id"])
+                return brief
+            brief["focus_note"] = (f"The page opened this session to unblock #{f['id']}, but nothing that blocks it "
+                                   f"is ready for an agent now (river blockers {f['id']}).")
     if role in (None, "worker"):
         ann = annotate(conn)
         pushed = sorted((a for a in ann.values() if a["reserved_for"] == actor and a["reserved_until"] and a["ready"]),
