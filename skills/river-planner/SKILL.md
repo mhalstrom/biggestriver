@@ -76,7 +76,7 @@ helps. Agents read `river project list` to pick an area.
 ## Items
 
 ```
-river add <project> "<title>" [-p 0-4] [--doer any|ai|human] [--after <id> ...] [--notes "..."]
+river add <project> "<title>" [-p 0-4] [--doer any|ai|human] [--after <id> ...] [--feeds <id> ...] [--notes "..."]
           [--context "..."] [--touches <file> ...] [--check "<command>"]
 river dep <id> --on <id> ...        # <id> waits on the others
 river dep <id> --on <id> --kind feeds      # waits, then reads their output in its context

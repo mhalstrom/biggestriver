@@ -229,6 +229,7 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
               <label>Who can do it<select id="addDoer"><option value="any">anyone</option><option value="ai">agent</option><option value="human">human</option></select></label>
               <label>Waits on (ids)<input id="addAfter" placeholder="e.g. 3, 7"></label>
             </div>
+            <label>Reads the output of (ids; it also waits on them)<input id="addFeeds" placeholder="e.g. 4"></label>
             <textarea id="addNotes" rows="2" placeholder="Notes"></textarea>
             <button class="btn primary" id="addGo">Add</button>
           </div>
@@ -846,9 +847,9 @@ $("#claimNext").addEventListener("click", async () => {
 });
 $("#addGo").addEventListener("click", async () => {
   const title = $("#addTitle").value.trim(); if (!title) return toast("Title is empty", true);
-  const after = $("#addAfter").value.split(/[\s,]+/).filter(Boolean).map(Number);
-  const res = await act("item_add", { project: $("#addProject").value, title, priority: +$("#addPrio").value, doer: $("#addDoer").value, after, notes: $("#addNotes").value }).catch(() => null);
-  if (res) { $("#addTitle").value = ""; $("#addAfter").value = ""; $("#addNotes").value = ""; toast(`Added #${res.id}`); }
+  const ids = (el) => $(el).value.split(/[\s,]+/).filter(Boolean).map(Number);
+  const res = await act("item_add", { project: $("#addProject").value, title, priority: +$("#addPrio").value, doer: $("#addDoer").value, after: ids("#addAfter"), feeds: ids("#addFeeds"), notes: $("#addNotes").value }).catch(() => null);
+  if (res) { $("#addTitle").value = ""; $("#addAfter").value = ""; $("#addFeeds").value = ""; $("#addNotes").value = ""; toast(`Added #${res.id}`); }
 });
 $("#projGo").addEventListener("click", async () => { const n = $("#projName").value.trim(); if (n) { await act("project_add", { name: n }).catch(() => {}); $("#projName").value = ""; } });
 $("#regGo").addEventListener("click", async () => {

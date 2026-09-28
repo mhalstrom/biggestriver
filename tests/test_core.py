@@ -521,6 +521,13 @@ class Kinds(Base):
         core.done(self.c, api, "ok", "ag")
         self.assertTrue(core.annotate(self.c)[whole]["ready"])
 
+    def test_add_with_feeds(self):
+        first = core.item_add(self.c, "a", "make the table")["id"]
+        other = core.item_add(self.c, "a", "other")["id"]
+        n = core.item_add(self.c, "a", "use the table", after=[other], feeds=[first])["id"]
+        show = core.item_show(self.c, n)
+        self.assertEqual({d["id"]: d["kind"] for d in show["waits_on_detail"]}, {first: "feeds", other: "blocks"})
+
     def test_touches_compare_within_each_project_folder(self):
         d = self.dir.name
         core.project_add(self.c, "site1", path=os.path.join(d, "one"))

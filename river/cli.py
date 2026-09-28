@@ -294,6 +294,7 @@ def build_parser():
     x.add_argument("words", nargs="+", metavar="[project] title")
     x.add_argument("--priority", "-p", type=int, default=2, help="0 highest .. 4 lowest (default 2)")
     x.add_argument("--after", type=int, nargs="*", default=[], help="items this one waits on")
+    x.add_argument("--feeds", type=int, nargs="*", default=[], help="items this one waits on and whose output it reads")
     x.add_argument("--notes", default="")
     x.add_argument("--doer", default="any", choices=core.DOERS, help="who can do it (default any)")
     x.add_argument("--context", default="", help="what a new agent must know to start: why, where, decisions made")
@@ -639,7 +640,7 @@ def dispatch(conn, a, actor):
             title = a.words[0]
             project = core.project_for_add(conn, os.getcwd(), a.blocks if a.blocks is not None else a.found_during)
         return core.item_add(conn, project, title, a.priority, a.notes, a.doer, a.after, actor,
-                             a.context, a.touches, a.check, a.blocks, a.mode, a.found_during)
+                             a.context, a.touches, a.check, a.blocks, a.mode, a.found_during, a.feeds)
     if c == "edit":
         return core.item_edit(conn, a.id, a.title, a.notes, a.doer, a.project, actor, a.context, a.touches, a.check)
     if c == "list":

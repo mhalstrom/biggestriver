@@ -771,7 +771,8 @@ def touches_list(text):
 
 
 def item_add(conn, project, title, priority=2, notes="", doer="any", after=(), actor=None,
-             context="", touches=None, check="", blocks=None, mode=None, found_during=None):
+             context="", touches=None, check="", blocks=None, mode=None, found_during=None, feeds=()):
+    """Add an item. `after`: items it waits on. `feeds`: items it waits on and whose output it reads."""
     if doer not in DOERS:
         raise RiverError(f"doer is one of {', '.join(DOERS)}")
     if not (0 <= int(priority) <= 4):
@@ -794,6 +795,8 @@ def item_add(conn, project, title, priority=2, notes="", doer="any", after=(), a
             _event(conn, int(found_during), actor, f"found work: #{iid} {title}")
         for b in after:
             _dep_add(conn, iid, int(b), actor)
+        for b in feeds or ():
+            _dep_add(conn, iid, int(b), actor, "feeds")
         _sync_conflicts(conn, iid, actor)
         if blocks is not None:
             _dep_add(conn, int(blocks), iid, actor)
