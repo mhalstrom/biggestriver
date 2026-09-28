@@ -1165,7 +1165,14 @@ document.addEventListener("drop", async (e) => {
 });
 
 const TABS = ["board", "projects", "targets", "capacity", "graph", "done", "settings"];
-function setTab(name) {
+// Each tab has its own URL (#tab-graph; the Board is the bare page), so a tab can be linked, reloaded, and reached with Back.
+function tabHash(name) {
+  const keep = location.hash.slice(1).split("&").filter(x => /^as-/.test(x));
+  if (name !== "board") keep.push("tab-" + name);
+  return keep.length ? "#" + keep.join("&") : location.pathname + location.search;
+}
+function setTab(name, push = true) {
+  if (push && name !== tab) history.pushState(null, "", tabHash(name));
   tab = name; document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.tab === tab));
   for (const s of TABS) $("#tab-" + s).classList.toggle("hidden", s !== tab);
   renderLog(true);
@@ -1255,13 +1262,17 @@ function maybeSetup() {
 }
 
 async function openFromHash() {
+  let tabIn = null, itemIn = false;
   for (const part of location.hash.slice(1).split("&")) {
     const m = part.match(/^(item|tab|as)-(.+)$/); if (!m) continue;
     const v = decodeURIComponent(m[2]);
     if (m[1] === "as" && [...$("#actor").options].some(o => o.value === v)) { $("#actor").value = v; store("river.actor", v); ibSig = ""; await pollInbox().catch(() => {}); }
-    if (m[1] === "tab" && TABS.includes(v)) await setTab(v);
-    if (m[1] === "item") await openDrawer(+v);
+    if (m[1] === "tab" && TABS.includes(v)) tabIn = v;
+    if (m[1] === "item") { itemIn = true; await openDrawer(+v); }
   }
+  // An item link alone keeps the tab; a link with no tab and no item is the Board.
+  if (!tabIn && !itemIn) tabIn = "board";
+  if (tabIn && tabIn !== tab) await setTab(tabIn, false);
 }
 window.addEventListener("hashchange", openFromHash);
 // Update button: shows how many new commits the river clone is missing; a click pulls them and restarts the server.
