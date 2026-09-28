@@ -552,3 +552,17 @@ class StaticFiles(unittest.TestCase):
         h.path = "/../server.py"
         h.do_GET()
         self.assertEqual(out["code"], 404)
+
+
+class ServerBind(unittest.TestCase):
+    def test_the_server_starts_without_a_dns_lookup_of_its_name(self):
+        # HTTPServer asks DNS for the full host name; on a Mac with a slow network that hung for minutes.
+        import socket
+        from unittest import mock
+        with mock.patch.object(socket, "getfqdn", side_effect=AssertionError("getfqdn called")):
+            httpd = server._Server(("127.0.0.1", 0), server.Handler)
+        try:
+            self.assertEqual(httpd.server_name, "127.0.0.1")
+            self.assertGreater(httpd.server_port, 0)
+        finally:
+            httpd.server_close()

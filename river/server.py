@@ -786,8 +786,17 @@ def _restart_on_change(httpd):
             os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
+class _Server(ThreadingHTTPServer):
+    """HTTPServer.server_bind asks DNS for the host's full name (socket.getfqdn), which can hang for
+    a long time on a Mac with a slow or missing network. The page needs no name: skip the lookup."""
+    def server_bind(self):
+        import socketserver
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
 def serve(port: int, open_browser=False, dev=False):
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    httpd = _Server(("127.0.0.1", port), Handler)
     url = f"http://127.0.0.1:{port}/"
     DEV["on"] = dev
     print(f"Biggest River on {url} (database {core.db_path()}){' [dev: restarts on code change]' if dev else ''}",
