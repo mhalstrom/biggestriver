@@ -19,17 +19,18 @@ function column({ filter = "text", html, ...c }) {
   return col;
 }
 
-// makeTable(el, { key, columns, index, sort, onRow, placeholder, height }) returns { set(rows), tabulator }.
+// makeTable(el, { key, columns, index, sort, onRow, placeholder, height, ...options }) returns { set(rows), tabulator };
+// options go to Tabulator as they are (for example groupBy and groupHeader).
 //   key:    names the table for the remembered sort and filters;
 //   index:  the field that names a row (default "id"): set() updates rows in place by it;
 //   sort:   the first sort, as [{ column: field, dir: "asc" | "desc" }], until the person picks one;
 //   onRow:  (row) => ... when someone clicks a row outside its links, buttons and inputs.
 // Call set(rows) on every refresh: the same rows do nothing, and changed rows update in place,
 // so the sort, the filters, the scroll position and any selection stay.
-export function makeTable(el, { key, columns, index = "id", sort = [], onRow, placeholder = "Nothing here.", height } = {}) {
+export function makeTable(el, { key, columns, index = "id", sort = [], onRow, placeholder = "Nothing here.", height, ...options } = {}) {
   const keep = saved(key);
   const t = new window.Tabulator(el, {
-    index, height, placeholder, data: [], layout: "fitColumns",
+    index, height, placeholder, data: [], layout: "fitColumns", ...options,
     columns: columns.map(column),
     initialSort: keep.sort || sort,
     initialHeaderFilter: keep.filter || [],

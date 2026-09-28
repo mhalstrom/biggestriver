@@ -2,7 +2,8 @@ import { $, esc, store, actor, toast, act, ago, left, clip, copyText, fillSelect
 import { chip, prioNumChip, doerChip, projectChip, ownerChip, countChip } from "./components/chip.js";
 import { bar, pct, capacityBars } from "./components/bar.js";
 import { nyCard, goalCard, projCard, agentCard } from "./components/card.js";
-import { itemRow, itemOrder, doneRow } from "./components/itemRow.js";
+import { itemRow, itemOrder } from "./components/itemRow.js";
+import { makeTable } from "./components/table.js";
 import { makeDrawer, itemDrawerHtml, msgLine } from "./components/drawer.js";
 import { makeDialog } from "./components/dialog.js";
 hooks.refresh = refresh;
@@ -200,7 +201,25 @@ function renderSettings() {
   }).join("");
 }
 
-let logSig = "";
+let logSig = "", logTable = null;
+const logTime = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const logDay = (d) => new Date(d + "T12:00:00Z").toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+// The Done log: one row per finished item, grouped by day; every column sorts and filters.
+function makeLogTable() {
+  return makeTable($("#log"), {
+    key: "done", sort: [{ column: "closed_at", dir: "desc" }], placeholder: "Nothing done in this period.",
+    onRow: (r) => openDrawer(r.id),
+    groupBy: "day", groupHeader: (day, count) => `<b>${esc(logDay(day))}</b> <span class="muted">${count} done</span>`,
+    columns: [
+      { title: "#", field: "id", width: 64, filter: false },
+      { title: "Title", field: "title", minWidth: 180, cssClass: "wrap" },
+      { title: "Project", field: "project", width: 150, filter: "select", html: (r) => projectChip(r.project) },
+      { title: "Output", field: "output", minWidth: 180, cssClass: "wrap muted", html: (r) => `<div class="clamp" title="${esc(r.output)}">${esc(r.output)}</div>` },
+      { title: "By", field: "by", width: 130, filter: "select" },
+      { title: "Finished", field: "closed_at", width: 96, filter: false, html: (r) => logTime(r.closed_at) },
+    ],
+  });
+}
 async function renderLog(force) {
   if (tab !== "done") return;
   const q = new URLSearchParams({ since: $("#logSince").value });
@@ -209,12 +228,9 @@ async function renderLog(force) {
   const L = await r.json(), sig = JSON.stringify(L);
   if (!force && sig === logSig) return;
   logSig = sig;
-  const time = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  const dayName = (d) => new Date(d + "T12:00:00Z").toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
-  $("#log").innerHTML = L.by_day.map(d => `<div class="day">
-      <div class="day-h"><b>${esc(dayName(d.day))}</b><span class="muted">${d.items.length} done</span></div>
-      ${d.items.map(it => doneRow(it, time(it.closed_at))).join("")}
-    </div>`).join("") || `<div class="muted">Nothing done in this period.</div>`;
+  logTable ||= makeLogTable();
+  logTable.set(L.by_day.flatMap(d => d.items.map(it => ({ id: it.id, title: it.title, project: it.project, output: it.output || "",
+    by: it.by_agent && it.by_agent !== "?" ? it.by_agent : "", closed_at: it.closed_at, day: d.day }))));
   const win = L.since ? $("#logSince").selectedOptions[0].textContent : null;
   $("#progress").innerHTML = L.progress.map(p => {
     const done = pct(p.done, p.total);

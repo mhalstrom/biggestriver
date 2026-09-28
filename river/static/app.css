@@ -158,15 +158,6 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; padding
 table.settings { width: 100%; border-collapse: collapse; }
 table.settings td, table.settings th { text-align: left; padding: 6px; border-top: 1px solid var(--line); font-size: 13px; }
 .muted { color: var(--muted); }
-.day { margin-top: 14px; }
-.day:first-child { margin-top: 0; }
-.day-h { display: flex; gap: 8px; align-items: baseline; border-bottom: 1px solid var(--line); padding-bottom: 4px; margin-bottom: 4px; }
-.day-h b { font-variant-numeric: tabular-nums; }
-.done-row { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 8px; padding: 5px 0; cursor: pointer; }
-.done-row:hover .title { color: var(--accent); }
-.done-row .id { color: var(--muted); font-variant-numeric: tabular-nums; }
-.done-row .out { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-.done-row .when { color: var(--muted); font-size: 12px; text-align: right; white-space: nowrap; }
 .prog { margin-bottom: 10px; }
 .prog-h { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
 .prog-h .muted { font-variant-numeric: tabular-nums; }
@@ -229,6 +220,11 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
 .tabulator .tabulator-tableholder, .tabulator .tabulator-tableholder .tabulator-table { background: var(--panel); color: var(--ink); }
 .tabulator .tabulator-row, .tabulator .tabulator-row.tabulator-row-even { background: var(--panel); border-bottom: 1px solid var(--line); }
 .tabulator .tabulator-row .tabulator-cell { border-right: 0; padding: 6px 8px; }
+.tabulator .tabulator-row .tabulator-cell.wrap { white-space: normal; overflow-wrap: anywhere; }
+.tabulator .tabulator-row .tabulator-cell.muted { color: var(--muted); font-size: 12px; }
+.tabulator .tabulator-row.tabulator-group { background: var(--bg); border: 0; border-bottom: 1px solid var(--line); color: var(--ink); font-weight: normal; padding: 6px 8px; }
+.tabulator .tabulator-row .tabulator-cell .clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.tabulator .tabulator-row.tabulator-group span { margin-left: 6px; color: var(--muted); }
 .tabulator .tabulator-row.tabulator-selected { background: var(--wait-bg); }
 @media (hover: hover) and (pointer: fine) {
   .tabulator .tabulator-header .tabulator-col.tabulator-sortable.tabulator-col-sorter-element:hover { background: var(--wait-bg); }
