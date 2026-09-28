@@ -1895,8 +1895,9 @@ class TrackerRefs(Base):
     def test_refs_link_show_and_refuse_duplicates_in_a_project(self):
         refs = core.parse_refs(["github:o/r#12", "jira:PROJ-1"], ["", "https://x.atlassian.net/browse/PROJ-1"])
         i = core.item_add(self.c, "a", "fix it", actor="t", refs=refs)
-        self.assertEqual(i["refs"], [{"ref": "github:o/r#12", "url": "https://github.com/o/r/issues/12"},
-                                     {"ref": "jira:PROJ-1", "url": "https://x.atlassian.net/browse/PROJ-1"}])
+        self.assertEqual([(r["ref"], r["url"]) for r in i["refs"]],
+                         [("github:o/r#12", "https://github.com/o/r/issues/12"),
+                          ("jira:PROJ-1", "https://x.atlassian.net/browse/PROJ-1")])
         with self.assertRaises(RiverError) as e:
             core.item_add(self.c, "a", "again", actor="t", refs=core.parse_refs(["jira:PROJ-1"]))
         self.assertIn(f"#{i['id']}", str(e.exception))
@@ -1935,3 +1936,41 @@ class ProjectTracker(Base):
         self.assertEqual(core.go(self.c, self.dir.name, "w")["trackers"], {"a": "github o/r via gh"})
         core.project_tracker(self.c, "a", "none", "t")
         self.assertEqual(core.project_tracker(self.c, "a", "none", "t")["tracker"], "")  # clearing twice is fine
+
+
+class TrackerWriteBack(Base):
+    def setUp(self):
+        super().setUp()
+        core.project_add(self.c, "a")
+        core.register(self.c, "ag")
+        core.project_tracker(self.c, "a", "github o/r via gh")
+        self.i = core.item_add(self.c, "a", "fix", actor="t", refs=core.parse_refs(["github:o/r#3", "jira:P-1"]))["id"]
+        core.claim(self.c, self.i, "ag")
+
+    def test_done_leaves_a_reminder_until_synced(self):
+        with self.assertRaises(RiverError):
+            core.synced(self.c, self.i, actor="ag")  # not done yet
+        res = core.done(self.c, self.i, "abc", "ag")
+        self.assertEqual(res["tracker"], "github o/r via gh")
+        self.assertEqual([u["id"] for u in core.unsynced(self.c, "ag")], [self.i])
+        self.assertEqual(core.unsynced(self.c, "other"), [])
+        self.assertEqual(core.go(self.c, self.dir.name, "ag", project="a")["unsynced"][0]["id"], self.i)
+        core.synced(self.c, self.i, "jira:P-1", "ag")
+        self.assertEqual([x["ref"] for x in core.unsynced(self.c)[0]["refs"]], ["github:o/r#3"])
+        with self.assertRaises(RiverError):
+            core.synced(self.c, self.i, "jira:NOPE", "ag")
+        core.synced(self.c, self.i, actor="ag")
+        self.assertEqual(core.status(self.c)["unsynced"], [])
+
+    def test_done_synced_records_it_at_once(self):
+        res = core.done(self.c, self.i, "abc", "ag", synced_=True)
+        self.assertTrue(all(x["synced_at"] for x in res["refs"]))
+        self.assertEqual(core.unsynced(self.c), [])
+
+    def test_old_item_refs_table_gets_the_column(self):
+        self.c.execute("CREATE TABLE r2 AS SELECT item_id, ref, url, created_at FROM item_refs")
+        self.c.execute("DROP TABLE item_refs")
+        self.c.execute("ALTER TABLE r2 RENAME TO item_refs")
+        self.c.close()
+        self.c = core.connect(self.path)
+        self.assertIn("synced_at", {r["name"] for r in self.c.execute("PRAGMA table_info(item_refs)")})

@@ -171,6 +171,7 @@ CREATE TABLE IF NOT EXISTS item_refs (
   ref         TEXT NOT NULL,
   url         TEXT,
   created_at  TEXT NOT NULL,
+  synced_at   TEXT,
   PRIMARY KEY (item_id, ref)
 );
 
@@ -500,6 +501,8 @@ def _migrate(conn):
     for col in ("blocked_at", "blocked_until", "blocked_set_by"):
         if col not in icols:
             conn.execute(f"ALTER TABLE items ADD COLUMN {col} TEXT")
+    if "synced_at" not in {r["name"] for r in conn.execute("PRAGMA table_info(item_refs)")}:
+        conn.execute("ALTER TABLE item_refs ADD COLUMN synced_at TEXT")
     if "reserved_for" not in icols:
         conn.execute("ALTER TABLE items ADD COLUMN reserved_for TEXT")
         conn.execute("ALTER TABLE items ADD COLUMN hold_expires_at TEXT")
@@ -1914,8 +1917,8 @@ def annotate(conn):
                           "ORDER BY g.rank, g.id"):
         tags.setdefault(r["item_id"], []).append(r["name"])
     refs: dict[int, list] = {}
-    for r in conn.execute("SELECT item_id, ref, url FROM item_refs ORDER BY created_at, ref"):
-        refs.setdefault(r["item_id"], []).append({"ref": r["ref"], "url": r["url"]})
+    for r in conn.execute("SELECT item_id, ref, url, synced_at FROM item_refs ORDER BY created_at, ref"):
+        refs.setdefault(r["item_id"], []).append({"ref": r["ref"], "url": r["url"], "synced_at": r["synced_at"]})
     now_s = iso(now())
     soon_s = iso(now() + parse_duration(setting(conn, "due_warn_before")))
 
@@ -2656,8 +2659,42 @@ def _close(conn, item_id, status, actor, output=None, note=None):
     return res
 
 
-def done(conn, item_id, output=None, actor=None, ship_it=False, note=None):
+def synced(conn, item_id, ref=None, actor=None):
+    """Record that the tracker issues of a closed item got the result (comment, close). One ref, or all."""
+    with tx(conn):
+        it = _item(conn, item_id)
+        if it["status"] not in CLOSED_STATES:
+            raise RiverError(f"#{item_id} is {it['status']}; the write-back comes after river done {item_id}")
+        rows = conn.execute("SELECT ref FROM item_refs WHERE item_id=?" + (" AND ref=?" if ref else ""),
+                            (it["id"], ref.strip()) if ref else (it["id"],)).fetchall()
+        if not rows:
+            raise RiverError(f"#{item_id} has no tracker link" + (f" {ref}" if ref else "")
+                             + f"; its links: river show {item_id}")
+        for r in rows:
+            if conn.execute("UPDATE item_refs SET synced_at=? WHERE item_id=? AND ref=? AND synced_at IS NULL",
+                            (iso(now()), it["id"], r["ref"])).rowcount:
+                _event(conn, it["id"], actor, f"tracker updated: {r['ref']}")
+    return item_show(conn, item_id)
+
+
+def unsynced(conn, actor=None):
+    """Closed items with tracker links not yet updated; with actor, only the items that agent closed."""
+    rows = conn.execute(
+        "SELECT DISTINCT i.id FROM items i JOIN item_refs r ON r.item_id=i.id WHERE r.synced_at IS NULL "
+        f"AND i.status IN {CLOSED_STATES}" + (" AND i.assignee=?" if actor else "") + " ORDER BY i.closed_at",
+        (actor,) if actor else ()).fetchall()
+    ann = annotate(conn) if rows else {}
+    return [{"id": r["id"], "title": ann[r["id"]]["title"], "status": ann[r["id"]]["status"],
+             "project": ann[r["id"]]["project"], "output": ann[r["id"]]["output"],
+             "tracker": setting(conn, "tracker", item_id=r["id"]),
+             "refs": [x for x in ann[r["id"]]["refs"] if not x["synced_at"]]} for r in rows]
+
+
+def done(conn, item_id, output=None, actor=None, ship_it=False, note=None, synced_=False):
     res = _close(conn, item_id, "done", actor, output, note)
+    if synced_ and res["refs"]:
+        res = dict(synced(conn, item_id, actor=actor), now_ready=res["now_ready"], resumed=res["resumed"])
+    res["tracker"] = setting(conn, "tracker", item_id=item_id) if res["refs"] else ""
     if ship_it:
         res["shipped_in"] = ship(conn, item_id, actor)["id"]
     return res
@@ -3286,6 +3323,7 @@ def status(conn, recent=10):
         "due": [{"id": a["id"], "title": a["title"], "project": a["project"], "due_text": a["due_text"],
                  "due_state": a["due_state"]} for a in sorted(ann.values(), key=lambda a: a["due"] or "")
                 if a["due"] and a["status"] in OPEN_STATES and not a["project_archived"]],
+        "unsynced": unsynced(conn),
         "spare_slots": cap["spare_slots"],
         "excess_sessions": cap["excess_sessions"],
         "advice": cap["advice"],
@@ -3537,6 +3575,7 @@ def go(conn, cwd, actor=None, project=None, role=None, session=None):
              "messages": unread(conn, actor),
              "humans": [r["name"] for r in conn.execute("SELECT name FROM agents WHERE kind='human' ORDER BY name")]}
 
+    brief["unsynced"] = unsynced(conn, actor)
     mine_goal = _owned_goal(conn, actor, names)
     if mine_goal is not None:
         brief["goal"] = _goal_brief(conn, mine_goal["name"], actor)

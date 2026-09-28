@@ -113,6 +113,10 @@ first only when neither applies (`river add <project> "<title>"`).
   `--ref <tracker>:<key>` (for example `github:owner/repo#12`, `jira:PROJ-123`).
   The go briefing names the project's tracker (`river project tracker`); when
   the user names a tracker for the first time, record it there.
+  When you claim an item with links, mark the issues in progress there. When
+  it is done, post the output as a comment, close the issue, and record it:
+  `river synced <id>` (or `river done <id> --output "..." --synced` when you
+  did it first). Until then, `go` and `status` remind you.
 
 ## When you find other work
 

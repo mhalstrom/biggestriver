@@ -162,7 +162,8 @@ def _context_lines(a, indent="  "):
     if a.get("check"):
         out.append(f"{indent}check:   {a['check']}")
     for r in a.get("refs", []):
-        out.append(f"{indent}tracker: {r['ref']}" + (f"  {r['url']}" if r["url"] else ""))
+        out.append(f"{indent}tracker: {r['ref']}" + (f"  {r['url']}" if r["url"] else "")
+                   + ("  (updated)" if r.get("synced_at") else ""))
     for f in a.get("fed_by_detail", []):
         if f["output"]:
             out.append(f"{indent}from #{f['id']}: {f['output']}")
@@ -446,6 +447,9 @@ def build_parser():
     x = sub.add_parser("done", help="finish an item"); x.add_argument("id", type=int); x.add_argument("--output")
     x.add_argument("--ship", action="store_true", help="also ask for it to be deployed (river ship)")
     x.add_argument("--note", help="why an agent may close a person's item (required then; the user is told)")
+    x.add_argument("--synced", action="store_true", help="you already posted the result to its tracker issues")
+    x = sub.add_parser("synced", help="record that a done item's tracker issues got the result (comment, close)")
+    x.add_argument("id", type=int); x.add_argument("--ref", help="only this link (default: all of the item's links)")
     x = sub.add_parser("ship", help="ask for an item to be deployed: it joins its target's next deploy item")
     x.add_argument("id", type=int)
     rv = sub.add_parser("review", help="release reviews: pass one, or send the release back with fixes")
@@ -888,7 +892,9 @@ def dispatch(conn, a, actor):
     if c == "claim":
         return core.claim(conn, a.id, actor)
     if c == "done":
-        return core.done(conn, a.id, a.output, actor, a.ship, a.note)
+        return core.done(conn, a.id, a.output, actor, a.ship, a.note, a.synced)
+    if c == "synced":
+        return core.synced(conn, a.id, a.ref, actor)
     if c == "ship":
         return core.ship(conn, a.id, actor)
     if c == "review":
@@ -1017,6 +1023,11 @@ def render_status(res):
         for d in res["due"]:
             tag = "OVERDUE " if d["due_state"] == "overdue" else "soon " if d["due_state"] == "soon" else ""
             print(f"  #{d['id']:<4} [{d['project']}] {_cut(d['title'])}  {tag}{d['due_text']}")
+    if res.get("unsynced"):
+        print()
+        print("Tracker not updated yet (post the output, close the issue, then river synced <id>):")
+        for u in res["unsynced"]:
+            print(f"  #{u['id']:<4} [{u['project']}] {_cut(u['title'])}  " + " ".join(x["ref"] for x in u["refs"]))
     if res["human_waiting"]:
         print()
         print("Waiting on a human:")
@@ -1113,6 +1124,8 @@ def render_go(b):
         if (b.get("trackers") or {}).get(n):
             out.append(f"  tracker: {b['trackers'][n]} (items link its issues with --ref)")
     out.append("")
+    for u in b.get("unsynced") or []:
+        out += _writeback_lines(u, r, u.get("tracker", "")) + ["  Do this before your item below.", ""]
     gb = b.get("goal")
     if gb:
         out.append(f"YOUR GOAL {gb['name']} [{gb['project']}]: {gb['outcome'] or '(no outcome written)'}"
@@ -1142,6 +1155,8 @@ def render_go(b):
         if it["notes"]:
             out.append(f"  notes: {it['notes']}")
         out += _context_lines(it)
+        if it.get("refs"):
+            out.append("  It comes from the tracker issue(s) above: mark them in progress there, if the tracker has that state.")
         if it["waits_on_detail"] and b["role"] != "reviewer":
             out.append("  waited on (all done): " + ", ".join(f"#{d['id']} {d['title']}" for d in it["waits_on_detail"]))
         if it["unblocks_detail"]:
@@ -1264,8 +1279,30 @@ def render_go(b):
     print("\n".join(out))
 
 
+def _writeback_lines(it, r="river", tracker=""):
+    """What to do in the tracker after an item with links closes."""
+    todo = [x for x in it["refs"] if not x.get("synced_at")]
+    if not todo:
+        return []
+    verb = "close it" if it["status"] == "done" else "close it as not done"
+    out = [f"UPDATE THE TRACKER" + (f" ({tracker})" if tracker else "") + f": #{it['id']} {it['title']} is {it['status']}."]
+    for x in todo:
+        out.append(f"  {x['ref']}" + (f"  {x['url']}" if x["url"] else "") + f": post the output as a comment and {verb}.")
+    if it.get("output"):
+        out.append(f"  output: {it['output']}")
+    out.append(f"  Then: {r} synced {it['id']}")
+    return out
+
+
 def render(a, res):
     c = a.cmd
+    if c == "done" and isinstance(res, dict) and res.get("refs"):
+        _print_show(res)
+        lines = _writeback_lines(res, f"river --as {a.actor}" if a.actor else "river", res.get("tracker", ""))
+        if lines:
+            print()
+            print("\n".join(lines))
+        return
     if c == "go":
         return render_go(res)
     if c == "plan":
