@@ -1318,7 +1318,8 @@ def render_go(b):
                    "it. This briefing is current; follow it.")
     if b["new_name"]:
         out.append(f"Your shell may not keep environment variables, so pass --as {me} on every river command.")
-    if not b.get("session"):
+    # Only Claude Code has session names and ListAgents; it sets CLAUDECODE in the commands it runs.
+    if not b.get("session") and os.environ.get("CLAUDECODE"):
         out.append(f"Record your Claude Code session name once, so others can message this session "
                    f"(ListAgents prints 'This session is <name> [<ref>]'): {r} session <name> --ref <ref>")
     for n in b["projects"]:

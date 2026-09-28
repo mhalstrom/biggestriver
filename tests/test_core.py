@@ -1976,6 +1976,28 @@ class AgentBlock(unittest.TestCase):
             self.assertEqual(f.read_text(), "# Rules\n\n" + cli.AGENT_SNIPPET)
             c.close()
 
+    def test_the_session_step_is_only_for_claude_code(self):
+        from pathlib import Path
+        from river import cli
+        with tempfile.TemporaryDirectory() as d:
+            c = core.connect(Path(d, "r.db"))
+            core.project_add(c, "p", path=d)
+            old = os.environ.pop("CLAUDECODE", None)
+            try:
+                for env, shown in ((None, False), ("1", True)):
+                    if env:
+                        os.environ["CLAUDECODE"] = env
+                    b = core.go(c, d)
+                    out = io.StringIO()
+                    with contextlib.redirect_stdout(out):
+                        cli.render_go(b)
+                    self.assertEqual("Claude Code session name" in out.getvalue(), shown)
+            finally:
+                os.environ.pop("CLAUDECODE", None)
+                if old is not None:
+                    os.environ["CLAUDECODE"] = old
+            c.close()
+
     def test_instructions_one_file_for_every_agent(self):
         from pathlib import Path
         from river import cli
