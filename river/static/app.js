@@ -639,6 +639,10 @@ async function refresh() {
   renderGraph(false); renderLog(false); pollNeedsYou().catch(() => {}); pollInbox().catch(() => {});
   $("#stamp").textContent = "updated " + new Date().toLocaleTimeString();
   if (openItem != null && drawer.isOpen()) openDrawer(openItem);
+  // The setup guide's last steps follow the queue: when a task is added or an agent picks one up, it checks again.
+  const firstRun = JSON.stringify([S.items.length, S.agents.some(a => a.kind !== "human"), S.items.some(i => ["in_progress", "held", "done"].includes(i.status))]);
+  if (setupDialog.isOpen() && firstRun !== setupSig && !$("#setupSteps").contains(document.activeElement)) openSetup();
+  setupSig = firstRun;
 }
 
 document.addEventListener("click", async (e) => {
@@ -886,6 +890,7 @@ async function openSetup() {
   renderSetup(await r.json()); setupDialog.open();
 }
 const setupDialog = makeDialog($("#setup"));
+let setupSig = "";
 function closeSetup() { setupDialog.close(); }
 function renderSetup(st) {
   // The first run is a short path in order (you, river for agents, a folder, an agent, a first task, Start);

@@ -471,12 +471,18 @@ def _launcher_text():
     import shlex
     root = Path(__file__).resolve().parent.parent
     py, script = shlex.quote(sys.executable), shlex.quote(str(root / "bin" / "river"))
-    return (f"#!/bin/sh\n{LAUNCHER_MARK}: runs the river that the setup guide found ({root}).\n"
-            f"# The setup guide rewrites it (Install the river command); delete it to remove it.\n"
-            f"if [ ! -x {py} ] || [ ! -f {script} ]; then\n"
-            f"  echo \"river: {root} is gone (the app moved or was removed). Open Biggest River, then Settings,\" >&2\n"
-            f"  echo \"the setup guide, and Install the river command again.\" >&2\n  exit 1\nfi\n"
-            f"exec {py} {script} \"$@\"\n")
+    lines = [f"#!/bin/sh", f"{LAUNCHER_MARK}: runs the river that the setup guide found ({root}).",
+             "# The setup guide rewrites it (Install the river command); delete it to remove it."]
+    if DESKTOP:
+        # An app opened from Downloads and then moved to Applications: use the copy in Applications.
+        app = "/Applications/Biggest River.app/Contents/Resources/river-app"
+        lines += [f"if [ ! -f {script} ] && [ -x '{app}/python/bin/python3' ]; then",
+                  f"  exec '{app}/python/bin/python3' '{app}/bin/river' \"$@\"", "fi"]
+    lines += [f"if [ ! -x {py} ] || [ ! -f {script} ]; then",
+              f"  echo \"river: {root} is gone (the app moved or was removed). Open Biggest River, then Settings,\" >&2",
+              "  echo \"the setup guide, and Install the river command again.\" >&2", "  exit 1", "fi",
+              f"exec {py} {script} \"$@\""]
+    return "\n".join(lines) + "\n"
 
 
 def install_river_command():
