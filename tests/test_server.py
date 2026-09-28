@@ -356,6 +356,7 @@ class SetupGuide(unittest.TestCase):
             server.folder_add(self.c, other, name="shop")
         self.assertEqual(core._project(self.c, "shop")["path"], os.path.realpath(self.folder))
 
+    @unittest.skipIf(os.name == "nt", "the river command installer is for macOS and Linux shells")
     def test_install_the_river_command_writes_the_launcher_and_the_path_once(self):
         home = os.path.join(self.dir.name, "home")
         os.mkdir(home)
