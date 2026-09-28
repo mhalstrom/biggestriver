@@ -163,6 +163,8 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
 .strip button b { font-size: 18px; color: var(--ink); font-variant-numeric: tabular-nums; }
 .strip button.hum b { color: var(--human); } .strip button.good b { color: var(--ready); } .strip button.bad b { color: var(--warn); }
 .strip button:hover { border-color: var(--accent); }
+.strip button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.strip button.primary b { color: var(--accent-ink); }
 .dash { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr) minmax(0, .8fr); gap: 16px; align-items: start; }
 .dash .col { max-height: calc(100vh - 150px); overflow-y: auto; padding-right: 2px; }
 .dash .col .panel:last-child { margin-bottom: 0; }
@@ -440,7 +442,7 @@ function renderCapacity() {
       <div class="a" style="flex:${l.ai}"></div><div class="h" style="flex:${l.human}"></div><div class="cap">${l.depth + 1}</div></div>`).join("");
   $("#capacity").innerHTML = `<h2>Parallel work</h2>
     <div class="stats">
-      <div class="stat ${c.spare_slots ? "good" : ""}"><div class="n">${c.spare_slots}</div><div class="l">open slots: more agent sessions you can start now</div></div>
+      <div class="stat ${c.spare_slots ? "good" : ""}"${c.spare_slots ? ` data-launch="1" style="cursor:pointer" title="Click to start an agent session in Terminal"` : ""}><div class="n">${c.spare_slots}</div><div class="l">open slots: more agent sessions you can start now${c.spare_slots ? " (click to start one)" : ""}</div></div>
       <div class="stat ${c.excess_sessions ? "bad" : ""}"><div class="n">${c.excess_sessions}</div><div class="l">sessions with nothing ready for them</div></div>
       <div class="stat"><div class="n">${c.agents_active}</div><div class="l">active agent sessions (${c.agents_busy} busy)</div></div>
       <div class="stat"><div class="n">${c.in_progress.length}</div><div class="l">items in progress</div></div>
@@ -555,7 +557,8 @@ function renderStrip() {
   const b = (n, label, go, cls) => `<button data-strip="${go}" class="${n ? cls : ""}"><b>${n}</b>${label}</button>`;
   $("#strip").innerHTML = b(NY.length, "need you", "needs", "hum") + (T ? b(T, "taken off your list", "takeovers", "hum") : "")
     + b(ready, "ready for agents", "work", "good") + b(running, "in progress", "work", "")
-    + b(blocked, "blocked outside", "blocked", "bad") + b(slots, "open agent slots", "capacity", "good");
+    + b(blocked, "blocked outside", "blocked", "bad") + b(slots, "open agent slots", "capacity", "good")
+    + (ready ? `<button data-launch="1" class="primary" title="Open Terminal in the folder of the most important ready item and run: claude go"><b>▶</b>Start an agent</button>` : "");
 }
 
 // Work column: one row per project; a click opens its open items (ready first).
@@ -977,6 +980,10 @@ document.addEventListener("click", async (e) => {
   if (t.dataset.takeoversOkall) { for (const x of S.takeovers || []) await act("takeover_seen", { id: x.id }).catch(() => {}); return; }
   if (t.closest("[data-takeovers-toggle]") && !t.closest("button")) { takeoversOpen = !takeoversOpen; return renderTakeovers(); }
   const wp = t.closest("[data-wp]"); if (wp) { const o = workOpen(), n = wp.dataset.wp; o.has(n) ? o.delete(n) : o.add(n); store("river.work.open", JSON.stringify([...o])); return renderWork(); }
+  const la = t.closest("[data-launch]"); if (la) {
+    if (la.dataset.busy) return; la.dataset.busy = "1"; setTimeout(() => delete la.dataset.busy, 4000);
+    try { const r = await act("launch_agent", {}); toast(`Started an agent in ${r.project}, for #${r.item.id} ${clip(r.item.title, 60)}`); } catch (e) { /* toast shown */ }
+    return; }
   const sb = t.closest("[data-strip]"); if (sb) { const go = sb.dataset.strip;
     if (go === "blocked") { await setTab("projects"); return $("#blockedPanel").scrollIntoView({ block: "start" }); }
     if (go === "capacity") return setTab("capacity");

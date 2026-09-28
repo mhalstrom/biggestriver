@@ -3,6 +3,7 @@ import tempfile
 import unittest
 
 from river import core, server
+from river.core import RiverError
 
 
 class PageMessages(unittest.TestCase):
@@ -105,6 +106,40 @@ class PageGoals(unittest.TestCase):
         self.assertEqual(goals["docs"]["outcome"], "readers find answers")
         self.op("goal_reopen", None, name="ship")
         self.assertEqual(core.goal_show(self.c, "ship")["status"], "open")
+
+
+
+class LaunchAgent(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        os.environ["RIVER_DB"] = os.path.join(self.dir.name, "t.db")
+        self.c = core.connect()
+
+    def tearDown(self):
+        self.c.close()
+        os.environ.pop("RIVER_DB", None)
+        self.dir.cleanup()
+
+    def test_opens_terminal_in_the_folder_of_the_top_ready_item(self):
+        folder = os.path.join(self.dir.name, 'my "shop" app')
+        core.project_add(self.c, "shop", path=self.dir.name)
+        core.project_path(self.c, "shop", folder)
+        core.project_add(self.c, "nofolder")
+        core.item_add(self.c, "shop", "person step", doer="human")
+        x = core.item_add(self.c, "shop", "agent step", priority=1)["id"]
+        sent = []
+        t = server.launch_agent(self.c, runner=sent.append)
+        self.assertEqual((t["project"], t["item"]["id"], t["command"]), ("shop", x, "claude go"))
+        self.assertIn('tell application "Terminal"', sent[0])
+        self.assertIn("claude go", sent[0])
+        self.assertIn('my \\"shop\\" app', sent[0])  # quotes escaped inside the AppleScript string
+        core.config_set(self.c, "launch_command", "claude --model opus go")
+        self.assertIn("claude --model opus go", server.launch_agent(self.c, runner=sent.append)["command"])
+        core.item_add(self.c, "nofolder", "x")
+        with self.assertRaises(RiverError):
+            server.launch_agent(self.c, "nofolder", runner=sent.append)  # no folder to start in
+        with self.assertRaises(RiverError):
+            server.launch_agent(self.c, "nosuch", runner=sent.append)
 
 
 if __name__ == "__main__":

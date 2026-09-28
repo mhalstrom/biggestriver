@@ -59,6 +59,7 @@ DEFAULT_SETTINGS = {
     "timezone": "",
     "auto_continue": "on",
     "due_warn_before": "3d",
+    "launch_command": "claude go",
 }
 
 SCHEMA = """
@@ -3149,6 +3150,25 @@ def prompt_for_all(conn, person=None):
                      + f": {q['body']}\n   Answer it: river --as {person} answer {q['id']} \"<answer>\"")
     parts.append(PROMPT_STEPS.format(person=person))
     return "\n\n".join(parts)
+
+
+def launch_target(conn, project=None):
+    """Where a new agent session should start: the folder of the project that holds the most important
+    ready item an agent can take (or of the project named). Refuses when nothing is ready there."""
+    ann = annotate(conn)
+    pool = sorted((a for a in ann.values() if a["ready"] and a["doer"] != "human" and a["kind"] != "deploy"
+                   and not a["reserved_for"] and not a["project_archived"]
+                   and (project is None or a["project"] == project)), key=lambda a: a["sort_key"])
+    if not pool:
+        raise RiverError("nothing is ready for an agent" + (f" in {project}" if project else "")
+                         + "; a new session would have no work")
+    top = pool[0]
+    p = _project(conn, top["project"])
+    if not p["path"]:
+        raise RiverError(f"project {p['name']} has no folder, so river cannot start a session there: "
+                         f"river project path {p['name']} <folder>")
+    return {"project": p["name"], "path": p["path"], "item": {"id": top["id"], "title": top["title"]},
+            "ready": len(pool), "command": setting(conn, "launch_command", project_id=p["id"])}
 
 
 def recent_events(conn, limit=40):

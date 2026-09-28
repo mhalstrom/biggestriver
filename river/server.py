@@ -27,6 +27,31 @@ def _build_id():
     """Changes whenever a watched file changes; the page reloads itself in dev mode."""
     return str(max((f.stat().st_mtime_ns for f in _watched()), default=0))
 
+def _applescript_str(s):
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def launch_agent(conn, project=None, runner=None):
+    """Open a Terminal window in the project folder of the most important ready agent item and run
+    launch_command there (default `claude go`), so one click starts one agent session. macOS only."""
+    import shlex
+    import subprocess
+    if sys.platform != "darwin" and runner is None:
+        raise RiverError("starting an agent from the page works on macOS only (it opens Terminal); "
+                         "start one yourself: cd <project folder> && claude go")
+    t = core.launch_target(conn, project)
+    shell = f"cd {shlex.quote(t['path'])} && {t['command']}"
+    script = f'tell application "Terminal"\n  activate\n  do script {_applescript_str(shell)}\nend tell'
+    try:
+        (runner or (lambda s: subprocess.run(["osascript", "-e", s], check=True, capture_output=True,
+                                             text=True, timeout=20)))(script)
+    except (OSError, subprocess.SubprocessError) as e:
+        why = (getattr(e, "stderr", "") or str(e)).strip()
+        raise RiverError(f"could not open Terminal: {why}. macOS may ask once to let river control Terminal "
+                         f"(System Settings, Privacy & Security, Automation)")
+    return t
+
+
 # Operations the page may call. Each maps JSON args to one core function.
 OPS = {
     "project_add": lambda c, a, who: core.project_add(c, a["name"], a.get("rank"), a.get("notes", ""), who),
@@ -81,6 +106,7 @@ OPS = {
     "offer": lambda c, a, who: core.offer(c, a["body"], int(a["item"]), a.get("to"), who),
     "give": lambda c, a, who: core.give(c, int(a["id"]), a["to"], who),
     "split": lambda c, a, who: core.split(c, int(a["id"]), [t for t in a["titles"] if t.strip()], who),
+    "launch_agent": lambda c, a, who: launch_agent(c, a.get("project")),
     "decline_message": lambda c, a, who: core.decline_message(c, int(a["msg"]), a.get("note"), who),
 }
 
