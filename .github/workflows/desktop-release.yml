@@ -1,6 +1,7 @@
-# The desktop app: on a version tag (v0.1.0), build the macOS .dmg files (Apple silicon and Intel)
-# and attach them to a GitHub Release for that tag. Not signed or notarized yet (item #249 adds that):
-# the first open needs Open Anyway in System Settings (macOS 15+) or right-click, Open (older macOS).
+# The desktop app: on a version tag (v0.1.0), build the macOS .dmg files (Apple silicon and Intel) and the
+# Windows installer (x64), and attach them to a GitHub Release for that tag. Not signed or notarized yet
+# (item #249 adds that): on a Mac the first open needs Open Anyway in System Settings (macOS 15+) or
+# right-click, Open (older macOS); on Windows, SmartScreen warns: More info, Run anyway.
 name: desktop-release
 on:
   push:
@@ -12,13 +13,12 @@ on:
         required: true
 permissions:
   contents: write
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  CSC_IDENTITY_AUTO_DISCOVERY: "false"
 jobs:
   mac:
     runs-on: macos-latest
-    env:
-      TAG: ${{ github.event.inputs.tag || github.ref_name }}
-      CSC_IDENTITY_AUTO_DISCOVERY: "false"
-      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -32,15 +32,6 @@ jobs:
       - name: Install
         working-directory: desktop
         run: npm ci
-      - name: river serve answers (its own output, for a failing smoke test)
-        run: |
-          python3 --version
-          RIVER_DB="$RUNNER_TEMP/d.db" RIVER_DESKTOP=1 python3 -X faulthandler bin/river serve --port 8917 > "$RUNNER_TEMP/serve.log" 2>&1 &
-          pid=$!
-          for i in $(seq 1 30); do curl -s -m 2 -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8917/api/state | grep -q 200 && { echo "answered after ${i}x0.5s"; break; }; sleep 0.5; done
-          kill -USR1 $pid 2>/dev/null; sleep 1
-          echo "--- serve output"; cat "$RUNNER_TEMP/serve.log"
-          kill $pid 2>/dev/null || true
       - name: Smoke test (river serve starts and stops)
         working-directory: desktop
         run: npm test
@@ -60,11 +51,68 @@ jobs:
             // find: () => null proves the app does not fall back to a Python on the runner.
             startRiver({ riverRoot: process.argv[1], find: () => null }).then(async (r) => { console.log("river answers on", r.url, "with", r.child.spawnargs[0]); await r.stop(); })
               .catch((e) => { console.error(e.message); process.exit(1); });' "$PWD/out/mac-arm64/Biggest River.app/Contents/Resources/river-app"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: desktop/out/*.dmg
+          if-no-files-found: error
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Install
+        working-directory: desktop
+        run: npm ci
+      - name: Smoke test (river serve starts and stops)
+        working-directory: desktop
+        run: npm test
+      - name: Version from the tag
+        working-directory: desktop
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "tag must look like v1.2.3, not $TAG"; exit 1; }
+          npm version --no-git-tag-version --allow-same-version "${TAG#v}"
+      - name: Build the installer (unsigned)
+        working-directory: desktop
+        run: npm run dist:win
+      - name: The app starts river from its own bundle, with its own Python
+        working-directory: desktop
+        run: |
+          RIVER_DB="$RUNNER_TEMP/q.db" node -e '
+            const { startRiver } = require("./server");
+            startRiver({ riverRoot: process.argv[1], find: () => null }).then(async (r) => { console.log("river answers on", r.url, "with", r.child.spawnargs[0]); await r.stop(); })
+              .catch((e) => { console.error(e.message); process.exit(1); });' "$PWD/out/win-unpacked/resources/river-app"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: desktop/out/*-setup.exe
+          if-no-files-found: error
+  publish:
+    needs: [mac, windows]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
       - name: Publish the GitHub Release
         run: |
-          notes="Biggest River desktop app ${TAG}. Download the .dmg for your Mac: arm64 for Apple silicon (M1 and later), x64 for Intel. Drag it to Applications. The app is not signed yet, so the first time: open it once, then go to System Settings > Privacy & Security and click Open Anyway (on macOS 14 and older: right-click the app, choose Open). It carries its own Python: nothing else to install."
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" desktop/out/*.dmg --clobber
+          ls -l dist
+          notes="Biggest River desktop app ${TAG}. Mac: download the .dmg for your chip, arm64 for Apple silicon (M1 and later), x64 for Intel, and drag the app to Applications. Windows: download the -setup.exe (x64; Windows on Arm runs it too). The app is not signed yet. On a Mac, the first time: open it once, then go to System Settings > Privacy & Security and click Open Anyway (on macOS 14 and older: right-click the app, choose Open). On Windows, SmartScreen warns: click More info, then Run anyway. The app carries its own Python: nothing else to install."
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber -R "$GITHUB_REPOSITORY"
           else
-            gh release create "$TAG" desktop/out/*.dmg --title "Biggest River ${TAG}" --notes "$notes" --target "$GITHUB_SHA"
+            gh release create "$TAG" dist/* --title "Biggest River ${TAG}" --notes "$notes" --target "$GITHUB_SHA" -R "$GITHUB_REPOSITORY"
           fi

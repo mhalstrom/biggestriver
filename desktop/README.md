@@ -30,13 +30,16 @@ Inside the app the page's git Update button is hidden: the server runs with
 ## Release
 
 `npm run dist` builds `out/Biggest-River-<version>-arm64.dmg` and `-x64.dmg`
-with electron-builder; the app carries a copy of `bin/` and `river/`, and
-`scripts/fetch-python.js` (run first by `npm run dist`; pinned release and
-sha256) puts the Python for each chip type in `build/python/<arch>/`. Pushing a
+with electron-builder, and `npm run dist:win` builds the Windows installer
+`out/Biggest-River-<version>-x64-setup.exe`. The app carries a copy of `bin/`
+and `river/`, and `scripts/fetch-python.js` (run first by both; pinned release
+and sha256) puts the Python for each system and chip type in
+`build/python/<os>-<arch>/` (`mac-arm64`, `mac-x64`, `win-x64`). Pushing a
 version tag (`git tag v0.1.0 && git push origin v0.1.0`) runs
-`.github/workflows/desktop-release.yml`, which builds both on macOS, checks
-that the app starts river from its own copy, and attaches the `.dmg` files to
-the GitHub Release for that tag. The app is not signed or notarized yet, so
-the first time people open it once, then click Open Anyway in System Settings >
-Privacy & Security (macOS 15 and later), or right-click it and choose Open
-(macOS 14 and older).
+`.github/workflows/desktop-release.yml`, which builds the `.dmg` files on macOS
+and the installer on Windows, checks that each app starts river from its own
+copy, and attaches all three to the GitHub Release for that tag. The app is not
+signed or notarized yet. On a Mac, the first time people open it once, then
+click Open Anyway in System Settings > Privacy & Security (macOS 15 and later),
+or right-click it and choose Open (macOS 14 and older). On Windows, SmartScreen
+warns: click More info, then Run anyway. Windows on Arm runs the x64 app.

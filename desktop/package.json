@@ -11,7 +11,9 @@
     "test": "node --test",
     "dist": "electron-builder --mac dmg --arm64 --x64 --publish never",
     "python": "node scripts/fetch-python.js",
-    "predist": "node scripts/fetch-python.js arm64 x64",
+    "predist": "node scripts/fetch-python.js mac-arm64 mac-x64",
+    "dist:win": "electron-builder --win nsis --x64 --publish never",
+    "predist:win": "node scripts/fetch-python.js win-x64",
     "icon": "electron scripts/make-icon.js"
   },
   "devDependencies": {
@@ -46,7 +48,7 @@
         ]
       },
       {
-        "from": "build/python/${arch}/python",
+        "from": "build/python/${os}-${arch}/python",
         "to": "river-app/python"
       }
     ],
@@ -58,6 +60,13 @@
     },
     "dmg": {
       "artifactName": "Biggest-River-${version}-${arch}.${ext}"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "icon.png"
+    },
+    "nsis": {
+      "artifactName": "Biggest-River-${version}-${arch}-setup.${ext}"
     }
   }
 }

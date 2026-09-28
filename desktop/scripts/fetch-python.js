@@ -1,7 +1,8 @@
 // Downloads the Python the packaged app carries (python-build-standalone, CPython 3.13), so the app
-// starts on a Mac with no Python of its own. Pinned by release and sha256; run before electron-builder
-// (npm run dist does). Usage: node scripts/fetch-python.js [arm64] [x64]   (default: both)
-// Result: build/python/<arch>/python/bin/python3, which electron-builder copies to river-app/python.
+// starts on a Mac or PC with no Python of its own. Pinned by release and sha256; run before electron-builder
+// (npm run dist and npm run dist:win do). Usage: node scripts/fetch-python.js [mac-arm64] [mac-x64] [win-x64]
+// (default: all). Result: build/python/<os>-<arch>/python (bin/python3 on a Mac, python.exe on Windows),
+// which electron-builder copies to river-app/python.
 const { execFileSync } = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
@@ -9,10 +10,12 @@ const path = require("node:path");
 
 const RELEASE = "20260924";
 const BUILDS = {
-  arm64: { file: "cpython-3.13.15+20260924-aarch64-apple-darwin-install_only_stripped.tar.gz",
+  "mac-arm64": { file: "cpython-3.13.15+20260924-aarch64-apple-darwin-install_only_stripped.tar.gz",
     sha256: "064afb7c2fc0bbf511d886288adf98696af5105e36c138cdf2c199c0146fcf68" },
-  x64: { file: "cpython-3.13.15+20260924-x86_64-apple-darwin-install_only_stripped.tar.gz",
+  "mac-x64": { file: "cpython-3.13.15+20260924-x86_64-apple-darwin-install_only_stripped.tar.gz",
     sha256: "327814efd865a0b6a99c149b12a261e9d0ad409183515c745d41bda2d07282e9" },
+  "win-x64": { file: "cpython-3.13.15+20260924-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+    sha256: "e42fa944748a50e9ff481cbb817ef8a6e3da6fbcf0cf6f29b554e1acb8c7384d" },
 };
 // Parts of the standard library river never uses (tests, the Tk GUI and IDLE, pip bootstrap).
 const DROP = ["test", "idlelib", "tkinter", "turtledemo", "ensurepip", "lib2to3"];
@@ -37,12 +40,19 @@ function fetchOne(arch) {
   fs.mkdirSync(dir, { recursive: true });
   const tgz = path.join(dir, b.file);
   fs.writeFileSync(tgz, data);
-  execFileSync("tar", ["-xzf", tgz, "-C", dir]);
+  // A relative path and cwd: Git's tar on Windows reads "C:" in a path as a remote host.
+  execFileSync("tar", ["-xzf", b.file], { cwd: dir });
   fs.rmSync(tgz);
-  const lib = fs.readdirSync(path.join(dir, "python", "lib")).find((n) => /^python3\.\d+$/.test(n));
-  for (const d of DROP) fs.rmSync(path.join(dir, "python", "lib", lib, d), { recursive: true, force: true });
-  for (const n of fs.readdirSync(path.join(dir, "python", "lib"))) {
-    if (/^(tcl|tk|itcl|thread)\d/.test(n)) fs.rmSync(path.join(dir, "python", "lib", n), { recursive: true, force: true });
+  // The standard library: python/lib/python3.13 on a Mac, python/Lib on Windows (Tcl/Tk in python/tcl).
+  const win = arch.startsWith("win-");
+  const lib = win ? path.join(dir, "python", "Lib") : path.join(dir, "python", "lib",
+    fs.readdirSync(path.join(dir, "python", "lib")).find((n) => /^python3\.\d+$/.test(n)));
+  for (const d of DROP) fs.rmSync(path.join(lib, d), { recursive: true, force: true });
+  if (win) fs.rmSync(path.join(dir, "python", "tcl"), { recursive: true, force: true });
+  else {
+    for (const n of fs.readdirSync(path.join(dir, "python", "lib"))) {
+      if (/^(tcl|tk|itcl|thread)\d/.test(n)) fs.rmSync(path.join(dir, "python", "lib", n), { recursive: true, force: true });
+    }
   }
   fs.writeFileSync(stamp, b.sha256 + "\n");
   console.log(`python ${arch}: ready in ${path.relative(process.cwd(), dir)}`);
