@@ -165,6 +165,7 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
 .strip button:hover { border-color: var(--accent); }
 .strip button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .strip button.primary b { color: var(--accent-ink); }
+.strip select { align-self: stretch; }
 .dash { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr) minmax(0, .8fr); gap: 16px; align-items: start; }
 .dash .col { max-height: calc(100vh - 150px); overflow-y: auto; padding-right: 2px; }
 .dash .col .panel:last-child { margin-bottom: 0; }
@@ -338,7 +339,9 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
   <section id="tab-settings" class="hidden">
     <div class="panel">
       <h2>Settings</h2>
-      <div class="muted" style="font-size:12px;margin-bottom:8px">The most specific value wins: item, then agent, then project, then global, then the built-in default.</div>
+      <div class="muted" style="font-size:12px;margin-bottom:8px">The most specific value wins: item, then agent, then project, then global, then the built-in default.<br>
+        <b>launch_agents</b> lists the agents the Start button offers, as <code>Label=command</code> entries separated by <code>;</code>. The first is the default. Agents other than Claude Code do not read CLAUDE.md, so tell them what to do, for example:
+        <code>Claude Code=claude go; Codex=codex "run river go in this folder and follow the briefing"; Grok=grok "run river go in this folder and follow the briefing"</code></div>
       <table class="settings" id="settingsTable"></table>
       <div class="form" style="margin-top:12px;max-width:640px">
         <div class="two">
@@ -555,10 +558,13 @@ function renderStrip() {
   const blocked = S.items.filter(i => i.blocked_reason && !["done", "dropped"].includes(i.status)).length;
   const T = (S.takeovers || []).length, slots = S.capacity ? S.capacity.spare_slots : 0;
   const b = (n, label, go, cls) => `<button data-strip="${go}" class="${n ? cls : ""}"><b>${n}</b>${label}</button>`;
-  $("#strip").innerHTML = b(NY.length, "need you", "needs", "hum") + (T ? b(T, "taken off your list", "takeovers", "hum") : "")
+  const LA = S.launch_agents || [], pick = LA.includes(store("river.launch.agent")) ? store("river.launch.agent") : LA[0];
+  const agentPick = LA.length > 1 ? `<select id="launchAgent" title="Which agent the Start button opens">${LA.map(a => `<option ${a === pick ? "selected" : ""}>${esc(a)}</option>`).join("")}</select>` : "";
+  const html = b(NY.length, "need you", "needs", "hum") + (T ? b(T, "taken off your list", "takeovers", "hum") : "")
     + b(ready, "ready for agents", "work", "good") + b(running, "in progress", "work", "")
     + b(blocked, "blocked outside", "blocked", "bad") + b(slots, "open agent slots", "capacity", "good")
-    + (ready ? `<button data-launch="1" class="primary" title="Open Terminal in the folder of the most important ready item and run: claude go"><b>▶</b>Start an agent</button>` : "");
+    + (ready ? agentPick + `<button data-launch="1" class="primary" title="Open a Terminal tab in the folder of the most important ready item and start ${esc(pick || "an agent")} there (setting launch_agents)"><b>▶</b>Start ${LA.length > 1 ? "" : "an agent"}</button>` : "");
+  if ($("#strip").dataset.sig !== html) { $("#strip").innerHTML = html; $("#strip").dataset.sig = html; }
 }
 
 // Work column: one row per project; a click opens its open items (ready first).
@@ -982,7 +988,8 @@ document.addEventListener("click", async (e) => {
   const wp = t.closest("[data-wp]"); if (wp) { const o = workOpen(), n = wp.dataset.wp; o.has(n) ? o.delete(n) : o.add(n); store("river.work.open", JSON.stringify([...o])); return renderWork(); }
   const la = t.closest("[data-launch]"); if (la) {
     if (la.dataset.busy) return; la.dataset.busy = "1"; setTimeout(() => delete la.dataset.busy, 4000);
-    try { const r = await act("launch_agent", {}); toast(`Started an agent in ${r.project}, for #${r.item.id} ${clip(r.item.title, 60)}`); } catch (e) { /* toast shown */ }
+    const agent = $("#launchAgent") ? $("#launchAgent").value : undefined;
+    try { const r = await act("launch_agent", { agent }); toast(`Started ${r.agent} in ${r.project}, for #${r.item.id} ${clip(r.item.title, 60)}`); } catch (e) { /* toast shown */ }
     return; }
   const sb = t.closest("[data-strip]"); if (sb) { const go = sb.dataset.strip;
     if (go === "blocked") { await setTab("projects"); return $("#blockedPanel").scrollIntoView({ block: "start" }); }
@@ -1020,6 +1027,7 @@ document.addEventListener("click", async (e) => {
 });
 
 $("#actor").addEventListener("change", () => { store("river.actor", $("#actor").value); ibSig = ""; pollInbox().catch(() => {}); });
+document.addEventListener("change", (e) => { if (e.target.id === "launchAgent") store("river.launch.agent", e.target.value); });
 $("#inboxAll").addEventListener("change", () => { ibSig = ""; pollInbox().catch(() => {}); });
 async function sendForm() {
   if (!actor()) return toast("Choose who you are in 'Acting as' first", true);

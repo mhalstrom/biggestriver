@@ -59,7 +59,8 @@ DEFAULT_SETTINGS = {
     "timezone": "",
     "auto_continue": "on",
     "due_warn_before": "3d",
-    "launch_command": "claude go",
+    # Agents the page can start, as "Label=command" entries separated by ";". The first is the default.
+    "launch_agents": "Claude Code=claude go",
     "launch_in": "tab",
 }
 
@@ -550,6 +551,8 @@ def config_set(conn, key, value, project=None, item=None, agent=None, actor=None
     elif key in ("keep_prereq_limit", "replan_threshold", "max_leases", "serve_port", "smtp_port"):
         if not value.isdigit():
             raise RiverError(f"{key} takes a whole number")
+    elif key == "launch_agents":
+        parse_launch_agents(value)
     elif key == "launch_in" and value not in ("tab", "window"):
         raise RiverError("launch_in is tab or window")
     elif key == "auto_continue" and value not in ("on", "off"):
@@ -3157,9 +3160,26 @@ def prompt_for_all(conn, person=None):
     return "\n\n".join(parts)
 
 
-def launch_target(conn, project=None):
-    """Where a new agent session should start: the folder of the project that holds the most important
-    ready item an agent can take (or of the project named). Refuses when nothing is ready there."""
+def parse_launch_agents(value):
+    """'Claude Code=claude go; Codex=codex "run river go"' -> [("Claude Code", "claude go"), ...]."""
+    out = []
+    for part in (value or "").split(";"):
+        if not part.strip():
+            continue
+        label, sep, cmd = part.partition("=")
+        if not sep or not label.strip() or not cmd.strip():
+            raise RiverError(f"launch_agents entry {part.strip()!r} needs the form Label=command, for example "
+                             f"'Claude Code=claude go; Codex=codex \"run river go in this folder and follow the briefing\"'")
+        out.append((label.strip(), cmd.strip()))
+    if not out:
+        raise RiverError("launch_agents needs at least one Label=command entry")
+    return out
+
+
+def launch_target(conn, project=None, agent=None):
+    """Where and how a new agent session should start: the folder of the project that holds the most
+    important ready item an agent can take (or of the project named), and the command of the chosen
+    launch_agents entry (the first when none is named). Refuses when nothing is ready there."""
     ann = annotate(conn)
     pool = sorted((a for a in ann.values() if a["ready"] and a["doer"] != "human" and a["kind"] != "deploy"
                    and not a["reserved_for"] and not a["project_archived"]
@@ -3173,8 +3193,18 @@ def launch_target(conn, project=None):
         raise RiverError(f"project {p['name']} has no folder, so river cannot start a session there: "
                          f"river project path {p['name']} <folder>")
     return {"project": p["name"], "path": p["path"], "item": {"id": top["id"], "title": top["title"]},
-            "ready": len(pool), "command": setting(conn, "launch_command", project_id=p["id"]),
+            "ready": len(pool), **_launch_agent_cmd(conn, p["id"], agent),
             "launch_in": setting(conn, "launch_in", project_id=p["id"])}
+
+
+def _launch_agent_cmd(conn, project_id, agent):
+    agents = parse_launch_agents(setting(conn, "launch_agents", project_id=project_id))
+    if agent is None:
+        return {"agent": agents[0][0], "command": agents[0][1]}
+    for label, cmd in agents:
+        if label == agent:
+            return {"agent": label, "command": cmd}
+    raise RiverError(f"no agent {agent!r} in launch_agents; known: {', '.join(a for a, _ in agents)}")
 
 
 def recent_events(conn, limit=40):
@@ -3194,6 +3224,7 @@ def state(conn):
         "agents": [agent_status(conn, r["name"]) for r in conn.execute("SELECT name FROM agents ORDER BY name")],
         "capacity": capacity(conn, ann),
         "targets": targets_view(conn, ann),
+        "launch_agents": [label for label, _ in parse_launch_agents(setting(conn, "launch_agents"))],
         "settings": config_list(conn),
         "events": recent_events(conn),
         "takeovers": takeovers(conn),

@@ -138,8 +138,16 @@ class LaunchAgent(unittest.TestCase):
         core.config_set(self.c, "launch_in", "tab")
         self.assertIn("claude go", sent[0])
         self.assertIn('my \\"shop\\" app', sent[0])  # quotes escaped inside the AppleScript string
-        core.config_set(self.c, "launch_command", "claude --model opus go")
-        self.assertIn("claude --model opus go", server.launch_agent(self.c, runner=sent.append)["command"])
+        core.config_set(self.c, "launch_agents", 'Claude Code=claude go; Codex=codex "run river go and follow it"')
+        t = server.launch_agent(self.c, runner=sent.append, agent="Codex")
+        self.assertEqual((t["agent"], t["command"]), ("Codex", 'codex "run river go and follow it"'))
+        self.assertIn('codex \\"run river go and follow it\\"', sent[-1])
+        self.assertEqual(server.launch_agent(self.c, runner=sent.append)["agent"], "Claude Code")  # first is default
+        self.assertEqual(core.state(self.c)["launch_agents"], ["Claude Code", "Codex"])
+        with self.assertRaises(RiverError):
+            server.launch_agent(self.c, runner=sent.append, agent="Nope")
+        with self.assertRaises(RiverError):
+            core.config_set(self.c, "launch_agents", "just a command")
         core.item_add(self.c, "nofolder", "x")
         with self.assertRaises(RiverError):
             server.launch_agent(self.c, "nofolder", runner=sent.append)  # no folder to start in

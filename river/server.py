@@ -31,15 +31,16 @@ def _applescript_str(s):
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def launch_agent(conn, project=None, runner=None):
+def launch_agent(conn, project=None, runner=None, agent=None):
     """Open a Terminal window in the project folder of the most important ready agent item and run
-    launch_command there (default `claude go`), so one click starts one agent session. macOS only."""
+    the command of the chosen launch_agents entry there (default `claude go`), so one click starts one
+    agent session. macOS only."""
     import shlex
     import subprocess
     if sys.platform != "darwin" and runner is None:
         raise RiverError("starting an agent from the page works on macOS only (it opens Terminal); "
                          "start one yourself: cd <project folder> && claude go")
-    t = core.launch_target(conn, project)
+    t = core.launch_target(conn, project, agent)
     shell = f"cd {shlex.quote(t['path'])} && {t['command']}"
     cmd = _applescript_str(shell)
     if t["launch_in"] == "tab":
@@ -119,7 +120,7 @@ OPS = {
     "offer": lambda c, a, who: core.offer(c, a["body"], int(a["item"]), a.get("to"), who),
     "give": lambda c, a, who: core.give(c, int(a["id"]), a["to"], who),
     "split": lambda c, a, who: core.split(c, int(a["id"]), [t for t in a["titles"] if t.strip()], who),
-    "launch_agent": lambda c, a, who: launch_agent(c, a.get("project")),
+    "launch_agent": lambda c, a, who: launch_agent(c, a.get("project"), agent=a.get("agent")),
     "decline_message": lambda c, a, who: core.decline_message(c, int(a["msg"]), a.get("note"), who),
 }
 
