@@ -521,6 +521,26 @@ class Kinds(Base):
         core.done(self.c, api, "ok", "ag")
         self.assertTrue(core.annotate(self.c)[whole]["ready"])
 
+    def test_touches_compare_within_each_project_folder(self):
+        d = self.dir.name
+        core.project_add(self.c, "site1", path=os.path.join(d, "one"))
+        core.project_add(self.c, "site2", path=os.path.join(d, "two"))
+        core.project_add(self.c, "same", path=os.path.join(d, "one"))  # a second project in the same folder
+        core.project_add(self.c, "nofolder")
+        core.project_add(self.c, "nofolder2")
+        a = core.item_add(self.c, "site1", "a", touches="public/")["id"]
+        b = core.item_add(self.c, "site2", "b", touches="public/index.html")["id"]
+        c = core.item_add(self.c, "same", "c", touches="public/index.html")["id"]
+        e = core.item_add(self.c, "nofolder", "e", touches="public/")["id"]
+        f = core.item_add(self.c, "nofolder2", "f", touches="public/x")["id"]
+        g = core.item_add(self.c, "nofolder", "g", touches="public/x")["id"]
+        h = core.item_add(self.c, "site2", "h", touches=os.path.join(d, "one", "public", "y"))["id"]
+        ann = core.annotate(self.c)
+        self.assertEqual(ann[a]["conflicts"], [c, h])  # same folder, and an absolute path into it
+        self.assertEqual(ann[b]["conflicts"], [])  # another repository's public/
+        self.assertEqual(ann[e]["conflicts"], [g])  # no folder: only its own project
+        self.assertEqual(ann[f]["conflicts"], [])
+
     def test_touch_edit_adds_and_removes_auto_conflicts(self):
         x = core.item_add(self.c, "a", "x", touches=["a.py"])["id"]
         y = core.item_add(self.c, "a", "y", touches=["b.py"])["id"]

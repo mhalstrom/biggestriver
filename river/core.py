@@ -958,15 +958,38 @@ def _paths_overlap(a, b):
     return a == b or b.startswith(a + "/") or a.startswith(b + "/")
 
 
+def _touch_keys(touches, project_id, root):
+    """Touches as comparable keys: a full path when the project has a folder (or the touch is absolute),
+    else the relative path scoped to its project, so two repositories' 'public/' never meet."""
+    r = os.path.realpath(os.path.expanduser(root)) if root else None
+    keys = []
+    for t in touches_list(touches):
+        p = os.path.expanduser(t)
+        if os.path.isabs(p):
+            keys.append((None, os.path.realpath(p)))
+        elif r:
+            keys.append((None, os.path.normpath(os.path.join(r, p))))
+        else:
+            keys.append((project_id, os.path.normpath(p)))
+    return keys
+
+
+def _keys_overlap(a, b):
+    return a[0] == b[0] and _paths_overlap(a[1], b[1])
+
+
 def _sync_conflicts(conn, item_id, actor):
     """Keep automatic conflict links equal to the open items whose touches overlap this item's."""
     it = _item(conn, item_id)
-    mine = touches_list(it["touches"])
+    root = lambda pid: conn.execute("SELECT path FROM projects WHERE id=?", (pid,)).fetchone()["path"]
+    mine = _touch_keys(it["touches"], it["project_id"], root(it["project_id"]))
     want = set()
     if it["status"] in OPEN_STATES and mine:
-        for r in conn.execute(f"SELECT id, touches FROM items WHERE id<>? AND status IN {OPEN_STATES} AND touches<>''",
+        for r in conn.execute(f"SELECT i.id, i.touches, i.project_id, p.path FROM items i JOIN projects p "
+                              f"ON p.id=i.project_id WHERE i.id<>? AND i.status IN {OPEN_STATES} AND i.touches<>''",
                               (it["id"],)):
-            if any(_paths_overlap(x, y) for x in mine for y in touches_list(r["touches"])):
+            theirs = _touch_keys(r["touches"], r["project_id"], r["path"])
+            if any(_keys_overlap(x, y) for x in mine for y in theirs):
                 want.add(r["id"])
     have = {r["item_id"] if r["blocked_by"] == it["id"] else r["blocked_by"] for r in conn.execute(
         "SELECT item_id, blocked_by FROM deps WHERE kind='conflicts' AND auto=1 AND (item_id=? OR blocked_by=?)",
