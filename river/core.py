@@ -3873,8 +3873,9 @@ def _goal_brief(conn, name, actor):
 def go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None):
     """One call for a fresh agent session: find the project, name the session, pick a role, and brief it.
 
-    focus (RIVER_FOCUS, set when the page opens an agent on one item): "help:<id>" briefs the session to
-    do a person's item together with the person; "unblock:<id>" takes work that unblocks that item first."""
+    focus (RIVER_FOCUS, set when the page opens an agent): "help:<id>@<person>" briefs the session to do a
+    person's item together with the person (the Copy prompt text); "needs:@<person>" the same for everything
+    that waits on the person; "unblock:<id>" takes work that unblocks that item first."""
     if role is not None and role not in ROLES:
         raise RiverError(f"role is one of {', '.join(ROLES)}")
     if project:
@@ -3972,11 +3973,19 @@ def go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None)
         return got[0] if got else None
 
     kind, _, fid = (focus or "").partition(":")
+    fid, _, person = fid.partition("@")
+    if role is None and kind == "needs":
+        person = _person(conn, person or None)
+        brief.update(role="helper", item=None, help_prompt=prompt_for_all(conn, person),
+                     why=f"the page opened this session to work through what waits on {person}, with them")
+        _set_role_note(conn, actor, "helper", None)
+        return brief
     if role is None and fid.isdigit() and int(fid) in annotate(conn):
         f = item_show(conn, int(fid))
         if f["status"] in OPEN_STATES and kind == "help" and f["doer"] == "human":
-            brief.update(role="helper", item=None, help=f,
-                         why=f"the page opened this session to do #{f['id']} together with the person")
+            person = _person(conn, person or None)
+            brief.update(role="helper", item=None, help_prompt=prompt_for(conn, f["id"], person),
+                         why=f"the page opened this session to do #{f['id']} together with {person}")
             _set_role_note(conn, actor, "helper", f["id"])
             return brief
         if f["status"] in OPEN_STATES and kind == "unblock":

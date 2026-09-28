@@ -392,10 +392,21 @@ async function renderGraph(force) {
   } catch (e) { $("#graph").innerHTML = `<div class="muted">Graph failed to draw: ${esc(e.message || e)}</div>`; }
 }
 window.riverOpen = (id) => openDrawer(id);
+// Closing takes the item out of the URL: Back when this page added it, else the URL is rewritten.
+function closeDrawer() {
+  const id = openItem;
+  drawer.close(); openItem = null;
+  if (hashItem() !== id) return;
+  if (history.state && history.state.item === id) history.back();
+  else history.replaceState(null, "", pageHash(tab, null));
+}
 
 
 async function openDrawer(id, fresh = false) {
   openItem = id;
+  // A new entry when no item was open (Back closes it); another item replaces the open one.
+  if (hashItem() == null) history.pushState({ item: id }, "", pageHash(tab, id));
+  else if (hashItem() !== id) history.replaceState(history.state && history.state.item != null ? { item: id } : null, "", pageHash(tab, id));
   const r = await fetch(`/api/item/${id}`); if (!r.ok) return;
   drawer.show(id, itemDrawerHtml(await r.json(), { S, me: actor() }), fresh);
 }
@@ -413,7 +424,7 @@ async function drawerAction(what) {
     if (what === "replanned") await act("replanned", { id });
     if (what === "msg") { const body = $("#dMsgBody").value.trim(); if (!body) return; if (!actor()) return toast("Choose your name in 'You are' first", true); await act("send", { kind: $("#dMsgKind").value, body, item: id }); toast("Sent"); }
     if (what === "agent") {
-      const r = await act("open_agent_on", { id, agent: $("#launchAgent") ? $("#launchAgent").value : undefined });
+      const r = await act("open_agent_on", { id, person: actor() || undefined, agent: $("#launchAgent") ? $("#launchAgent").value : undefined });
       toast(r.pushed_to ? `Gave #${id} to ${r.pushed_to}, which was waiting for work`
         : `Started ${r.agent} in ${r.project}` + (r.focus && r.focus.startsWith("help") ? `, to do #${id} with you` : r.focus ? `, to unblock #${id}` : `, for #${id}`));
     }
@@ -556,7 +567,7 @@ function renderNeedsYou() {
     const isItem = e.kind === "item";
     const detail = isItem ? (e.item_context || e.item_notes) : e.body;
     const buttons = isItem
-      ? `<button class="btn" data-open="${e.item_id}">Open</button><button class="btn" data-ny="claim" data-id="${e.item_id}">Claim</button><button class="btn" data-copy-prompt="${e.item_id}" title="A prompt for an agent that explains this and helps you do it">Copy prompt</button><button class="btn primary" data-ny="done" data-id="${e.item_id}">Done</button>`
+      ? `<button class="btn" data-open="${e.item_id}">Open</button><button class="btn" data-ny="claim" data-id="${e.item_id}">Claim</button><button class="btn" data-copy-prompt="${e.item_id}" title="A prompt for an agent that explains this and helps you do it">Copy prompt</button><button class="btn" data-agent-help="${e.item_id}" title="Open an agent session with that prompt, in the project folder">Open agent</button><button class="btn primary" data-ny="done" data-id="${e.item_id}">Done</button>`
       : (e.message_kind === "question"
           ? `<button class="btn primary" data-ny="answer" data-msg="${e.message_id}">Answer</button>`
           : `<button class="btn" data-ny="read" data-msg="${e.message_id}">Mark read</button>`)
@@ -646,7 +657,7 @@ document.addEventListener("click", async (e) => {
   const card = t.closest("[data-goal]"); if (card) { const g = card.dataset.goal; setGoal(goalSel() === g ? "" : g); return; }
   const open = t.closest("[data-open]"); if (open) return openDrawer(+open.dataset.open);
   const row = t.closest(".row"); if (row) return openDrawer(+row.dataset.id);
-  if (t.id === "dClose") { drawer.close(); openItem = null; return; }
+  if (t.id === "dClose") return closeDrawer();
   if (t.dataset.do) return drawerAction(t.dataset.do);
   if (t.dataset.ny) return needsYouAction(t);
   if (t.dataset.ib) return inboxAction(t);
@@ -656,6 +667,15 @@ document.addEventListener("click", async (e) => {
     return act("offer", { item: n, body }).then(() => toast(`Offer sent to the holder of #${n}`)).catch(() => {}); }
   if (t.dataset.copyPrompt) return copyPrompt(`/api/item/${t.dataset.copyPrompt}/prompt`);
   if (t.id === "copyAll") return copyPrompt("/api/prompt-all");
+  if (t.id === "agentAll" || t.dataset.agentHelp) {
+    if (t.dataset.busy) return; t.dataset.busy = "1"; setTimeout(() => delete t.dataset.busy, 4000);
+    const opts = { person: actor() || undefined, agent: $("#launchAgent") ? $("#launchAgent").value : undefined };
+    try {
+      const r = t.id === "agentAll" ? await act("open_needs_you", opts) : await act("open_agent_on", { ...opts, id: +t.dataset.agentHelp });
+      toast(`Started ${r.agent} in ${r.project}` + (t.id === "agentAll" ? ", to go through what needs you" : `, to do #${t.dataset.agentHelp} with you`));
+    } catch (e) { /* toast shown */ }
+    return;
+  }
   if (t.id === "notifyOn") { await Notification.requestPermission(); return renderNeedsYou(); }
   if (t.dataset.undoTakeover) { await act("undo_takeover", { id: +t.dataset.undoTakeover }).then(() => toast("Back on your list")).catch(() => {}); return; }
   if (t.dataset.takeoverOk) { await act("takeover_seen", { id: +t.dataset.takeoverOk }).catch(() => {}); return; }
@@ -762,14 +782,17 @@ document.addEventListener("drop", async (e) => {
 });
 
 const TABS = ["board", "projects", "targets", "capacity", "graph", "done", "settings"];
-// Each tab has its own URL (#tab-graph; the Board is the bare page), so a tab can be linked, reloaded, and reached with Back.
-function tabHash(name) {
+// The page's URL: #as-<person>, #tab-<name> (the Board has none), and #item-<id> while an item's drawer
+// is open, so a tab or an open item can be linked, reloaded, and reached with Back.
+function pageHash(tabName = tab, item = drawer.isOpen() ? openItem : null) {
   const keep = location.hash.slice(1).split("&").filter(x => /^as-/.test(x));
-  if (name !== "board") keep.push("tab-" + name);
+  if (tabName !== "board") keep.push("tab-" + tabName);
+  if (item != null) keep.push("item-" + item);
   return keep.length ? "#" + keep.join("&") : location.pathname + location.search;
 }
+function hashItem() { const m = location.hash.match(/(?:^#|&)item-(\d+)/); return m ? +m[1] : null; }
 function setTab(name, push = true) {
-  if (push && name !== tab) history.pushState(null, "", tabHash(name));
+  if (push && name !== tab) history.pushState(null, "", pageHash(name));
   tab = name; document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.tab === tab));
   for (const s of TABS) $("#tab-" + s).classList.toggle("hidden", s !== tab);
   renderLog(true);
@@ -903,6 +926,8 @@ async function openFromHash() {
     if (m[1] === "tab" && TABS.includes(v)) tabIn = v;
     if (m[1] === "item") { itemIn = true; await openDrawer(+v); }
   }
+  // No item in the URL (Back after opening one): the drawer closes.
+  if (!itemIn && drawer.isOpen()) { drawer.close(); openItem = null; }
   // An item link alone keeps the tab; a link with no tab and no item is the Board.
   if (!tabIn && !itemIn) tabIn = "board";
   if (tabIn && tabIn !== tab) await setTab(tabIn, false);

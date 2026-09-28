@@ -1298,22 +1298,10 @@ def render_go(b):
     out.append("")
     if b.get("focus_note"):
         out += [b["focus_note"], ""]
-    if b.get("help"):
-        h = b["help"]
-        out += [f"HELP THE PERSON WITH #{h['id']}: {h['title']}  (an item for a person; you work on it together)"]
-        if h["notes"]:
-            out.append(f"  notes: {h['notes']}")
-        out += _context_lines(h)
-        out += ["",
-                "How:",
-                f"  1. Read {r} show {h['id']} and the files or pages it names.",
-                "  2. Explain to the person what the item asks, and the steps, in plain words.",
-                "  3. Do the parts an agent may do (research, drafts, commands, checks); leave the rest to the person:",
-                "     decisions, approvals, accounts, payments, and signatures are theirs.",
-                f"  4. When the person has done it: {r} done {h['id']} --note \"<what the person did>\" --output \"<result>\"",
-                f"     Only if the person says you do the whole item: {r} takeover {h['id']} --note \"<how>\" (they are told).",
-                f"  Do not take other work in this session unless the person asks: then run {r} go --role worker.",
-                ""]
+    if b.get("help_prompt"):
+        out += [b["help_prompt"], "",
+                f"Your own agent name is {me}; take over a person's item only with their yes: {r} takeover <id> --note \"<how>\".",
+                f"Do not take other work in this session unless the person asks: then run {r} go --role worker."]
         print("\n".join(out).rstrip())
         return
     for u in b.get("unsynced") or []:

@@ -148,14 +148,20 @@ class LaunchAgent(unittest.TestCase):
         blocker = core.item_add(self.c, "shop", "draft the contract")["id"]
         waits = core.item_add(self.c, "shop", "ship it", after=[blocker])["id"]
         sent = []
-        t = server.open_agent_on(self.c, h, runner=sent.append)
-        self.assertIn(f"RIVER_FOCUS=help:{h} claude go", sent[-1])
+        core.register(self.c, "mark", human=True)
+        t = server.open_agent_on(self.c, h, runner=sent.append, person="mark")
+        self.assertIn(f"RIVER_FOCUS=help:{h}@mark claude go", sent[-1])
         b = core.go(self.c, self.dir.name, None, focus=t["focus"])
-        self.assertEqual((b["role"], b["help"]["id"], b["item"]), ("helper", h, None))
+        self.assertEqual((b["role"], b["item"]), ("helper", None))
+        self.assertEqual(b["help_prompt"], core.prompt_for(self.c, h, "mark"))
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             cli.render_go(b)
-        self.assertIn(f"HELP THE PERSON WITH #{h}", out.getvalue())
+        self.assertIn(f"Item #{h}: sign the contract", out.getvalue())
+        t = server.open_needs_you(self.c, runner=sent.append, person="mark")
+        self.assertIn("RIVER_FOCUS=needs:@mark claude go", sent[-1])
+        b = core.go(self.c, self.dir.name, None, focus=t["focus"])
+        self.assertEqual(b["help_prompt"], core.prompt_for_all(self.c, "mark"))
         t = server.open_agent_on(self.c, waits, runner=sent.append)
         self.assertIn(f"RIVER_FOCUS=unblock:{waits}", sent[-1])
         b = core.go(self.c, self.dir.name, None, focus=t["focus"])
