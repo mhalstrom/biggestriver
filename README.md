@@ -38,7 +38,16 @@ cd biggestriver
 ```
 
 `./install.sh --bin-dir DIR` picks another folder; `--no-skills` skips the
-skills. The queue database is `data/river.db` in the clone; set `RIVER_DB` to
+skills.
+
+Or install the command with pipx (Python 3.10 or later, no other
+dependencies):
+
+```sh
+pipx install git+https://github.com/mhalstrom/biggestriver
+```
+
+The package carries the agent guides (`river guide`, `river guide planner`). The queue database is `data/river.db` in the clone; set `RIVER_DB` to
 use another file.
 
 ## Set up a project

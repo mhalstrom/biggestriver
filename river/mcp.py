@@ -15,7 +15,7 @@ import os
 import re
 import sys
 
-from . import cli
+from . import __version__, cli
 from .core import RiverError
 
 PROTOCOL = "2025-06-18"
@@ -104,7 +104,7 @@ class Server:
         if method == "initialize":
             result = {"protocolVersion": msg.get("params", {}).get("protocolVersion") or PROTOCOL,
                       "capabilities": {"tools": {}},
-                      "serverInfo": {"name": "biggest-river", "version": "1"},
+                      "serverInfo": {"name": "biggest-river", "version": __version__},
                       "instructions": "Call go to take work from the Biggest River queue, and follow its briefing."}
         elif method == "tools/list":
             result = {"tools": TOOLS}

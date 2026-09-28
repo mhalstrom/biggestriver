@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling>=1.18"]
+build-backend = "hatchling.build"
+
+[project]
+name = "biggestriver"
+version = "0.1.0"
+description = "A dependency-ordered work queue for AI agents and the people they work with"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+dependencies = []
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Environment :: Console",
+  "Topic :: Software Development",
+]
+
+[project.urls]
+Homepage = "https://biggestriver.com"
+Source = "https://github.com/mhalstrom/biggestriver"
+
+[project.scripts]
+river = "river.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["river"]
+
+# The agent guides live in skills/ in the repository; the wheel carries them inside the package.
+[tool.hatch.build.targets.wheel.force-include]
+"skills" = "river/skills"
+
+[tool.hatch.build.targets.sdist]
+include = ["river", "skills", "tests", "bin", "seed", "README.md", "LICENSE", "install.sh", "pyproject.toml"]

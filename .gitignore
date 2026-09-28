@@ -2,3 +2,6 @@ data/
 __pycache__/
 *.pyc
 private/
+dist/
+build/
+*.egg-info/
