@@ -13,7 +13,9 @@ overview and the open questions. Then talk with the user before you add
 anything:
 
 1. **Ask for the outcome first.** "What must be true when this is done, and by
-   when?" One or two sentences. Do not add items until you have it.
+   when?" One or two sentences. Do not add items until you have it. River has
+   no due-date field: put the date in the outcome item's title ("... by Oct 15")
+   and tell the user that river does not warn when the date comes close.
 2. **Ask only what changes the plan.** Scope, deadline, who does which steps
    (agents or the user), what already exists, and what must not change. Take
    the open questions from the briefing that bear on this outcome; skip the
@@ -21,14 +23,20 @@ anything:
 3. **Split the outcome into items you can check.** Each item is one result that
    one agent or person finishes, with a `--check` command or a plain test ("the
    page loads at /pricing"). A step only the user can do (accounts, payments,
-   legal, a decision) is its own `--doer human` item.
+   legal, a decision) is its own `--doer human` item. For a person who is not
+   in river (a client, a colleague), still use `--doer human`, and say in
+   `--context` who does it and that the user records the result with `river done`.
 4. **Show the plan before you write it.** A short numbered list with the
    waits-on links. Change it until the user agrees, then add it.
 5. **Set priority on the outcome only** (`river prio <id> 0`). Its prerequisites
-   inherit it. Rank projects with `river project rank` when two compete.
+   inherit it. A new project gets the lowest rank, so equal priorities in older
+   projects go first. When the new outcome must go before them, ask the user,
+   then run `river project rank <name> 1`.
 6. **Make a new project** only for a separate area with its own folder or
    goal (`river project add <name> --path <dir> --description "..."`).
-   Otherwise add to the existing project.
+   Otherwise add to the existing project. When `river plan` says the folder
+   has no project, the projects it lists are other work: leave them alone
+   unless the user names them.
 7. **Report progress** from the queue, not from memory: `river status`,
    `river log --since 7d`, `river blockers <id>`.
 
@@ -72,6 +80,7 @@ river add <project> "<title>" [-p 0-4] [--doer any|ai|human] [--after <id> ...] 
           [--context "..."] [--touches <file> ...] [--check "<command>"]
 river dep <id> --on <id> ...        # <id> waits on the others
 river dep <id> --on <id> --kind feeds      # waits, then reads their output in its context
+                                           # (changes an existing --after link to feeds; show marks it)
 river dep <id> --on <id> --kind conflicts  # no order, never in progress together
 river undep <id> --on <id> ...
 river prio <id> <0-4>               # 0 is most important

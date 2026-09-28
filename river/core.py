@@ -2063,7 +2063,8 @@ def item_show(conn, item_id, ann=None):
         raise RiverError(f"no item {item_id}")
     a = {k: v for k, v in ann[iid].items() if k != "sort_key"}
     label = lambda x: "ready" if ann[x]["ready"] else ann[x]["status"]
-    a["waits_on_detail"] = [{"id": b, "title": ann[b]["title"], "status": label(b)} for b in a["waits_on"]]
+    a["waits_on_detail"] = [{"id": b, "title": ann[b]["title"], "status": label(b),
+                             "kind": "feeds" if b in a["fed_by"] else "blocks"} for b in a["waits_on"]]
     a["unblocks_detail"] = [{"id": d, "title": ann[d]["title"], "status": label(d)} for d in a["unblocks"]]
     a["fed_by_detail"] = [{"id": d, "title": ann[d]["title"], "status": ann[d]["status"], "output": ann[d]["output"]}
                           for d in a["fed_by"]]
@@ -2731,6 +2732,7 @@ def plan(conn, cwd, actor=None, project=None):
     stuck.sort(key=lambda x: -x["holds_up"])
     return {
         "agent": actor, "new_name": new_name, "projects": names, "role": "planner",
+        "cwd": cwd, "folder_has_project": bool(names) or project is not None,
         "status": status(conn),
         "questions": {
             "projects_without_description": [p["name"] for p in project_list(conn)

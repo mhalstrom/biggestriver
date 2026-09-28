@@ -147,7 +147,9 @@ def _print_show(a):
     if a.get("kind") == "deploy" and a["waits_on_detail"]:
         print("  ships:", ", ".join(f"#{d['id']} {d['title']} ({d['status']})" for d in a["waits_on_detail"]))
     elif a["waits_on_detail"]:
-        print("  waits on:", ", ".join(f"#{d['id']} {d['title']} ({d['status']})" for d in a["waits_on_detail"]))
+        print("  waits on:", ", ".join(f"#{d['id']} {d['title']} ({d['status']}"
+                                       + ("; feeds: you read its output" if d.get("kind") == "feeds" else "") + ")"
+                                       for d in a["waits_on_detail"]))
     if a["unblocks_detail"]:
         print("  unblocks:", ", ".join(f"#{d['id']} {d['title']} ({d['status']})" for d in a["unblocks_detail"]))
     if a.get("conflicts_detail"):
@@ -757,7 +759,7 @@ def render_status(res):
         print("(no projects: river project add <name>)")
     else:
         w = max(4, *(len(p["project"]) for p in rows))
-        print(f"{'project':<{w}}  {'done':>4} {'open':>4} {'ready':>5} {'working':>7} {'human':>5} {'blocked':>7}")
+        print(f"{'project':<{w}}  {'done':>4} {'open':>4} {'ready':>5} {'working':>7} {'human':>5} {'waiting':>7}")
         for p in rows:
             print(f"{p['project']:<{w}}  {p['done']:>4} {p['open']:>4} {p['ready']:>5} {p['in_progress']:>7} "
                   f"{p['human_waiting']:>5} {p['blocked']:>7}" + (f"  [{p['target']}]" if p["target"] else ""))
@@ -799,13 +801,19 @@ def render_plan(b):
     r = f"river --as {me}"
     out = [f"You are river agent {me}. Role: PLANNER."
            + (f" Focus: {', '.join(b['projects'])}." if b["projects"] else " Focus: every project.")]
+    if not b.get("folder_has_project", True):
+        out += ["",
+                f"THIS FOLDER HAS NO PROJECT: {b['cwd']}",
+                "  The projects below are other work. Leave them alone unless the user names them.",
+                "  If the user's goal is about this folder, create its project first, then add items to it:",
+                f"  {r} project add <name> --description \"<what it covers>\" --path {b['cwd']}"]
     if b["new_name"]:
         out.append(f"Your shell may not keep environment variables, so pass --as {me} on every river command.")
     out += ["", PLAN_RULES.format(r=r), "", "OVERVIEW"]
     print("\n".join(out))
     render_status(b["status"])
     q = b["questions"]
-    out = ["", "OPEN QUESTIONS"]
+    out = ["", "OPEN QUESTIONS" + ("" if b.get("folder_has_project", True) else " (other projects, not this folder)")]
     def section(title, rows, fmt, limit=10):
         if not rows:
             return
