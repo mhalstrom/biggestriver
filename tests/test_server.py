@@ -154,6 +154,21 @@ class LaunchAgent(unittest.TestCase):
         with self.assertRaises(RiverError):
             server.launch_agent(self.c, "nosuch", runner=sent.append)
 
+    def test_new_tab_waits_for_terminal_in_front_and_for_the_new_tab(self):
+        core.project_add(self.c, "shop", path=self.dir.name)
+        core.item_add(self.c, "shop", "agent step")
+        sent = []
+        server.launch_agent(self.c, runner=sent.append)
+        s = sent[0]
+        # Command-T goes to the app in front: the script waits for Terminal first, not a fixed delay.
+        self.assertLess(s.index('frontmost of process "Terminal"'), s.index('keystroke "t"'))
+        self.assertNotIn("delay 0.5", s)
+        # The command runs only after the tab count grew; otherwise it falls back to a new window.
+        self.assertLess(s.index("set tabsBefore to count of tabs"), s.index('keystroke "t"'))
+        self.assertLess(s.index("> tabsBefore"), s.index("in selected tab of front window"))
+        self.assertIn('error "Terminal opened no new tab"', s)
+        self.assertEqual(s.count("do script"), 3)  # the tab, the fallback window, and the no-window case
+
 
 if __name__ == "__main__":
     unittest.main()

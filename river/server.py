@@ -45,12 +45,29 @@ def launch_agent(conn, project=None, runner=None, agent=None):
     cmd = _applescript_str(shell)
     if t["launch_in"] == "tab":
         # Terminal has no "new tab" command: press Command-T in it, then run the command in that tab.
-        # Pressing keys needs the Accessibility permission once; without it, fall back to a new window.
+        # A key press goes to the app in front, so wait until Terminal is in front (else Command-T opens a
+        # browser tab). Then wait until the tab count grows (else the command runs in the old tab, which
+        # can hold a busy agent). Pressing keys needs the Accessibility permission once. Without it, or
+        # when no new tab appears, fall back to a new window.
         script = "\n".join([
             'tell application "Terminal"', '  activate', '  set hasWindow to (count of windows) > 0', 'end tell',
             'if hasWindow then', '  try',
+            '    tell application "System Events"',
+            '      repeat 40 times',
+            '        if frontmost of process "Terminal" then exit repeat',
+            '        delay 0.05',
+            '      end repeat',
+            '      if not (frontmost of process "Terminal") then error "Terminal is not in front"',
+            '    end tell',
+            '    tell application "Terminal" to set tabsBefore to count of tabs of front window',
             '    tell application "System Events" to tell process "Terminal" to keystroke "t" using command down',
-            '    delay 0.5',
+            '    set gotTab to false',
+            '    repeat 60 times',
+            '      delay 0.05',
+            '      tell application "Terminal" to set gotTab to (count of tabs of front window) > tabsBefore',
+            '      if gotTab then exit repeat',
+            '    end repeat',
+            '    if not gotTab then error "Terminal opened no new tab"',
             f'    tell application "Terminal" to do script {cmd} in selected tab of front window',
             '  on error', f'    tell application "Terminal" to do script {cmd}', '  end try',
             'else', f'  tell application "Terminal" to do script {cmd}', 'end if'])
