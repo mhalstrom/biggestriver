@@ -1794,3 +1794,83 @@ class AgentBlock(unittest.TestCase):
             self.assertEqual(text.count("## Work queue"), 1)
             self.assertIn("already", cli._append_block(old))
             self.assertEqual(new.read_text(), cli.AGENT_SNIPPET)
+
+
+class ReleaseReview(Base):
+    """With review on, a release waits on one review of everything it ships, not on a review per item."""
+
+    def setUp(self):
+        super().setUp()
+        core.target_add(self.c, "web", "push, then smoke test")
+        core.project_add(self.c, "site", target="web", path=self.dir.name)
+        for n in ("dev", "rev", "ops"):
+            core.register(self.c, n)
+        core.config_set(self.c, "review", "on")
+        core.config_set(self.c, "review_prompt", "run /code-review on the release diff")
+        core.target_own(self.c, "web", "ops")
+        self.a, self.b = self.add("site", "page"), self.add("site", "form")
+        for i in (self.a, self.b):
+            core.claim(self.c, i, "dev")
+            core.done(self.c, i, "commit", "dev", ship_it=True)
+        self.deploy = core.item_show(self.c, self.a)["unblocks"]
+        self.review = [i for i in self.deploy if core.item_show(self.c, i)["kind"] == "review"][0]
+        self.deploy = [i for i in self.deploy if i != self.review][0]
+
+    def test_one_review_covers_the_release_and_gates_the_deploy(self):
+        rv = core.item_show(self.c, self.review)
+        self.assertEqual(sorted(rv["waits_on"]), sorted([self.a, self.b]))
+        self.assertEqual(rv["context"], "run /code-review on the release diff")
+        self.assertIn(self.review, core.item_show(self.c, self.deploy)["waits_on"])
+        self.assertFalse(core.annotate(self.c)[self.deploy]["ready"])
+        # The target owner gets nothing to deploy yet; a session in the folder gets the review first.
+        b = core.go(self.c, self.dir.name, "rev")
+        self.assertEqual((b["role"], b["item"]["id"]), ("reviewer", self.review))
+        core.review_pass(self.c, self.review, None, "rev")
+        g = core.go(self.c, self.dir.name, "ops")
+        self.assertEqual((g["role"], g["item"]["id"]), ("deployer", self.deploy))
+
+    def test_fail_adds_fixes_the_review_waits_on(self):
+        core.claim(self.c, self.review, "rev")
+        res = core.review_fail(self.c, self.review, ["escape the form input"], "XSS in form", actor="rev")
+        fix = res["fixes"][0]
+        self.assertEqual(fix["project"], "site")
+        self.assertEqual(res["status"], "open")
+        self.assertIn(fix["id"], res["waits_on"])
+        self.assertIn("XSS in form", core.item_show(self.c, fix["id"])["context"])
+        self.assertFalse(core.annotate(self.c)[self.review]["ready"])
+        core.claim(self.c, fix["id"], "dev")
+        core.done(self.c, fix["id"], "fixed", "dev")
+        self.assertTrue(core.annotate(self.c)[self.review]["ready"])
+        with self.assertRaises(RiverError):
+            core.review_fail(self.c, self.review, [], actor="rev")
+
+    def test_review_cmd_must_pass(self):
+        self.c.execute("UPDATE items SET \"check\"='make test' WHERE id=?", (self.review,))
+        core.claim(self.c, self.review, "rev")
+
+        class R:
+            def __init__(self, code):
+                self.returncode, self.stdout, self.stderr = code, "1 failed", ""
+        with self.assertRaises(RiverError) as e:
+            core.review_pass(self.c, self.review, None, "rev", runner=lambda c, d: R(1))
+        self.assertIn("1 failed", str(e.exception))
+        res = core.review_pass(self.c, self.review, None, "rev", runner=lambda c, d: R(0))
+        self.assertEqual((res["status"], res["review_cmd"]), ("done", "make test"))
+
+    def test_after_a_passed_review_new_work_gets_a_new_review(self):
+        core.claim(self.c, self.review, "rev")
+        core.review_pass(self.c, self.review, "ok", "rev")
+        c = self.add("site", "late")
+        core.ship(self.c, c, "dev")
+        waits = core.item_show(self.c, self.deploy)["waits_on"]
+        reviews = [i for i in waits if core.item_show(self.c, i)["kind"] == "review"]
+        self.assertEqual(len(reviews), 2)
+        new = max(reviews)
+        self.assertEqual(core.item_show(self.c, new)["waits_on"], [c])
+
+    def test_review_off_changes_nothing(self):
+        core.config_set(self.c, "review", "off")
+        c = self.add("site", "x")
+        d = core.ship(self.c, c, "dev")
+        self.assertEqual(d["id"], self.deploy)
+        self.assertEqual([i for i in core.item_show(self.c, c)["unblocks"]], [self.deploy])

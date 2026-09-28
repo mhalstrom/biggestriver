@@ -191,6 +191,12 @@ blocker trees, the agent registry, capacity, settings, and the web page.
 - Needs you: one list of what waits on a person, most important first, with
   notifications by phone (ntfy), email (SMTP), macOS banner, and browser.
 - Planning and shipping: `river plan`, deploy targets, `river ship`.
+- Review before release (`river config set review on`): each release gets one
+  review item that waits on everything it ships, and the deploy waits on the
+  review. `review_prompt` holds your review process (for example
+  `/code-review` or `codex review`); `review_cmd`, when set, must exit 0.
+  The reviewer runs `river review pass <id>`, or `river review fail <id>
+  "<fix>" ...`, which adds fix items the review waits on.
 - Overviews: `river status`, and `river log` with a Done tab on the page.
 
 Planned: a `pipx` package, tests on GitHub Actions, and a default database

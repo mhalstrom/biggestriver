@@ -172,6 +172,10 @@ def _print_show(a):
         print(line)
     if a.get("kind") == "deploy" and a["waits_on_detail"]:
         print("  ships:", ", ".join(f"#{d['id']} {d['title']} ({d['status']})" for d in a["waits_on_detail"]))
+    elif a.get("kind") == "review" and a["waits_on_detail"]:
+        print("  reviews:", ", ".join(f"#{d['id']} {d['title']} ({d['status']})" for d in a["waits_on_detail"]))
+    if a.get("fixes"):
+        print("  sent back with fixes:", ", ".join(f"#{f['id']} {f['title']} ({f['project']})" for f in a["fixes"]))
     elif a["waits_on_detail"]:
         print("  waits on:", ", ".join(f"#{d['id']} {d['title']} ({d['status']}"
                                        + ("; feeds: you read its output" if d.get("kind") == "feeds" else "") + ")"
@@ -425,6 +429,14 @@ def build_parser():
     x.add_argument("--note", help="why an agent may close a person's item (required then; the user is told)")
     x = sub.add_parser("ship", help="ask for an item to be deployed: it joins its target's next deploy item")
     x.add_argument("id", type=int)
+    rv = sub.add_parser("review", help="release reviews: pass one, or send the release back with fixes")
+    rvs = rv.add_subparsers(dest="rcmd", required=True)
+    x = rvs.add_parser("pass", help="accept the release (runs review_cmd first when it is set)"); x.add_argument("id", type=int)
+    x.add_argument("--output", help="what you checked; default: review passed")
+    x = rvs.add_parser("fail", help="add fix items the review waits on, and release the review")
+    x.add_argument("id", type=int); x.add_argument("fixes", nargs="+", help="one title per fix item")
+    x.add_argument("--note", help="what the review found (goes into each fix item's context)")
+    x.add_argument("--project", help="project for the fix items (default: of the first item the review covers)")
     x = sub.add_parser("release", help="give a claimed item back"); x.add_argument("id", type=int); x.add_argument("--note")
     x = sub.add_parser("drop", help="close an item without doing it"); x.add_argument("id", type=int)
     x.add_argument("--note", help="why (required when an agent drops a person's item)")
@@ -652,7 +664,7 @@ def _hint(a, res, actor):
         return None
     if actor and c == "done":
         return f"next: river --as {actor} go   (now: keep going while go gives you items, unless auto_continue is off)"
-    if actor and c == "release":
+    if actor and (c == "release" or c == "review"):
         return f"next: river --as {actor} go"
     if actor and c == "goal" and a.gcmd == "done":
         return f"next: river --as {actor} go --role owner   (takes the highest-ranked goal nobody owns)"
@@ -852,6 +864,10 @@ def dispatch(conn, a, actor):
         return core.done(conn, a.id, a.output, actor, a.ship, a.note)
     if c == "ship":
         return core.ship(conn, a.id, actor)
+    if c == "review":
+        if a.rcmd == "pass":
+            return core.review_pass(conn, a.id, a.output, actor, os.getcwd())
+        return core.review_fail(conn, a.id, a.fixes, a.note, a.project, actor)
     if c == "release":
         return core.release(conn, a.id, a.note, actor)
     if c == "drop":
@@ -1083,7 +1099,7 @@ def render_go(b):
         if it["notes"]:
             out.append(f"  notes: {it['notes']}")
         out += _context_lines(it)
-        if it["waits_on_detail"]:
+        if it["waits_on_detail"] and b["role"] != "reviewer":
             out.append("  waited on (all done): " + ", ".join(f"#{d['id']} {d['title']}" for d in it["waits_on_detail"]))
         if it["unblocks_detail"]:
             out.append("  unblocks: " + ", ".join(f"#{d['id']} {d['title']}" for d in it["unblocks_detail"]))
@@ -1103,7 +1119,22 @@ def render_go(b):
             out += ["",
                     "Deploy as the target description says, run its checks, then put the release id or",
                     f"deployed commit in the output: {r} done {it['id']} --output \"<release id, checks passed>\""]
-        if b.get("has_history") and not b.get("new_name"):
+        if b["role"] == "reviewer":
+            out.append(f"  release {it.get('target')}: the deploy waits on this review. It covers:")
+            for d in it["waits_on_detail"]:
+                out.append(f"    #{d['id']} {d['title']} ({d['status']})   {r} show {d['id']}")
+            out += ["",
+                    "Review the release as a whole: read each item's output (commit ids) and the changes in its project folder.",
+                    ("Your review process: " + it["context"]) if it.get("context")
+                    else "No review_prompt is set: check correctness, tests, and security, and read the diffs."]
+            if it.get("check"):
+                out.append(f"Pass runs this check first, and it must exit 0: {it['check']}")
+            out += [f"  It is good:   {r} review pass {it['id']} --output \"<what you checked>\"",
+                    f"  Problems:     {r} review fail {it['id']} \"<fix 1>\" \"<fix 2>\" --note \"<what you found>\" [--project <name>]",
+                    "                (river adds the fixes as items the review waits on; the review comes back after them)",
+                    "",
+                    f"Then continue:  {r} go" + ("   at once, in the same turn." if b.get("auto_continue") else "")]
+        elif b.get("has_history") and not b.get("new_name"):
             out += [
                 "",
                 "Rules as before. Short form:",
@@ -1131,11 +1162,12 @@ def render_go(b):
                 + ("|".join(b.get("humans") or []) or "<person>") + " \"...\" --item " + str(it["id"]),
                 "",
             ]
-        out += [
-            f"When finished:  {r} done {it['id']} --output \"<what changed, commit id>\"",
-            f"Then continue:  {r} go" + ("   at once, in the same turn: do not stop to report between items."
-                                         if b.get("auto_continue") else ""),
-        ]
+        if b["role"] != "reviewer":
+            out += [
+                f"When finished:  {r} done {it['id']} --output \"<what changed, commit id>\"",
+                f"Then continue:  {r} go" + ("   at once, in the same turn: do not stop to report between items."
+                                             if b.get("auto_continue") else ""),
+            ]
         if b.get("auto_continue"):
             out.append("Keep taking items until go gives you none or you need the user; then report what you finished.")
     elif b["role"] == "owner":

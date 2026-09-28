@@ -63,6 +63,13 @@ DEFAULT_SETTINGS = {
     "launch_agents": "Claude Code=claude go",
     "launch_in": "tab",
     "setup_done": "off",
+    # Review before release: with review on, each deploy item waits on a review item that waits on
+    # everything the release ships. review_prompt tells the reviewer what to do (your review process);
+    # review_cmd, when set, must exit 0 before river review pass accepts the review.
+    # Set them globally or on the deploy project (deploy-<target>).
+    "review": "off",
+    "review_prompt": "",
+    "review_cmd": "",
 }
 
 SCHEMA = """
@@ -554,6 +561,8 @@ def config_set(conn, key, value, project=None, item=None, agent=None, actor=None
             raise RiverError(f"{key} takes a whole number")
     elif key == "launch_agents":
         parse_launch_agents(value)
+    elif key == "review" and value not in ("on", "off"):
+        raise RiverError("review is on or off")
     elif key == "setup_done" and value not in ("on", "off"):
         raise RiverError("setup_done is on or off")
     elif key == "launch_in" and value not in ("tab", "window"):
@@ -2596,6 +2605,10 @@ def ship(conn, item_id, actor=None):
                  it["priority"], top + 1, tg["description"], tg["name"], iso(now())))
             dep = _item(conn, cur.lastrowid)
             _event(conn, dep["id"], actor, f"deploy item for target {tg['name']} started")
+        rv = _release_review(conn, dep, tg, actor)
+        if rv is not None and not conn.execute("SELECT 1 FROM deps WHERE item_id=? AND blocked_by=?",
+                                               (rv["id"], it["id"])).fetchone():
+            _dep_add(conn, rv["id"], it["id"], actor)
         if conn.execute("SELECT 1 FROM deps WHERE item_id=? AND blocked_by=?", (dep["id"], it["id"])).fetchone():
             return item_show(conn, dep["id"])
         _dep_add(conn, dep["id"], it["id"], actor)
@@ -2606,6 +2619,106 @@ def ship(conn, item_id, actor=None):
             _send(conn, "notice", actor or "river", f"ship request: #{it['id']} {it['title']} joins deploy #{dep['id']} "
                   f"for {tg['name']}", to=tg["owner"], item_id=dep["id"])
     return item_show(conn, dep["id"])
+
+
+def _release_review(conn, dep, tg, actor):
+    """With review on, the open review item the deploy item waits on; started when there is none.
+
+    A new review also waits on the release's items that are still open, so it covers what a
+    finished review did not see."""
+    if setting(conn, "review", item_id=dep["id"]) != "on":
+        return None
+    rv = conn.execute("SELECT i.* FROM items i JOIN deps d ON d.blocked_by=i.id WHERE d.item_id=? AND i.kind='review' "
+                      f"AND i.status IN {OPEN_STATES} ORDER BY i.id LIMIT 1", (dep["id"],)).fetchone()
+    if rv is not None:
+        return rv
+    top = conn.execute("SELECT COALESCE(MAX(rank),0) m FROM items WHERE project_id=?", (dep["project_id"],)).fetchone()["m"]
+    cur = conn.execute(
+        "INSERT INTO items(project_id,title,notes,priority,rank,doer,context,\"check\",kind,target,created_at) "
+        "VALUES (?,?,?,?,?,'any',?,?,'review',?,?)",
+        (dep["project_id"], f"Review release {tg['name']}",
+         "Review everything this release ships before it deploys. Pass: river review pass <id>; "
+         "problems: river review fail <id> \"<fix>\" ... (fix items the review waits on).",
+         dep["priority"], top + 0.5, setting(conn, "review_prompt", item_id=dep["id"]),
+         setting(conn, "review_cmd", item_id=dep["id"]), tg["name"], iso(now())))
+    rv = _item(conn, cur.lastrowid)
+    _event(conn, rv["id"], actor, f"review for deploy #{dep['id']} ({tg['name']}) started")
+    for r in conn.execute(f"SELECT i.id FROM items i JOIN deps d ON d.blocked_by=i.id WHERE d.item_id=? "
+                          f"AND i.kind<>'review' AND i.status IN {OPEN_STATES}", (dep["id"],)).fetchall():
+        _dep_add(conn, rv["id"], r["id"], actor)
+    _dep_add(conn, dep["id"], rv["id"], actor)
+    return rv
+
+
+def _review_item(conn, item_id, actor):
+    it = _item(conn, item_id)
+    if it["kind"] != "review":
+        raise RiverError(f"#{item_id} is not a review item; reviews come with river ship when the setting review is on")
+    if it["status"] != "in_progress" or (actor and it["assignee"] != actor):
+        raise RiverError(f"#{item_id} is {it['status']}" + (f" (held by {it['assignee']})" if it["assignee"] else "")
+                         + f"; take it first: river claim {item_id}")
+    return it
+
+
+def review_pass(conn, item_id, output=None, actor=None, cwd=None, runner=None):
+    """Accept a release review. When the item has a review command, it must exit 0 first (in cwd)."""
+    it = _review_item(conn, item_id, actor)
+    cmd = (it["check"] or "").strip()
+    ran = None
+    if cmd:
+        import subprocess
+        run = runner or (lambda c, d: subprocess.run(c, shell=True, cwd=d, capture_output=True, text=True, timeout=3600))
+        r = run(cmd, cwd)
+        if r.returncode != 0:
+            tail = "\n".join(((r.stdout or "") + (r.stderr or "")).strip().splitlines()[-15:])
+            raise RiverError(f"review command failed (exit {r.returncode}): {cmd}\n{tail}\n"
+                             f"Fix it, or send the release back: river review fail {item_id} \"<fix>\"")
+        ran = cmd
+    res = done(conn, item_id, output or ("review passed" + (f"; {ran} exit 0" if ran else "")), actor)
+    res["review_cmd"] = ran
+    return res
+
+
+def review_fail(conn, item_id, fixes, note=None, project=None, actor=None):
+    """Send a release back: add fix items that the review waits on, and release the review.
+
+    The fixes go to the named project, else to the project of the first item the review covers.
+    When they are done, the review is ready again for any reviewer."""
+    it = _review_item(conn, item_id, actor)
+    fixes = [f.strip() for f in fixes if f and f.strip()]
+    if not fixes:
+        raise RiverError(f"name at least one fix: river review fail {item_id} \"<what to fix>\" --note \"<why>\"")
+    if project is None:
+        r = conn.execute("SELECT p.name FROM deps d JOIN items i ON i.id=d.blocked_by JOIN projects p ON p.id=i.project_id "
+                         "WHERE d.item_id=? AND i.kind<>'review' ORDER BY i.id LIMIT 1", (it["id"],)).fetchone()
+        if r is None:
+            raise RiverError("the review covers no items; name the project for the fixes: --project <name>")
+        project = r["name"]
+    added = [item_add(conn, project, t, priority=it["priority"], doer="ai", actor=actor,
+                      context=f"Found in the review of release {it['target']} (#{it['id']})" + (f": {note}" if note else ""))
+             for t in fixes]
+    dep_add(conn, it["id"], [a["id"] for a in added], actor, mode="release")
+    res = item_show(conn, it["id"])
+    res["fixes"] = [{"id": a["id"], "title": a["title"], "project": project} for a in added]
+    return res
+
+
+def _review_claim(conn, actor, names, any_project=False, brief=None):
+    """Claim a ready release review that covers items of these projects (or any, with any_project)."""
+    ann = annotate(conn)
+    ready = []
+    for a in ann.values():
+        if a["kind"] != "review" or not a["ready"] or a["reserved_for"] not in (None, actor):
+            continue
+        if any_project or any(ann[b]["project"] in names for b in a["waits_on"]):
+            ready.append(a)
+    for a in sorted(ready, key=lambda a: a["sort_key"]):
+        try:
+            return claim(conn, a["id"], actor)
+        except RiverError as e:
+            if brief is not None:
+                brief["claim_refused"] = str(e)
+    return None
 
 
 def drop(conn, item_id, actor=None, note=None):
@@ -2729,6 +2842,8 @@ def item_show(conn, item_id, ann=None):
                               "assignee": ann[d]["assignee"]} for d in a["conflicts"]]
     a["events"] = [dict(r) for r in conn.execute(
         "SELECT at, actor, change FROM events WHERE item_id=? ORDER BY id DESC LIMIT 50", (iid,))]
+    if a["kind"] == "review":
+        a["reviews"] = [d for d in a["waits_on_detail"]]
     if a["kind"] == "deploy":
         r = conn.execute("SELECT owner FROM targets WHERE name=?", (a["target"],)).fetchone()
         a["target_owner"] = r["owner"] if r else None
@@ -3184,7 +3299,7 @@ def launch_target(conn, project=None, agent=None):
     important ready item an agent can take (or of the project named), and the command of the chosen
     launch_agents entry (the first when none is named). Refuses when nothing is ready there."""
     ann = annotate(conn)
-    pool = sorted((a for a in ann.values() if a["ready"] and a["doer"] != "human" and a["kind"] != "deploy"
+    pool = sorted((a for a in ann.values() if a["ready"] and a["doer"] != "human" and a["kind"] not in ("deploy", "review")
                    and not a["reserved_for"] and not a["project_archived"]
                    and (project is None or a["project"] == project)), key=lambda a: a["sort_key"])
     if not pool:
@@ -3239,7 +3354,7 @@ def state(conn):
 
 # ---------------------------------------------------------------- go
 
-ROLES = ("deployer", "owner", "worker", "unblocker", "planner", "idle")
+ROLES = ("deployer", "reviewer", "owner", "worker", "unblocker", "planner", "idle")
 
 
 def _owned_goal(conn, actor, names):
@@ -3347,7 +3462,7 @@ def go(conn, cwd, actor=None, project=None, role=None, session=None):
                     _set_role_note(conn, actor, "worker", item["id"])
                     return brief
         item = item_show(conn, held[0]["id"])
-        r = "deployer" if item["kind"] == "deploy" else "worker"
+        r = {"deploy": "deployer", "review": "reviewer"}.get(item["kind"], "worker")
         if r == "deployer":
             brief.update(_deploy_brief(conn, item))
         brief.update(role=r, resumed=True, item=item,
@@ -3389,6 +3504,19 @@ def go(conn, cwd, actor=None, project=None, role=None, session=None):
                          why=brief.get("claim_refused") or "no deploy item is ready for the targets you own")
             _set_role_note(conn, actor, "idle", None)
             return brief
+    if role in (None, "reviewer"):
+        # A release waits on its review: reviews come before new work, so finished work goes out.
+        got = _review_claim(conn, actor, names, any_project=(role == "reviewer"), brief=brief)
+        if got:
+            brief.update(role="reviewer", item=got,
+                         why=f"release {got['target']} waits on this review, and everything it ships is done")
+            _set_role_note(conn, actor, "reviewer", got["id"])
+            return brief
+        if role == "reviewer":
+            brief.update(role="idle", item=None, held_by_others=[],
+                         why=brief.get("claim_refused") or "no release review is ready")
+            _set_role_note(conn, actor, "idle", None)
+            return brief
     if role in (None, "owner", "worker"):
         g = _owned_goal(conn, actor, names)
         if g is None and role in (None, "owner"):
@@ -3425,7 +3553,7 @@ def go(conn, cwd, actor=None, project=None, role=None, session=None):
             gb = brief["goal"] = _goal_brief(conn, g["name"], actor)
             ann = annotate(conn)
             tagged = sorted((a for a in ann.values() if g["name"] in a["goals"] and a["ready"] and a["doer"] != "human"
-                             and a["kind"] != "deploy" and a["reserved_for"] in (None, actor)), key=lambda a: a["sort_key"])
+                             and a["kind"] not in ("deploy", "review") and a["reserved_for"] in (None, actor)), key=lambda a: a["sort_key"])
             for a in tagged:  # (1) the next ready item of the goal
                 try:
                     item = claim(conn, a["id"], actor)

@@ -57,6 +57,13 @@ A person registers with `--human`.
    deploy item, which only the target owner takes. The owner's `river go`
    gives it the ready deploy item first (role DEPLOYER), with what it ships;
    `river go --role deployer` also takes a free target of the folder's projects.
+   With the setting `review` on, the deploy item first waits on one review
+   of the whole release. `river go` gives a ready review before new work
+   (role REVIEWER; `--role reviewer` takes any). Follow the review process in
+   its context, then `river review pass <id> --output "<what you checked>"`
+   (runs `review_cmd` first when set), or
+   `river review fail <id> "<fix>" ... --note "<what you found>"`: river adds
+   the fixes as items the review waits on, and the review comes back after them.
 
 ## Owning a goal
 
