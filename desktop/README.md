@@ -38,8 +38,10 @@ and sha256) puts the Python for each system and chip type in
 version tag (`git tag v0.1.0 && git push origin v0.1.0`) runs
 `.github/workflows/desktop-release.yml`, which builds the `.dmg` files on macOS
 and the installer on Windows, checks that each app starts river from its own
-copy, and attaches all three to the GitHub Release for that tag. The app is not
-signed or notarized yet. On a Mac, the first time people open it once, then
-click Open Anyway in System Settings > Privacy & Security (macOS 15 and later),
-or right-click it and choose Open (macOS 14 and older). On Windows, SmartScreen
-warns: click More info, then Run anyway. Windows on Arm runs the x64 app.
+copy, and attaches all three to the GitHub Release for that tag, with
+`release-notes.md` as its notes. The app is not signed with a Developer ID or
+notarized yet, so macOS says it "could not verify" the app, and Windows
+SmartScreen warns. `release-notes.md` tells people how to open it: Open Anyway
+in System Settings > Privacy & Security on a Mac (or the `xattr` command, which
+also stops the slow check before each start), More info and Run anyway on
+Windows. Windows on Arm runs the x64 app.

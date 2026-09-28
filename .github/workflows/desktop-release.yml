@@ -138,6 +138,10 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: desktop/release-notes.md
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -145,9 +149,10 @@ jobs:
       - name: Publish the GitHub Release
         run: |
           ls -l dist
-          notes="Biggest River desktop app ${TAG}. Mac: download the .dmg for your chip, arm64 for Apple silicon (M1 and later), x64 for Intel, and drag the app to Applications. Windows: download the -setup.exe (x64; Windows on Arm runs it too). The app is not signed yet. On a Mac, the first time: open it once, then go to System Settings > Privacy & Security and click Open Anyway (on macOS 14 and older: right-click the app, choose Open). On Windows, SmartScreen warns: click More info, then Run anyway. The app carries its own Python: nothing else to install."
+          # The notes: desktop/release-notes.md, with {TAG} and {VERSION} filled in.
+          sed -e "s/{TAG}/${TAG}/g" -e "s/{VERSION}/${TAG#v}/g" desktop/release-notes.md > "$RUNNER_TEMP/notes.md"
           if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/* --clobber -R "$GITHUB_REPOSITORY"
           else
-            gh release create "$TAG" dist/* --title "Biggest River ${TAG}" --notes "$notes" --target "$GITHUB_SHA" -R "$GITHUB_REPOSITORY"
+            gh release create "$TAG" dist/* --title "Biggest River ${TAG}" --notes-file "$RUNNER_TEMP/notes.md" --target "$GITHUB_SHA" -R "$GITHUB_REPOSITORY"
           fi
