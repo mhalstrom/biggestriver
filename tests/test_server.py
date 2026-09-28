@@ -214,3 +214,30 @@ class SetupGuide(unittest.TestCase):
         self.assertTrue(server.setup_status(self.c)["done"])
         with self.assertRaises(RiverError):
             core.config_set(self.c, "setup_done", "maybe")
+
+
+class StartPushesToWaiting(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        os.environ["RIVER_DB"] = os.path.join(self.dir.name, "t.db")
+        self.c = core.connect()
+        core.project_add(self.c, "shop", path=self.dir.name)
+        core.project_add(self.c, "other", path=self.dir.name + "/x")
+        core.register(self.c, "w")
+
+    def tearDown(self):
+        self.c.close()
+        os.environ.pop("RIVER_DB", None)
+        self.dir.cleanup()
+
+    def test_waiting_session_gets_the_item_and_no_terminal_opens(self):
+        core.wait(self.c, self.dir.name, "w", project="other", step="0s", sleep=lambda s: None)
+        x = core.item_add(self.c, "shop", "agent step")["id"]
+        sent = []
+        t = server.launch_agent(self.c, runner=sent.append)  # w waits in another project: a new session
+        self.assertNotIn("pushed_to", t)
+        self.assertEqual(len(sent), 1)
+        core.wait(self.c, self.dir.name, "w", project="shop", step="0s", sleep=lambda s: None)
+        t = server.launch_agent(self.c, runner=sent.append)
+        self.assertEqual((t["pushed_to"], len(sent)), ("w", 1))
+        self.assertEqual(core.item_show(self.c, x)["reserved_for"], "w")

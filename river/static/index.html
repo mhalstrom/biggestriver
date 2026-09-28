@@ -526,13 +526,29 @@ function agentShown(a) {
   if ((S.goals || []).some(g => g.owner === a.name && g.status === "open")) return true;
   return S.items.some(i => i.status === "open" && i.reserved_until && i.reserved_for === a.name);
 }
+// A waiting session (river wait) takes a pushed item within seconds: offer the ready items of its projects.
+function giveWork(a) {
+  const where = (a.waiting_in || "").split(",").filter(Boolean);
+  const ready = S.items.filter(i => i.ready && i.doer !== "human" && i.kind === "work" && !i.reserved_for
+    && (!where.length || where.includes(i.project)));
+  const since = a.waiting_since ? ` since ${ago(a.waiting_since)}` : "";
+  if (!ready.length) return `<div class="st"><span class="chip c-ready">waiting${since}</span> no ready item in ${esc(where.join(", ") || "its projects")}</div>`;
+  return `<div class="st" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="chip c-ready">waiting${since}</span>
+    <select data-give-item="${esc(a.name)}" style="max-width:220px">${ready.map(i => `<option value="${i.id}"${giveChoice[a.name] == i.id ? " selected" : ""}>#${i.id} ${esc(clip(i.title, 50))}</option>`).join("")}</select>
+    <button class="btn" data-give="${esc(a.name)}">Give work</button></div>`;
+}
+
+const giveChoice = {};
 function renderAgents() {
+  // The panel redraws every few seconds: leave it alone while someone picks from a Give work menu.
+  if (document.activeElement && document.activeElement.matches("#agents select")) return;
   const hidden = S.agents.filter(a => !agentShown(a)), showIdle = $("#showIdle").checked;
   $("#showIdleWrap").classList.toggle("hidden", !hidden.length);
   $("#showIdleText").textContent = `show ${hidden.length} stopped`;
   $("#agents").innerHTML = S.agents.filter(a => showIdle || agentShown(a)).map(a => `<div class="agent" data-agent="${esc(a.name)}">
       <div><span class="dot ${a.state}"></span><span class="nm">${esc(a.name)}</span> <span class="chip ${a.kind === "human" ? "c-human" : "c-ai"}">${a.kind === "human" ? "human" : "agent"}</span>${a.session_url ? ` <a class="link" style="font-size:12px" href="${esc(a.session_url)}" target="_blank" rel="noopener">open session</a>` : ""}${a.session ? ` <span class="muted" style="font-size:12px" title="Claude Code session">session ${esc(a.session)}${a.session_ref ? " [" + esc(a.session_ref) + "]" : ""}</span>` : ""}</div>
       <div class="st">${a.state}, seen ${ago(a.last_seen)}${a.note ? " · " + esc(a.note) : ""}</div>
+      ${a.role === "waiting" && !a.holds.length ? giveWork(a) : ""}
       ${(S.goals || []).filter(g => g.owner === a.name && g.status === "open").map(g => `<div class="st">owns goal <span class="link" data-goal="${esc(g.name)}">${esc(g.name)}</span>${g.owner_expires_at ? " · " + left(g.owner_expires_at) + " left" : ""}</div>`).join("")}
       ${a.holds.map(h => `<div class="st">holds <span class="link" data-open="${h.id}">#${h.id} ${esc(h.title)}</span>${h.lease_expires_at ? " · " + left(h.lease_expires_at) + " left" : ""}</div>`).join("") || '<div class="st">holds nothing</div>'}
       ${S.items.filter(i => i.status === "open" && i.reserved_until && i.reserved_for === a.name).map(i => `<div class="st">pushed <span class="link" data-open="${i.id}">#${i.id} ${esc(i.title)}</span> · ${left(i.reserved_until)} left · <span class="link" data-unpush="${i.id}">cancel</span></div>`).join("")}
@@ -1012,10 +1028,17 @@ document.addEventListener("click", async (e) => {
   if (t.dataset.takeoversOkall) { for (const x of S.takeovers || []) await act("takeover_seen", { id: x.id }).catch(() => {}); return; }
   if (t.closest("[data-takeovers-toggle]") && !t.closest("button")) { takeoversOpen = !takeoversOpen; return renderTakeovers(); }
   const wp = t.closest("[data-wp]"); if (wp) { const o = workOpen(), n = wp.dataset.wp; o.has(n) ? o.delete(n) : o.add(n); store("river.work.open", JSON.stringify([...o])); return renderWork(); }
+  const gw = t.closest("[data-give]"); if (gw) {
+    const to = gw.dataset.give, sel = document.querySelector(`[data-give-item="${CSS.escape(to)}"]`);
+    if (sel && sel.value) await act("push", { id: +sel.value, to, note: "from the page: you were waiting for work" })
+      .then(() => toast(`Gave #${sel.value} to ${to}`)).catch(() => {});
+    return; }
   const la = t.closest("[data-launch]"); if (la) {
     if (la.dataset.busy) return; la.dataset.busy = "1"; setTimeout(() => delete la.dataset.busy, 4000);
     const agent = $("#launchAgent") ? $("#launchAgent").value : undefined;
-    try { const r = await act("launch_agent", { agent }); toast(`Started ${r.agent} in ${r.project}, for #${r.item.id} ${clip(r.item.title, 60)}`); } catch (e) { /* toast shown */ }
+    try { const r = await act("launch_agent", { agent });
+      toast(r.pushed_to ? `Gave #${r.item.id} ${clip(r.item.title, 60)} to ${r.pushed_to}, which was waiting for work`
+                        : `Started ${r.agent} in ${r.project}, for #${r.item.id} ${clip(r.item.title, 60)}`); } catch (e) { /* toast shown */ }
     return; }
   const sb = t.closest("[data-strip]"); if (sb) { const go = sb.dataset.strip;
     if (go === "blocked") { await setTab("projects"); return $("#blockedPanel").scrollIntoView({ block: "start" }); }
@@ -1217,6 +1240,7 @@ $("#setupSteps").addEventListener("click", async (e) => {
     await openSetup();
   } catch (err) { /* act() showed the error */ }
 });
+$("#agents").addEventListener("change", (e) => { const s = e.target.closest("[data-give-item]"); if (s) giveChoice[s.dataset.giveItem] = s.value; });
 $("#setupClose").onclick = closeSetup;
 $("#setupLater").onclick = closeSetup;
 $("#setupDone").onclick = async () => { await act("config_set", { key: "setup_done", value: "on" }).catch(() => {}); closeSetup(); };

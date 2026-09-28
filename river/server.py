@@ -37,6 +37,12 @@ def launch_agent(conn, project=None, runner=None, agent=None):
     agent session. macOS only."""
     import shlex
     import subprocess
+    # A session that waits for work in that project (river wait) gets the item: no new session needed.
+    top = core.launch_target(conn, project, agent)
+    waiting = core.waiting_agent_for(conn, top["project"])
+    if waiting:
+        core.push(conn, top["item"]["id"], waiting, "from the Start button: you were waiting for work")
+        return {**top, "pushed_to": waiting}
     if sys.platform != "darwin" and runner is None:
         raise RiverError("starting an agent from the page works on macOS only (it opens Terminal); "
                          "start one yourself: cd <project folder> && claude go")

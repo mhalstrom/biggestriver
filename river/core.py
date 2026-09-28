@@ -481,6 +481,8 @@ def _migrate(conn):
         conn.execute("ALTER TABLE agents ADD COLUMN session_ref TEXT")
     if "waiting_since" not in acols:
         conn.execute("ALTER TABLE agents ADD COLUMN waiting_since TEXT")
+    if "waiting_in" not in acols:
+        conn.execute("ALTER TABLE agents ADD COLUMN waiting_in TEXT")
     if "session_url" not in acols:
         conn.execute("ALTER TABLE agents ADD COLUMN session_url TEXT")
     if "auto" not in {r["name"] for r in conn.execute("PRAGMA table_info(deps)")}:
@@ -3557,6 +3559,16 @@ def parse_launch_agents(value):
     return out
 
 
+def waiting_agent_for(conn, project):
+    """An active session that waits for work in this project (river wait), longest waiting first."""
+    for r in conn.execute("SELECT name, waiting_in FROM agents WHERE role='waiting' AND kind='ai' "
+                          "ORDER BY waiting_since").fetchall():
+        a = agent_status(conn, r["name"])
+        if a["state"] == "active" and not a["holds"] and project in (r["waiting_in"] or "").split(","):
+            return r["name"]
+    return None
+
+
 def launch_target(conn, project=None, agent=None):
     """Where and how a new agent session should start: the folder of the project that holds the most
     important ready item an agent can take (or of the project named), and the command of the chosen
@@ -3930,8 +3942,9 @@ def _set_role_note(conn, actor, role, item_id):
     note = f"role: {role}" + (f" on #{item_id}" if item_id else "")
     with tx(conn):
         # A role with work ends a wait; idle keeps the wait clock, so wait_max counts from the first wait.
-        conn.execute("UPDATE agents SET note=?, role=?, waiting_since=CASE WHEN ? THEN waiting_since END "
-                     "WHERE name=?", (note, role, role in ("idle", "waiting"), actor))
+        keep = role in ("idle", "waiting")
+        conn.execute("UPDATE agents SET note=?, role=?, waiting_since=CASE WHEN ? THEN waiting_since END, "
+                     "waiting_in=CASE WHEN ? THEN waiting_in END WHERE name=?", (note, role, keep, keep, actor))
 
 
 def _work_for(conn, actor, names):
@@ -3969,8 +3982,8 @@ def wait(conn, cwd, actor, project=None, step=None, sleep=None, poll=3.0):
         if held:
             raise RiverError(f"{actor} holds {', '.join('#' + str(r['id']) for r in held)}; finish or release it "
                              f"before you wait: river --as {actor} go")
-        conn.execute("UPDATE agents SET waiting_since=COALESCE(waiting_since, ?), role='waiting', "
-                     "note='waiting for work (river wait)' WHERE name=?", (iso(now()), actor))
+        conn.execute("UPDATE agents SET waiting_since=COALESCE(waiting_since, ?), role='waiting', waiting_in=?, "
+                     "note='waiting for work (river wait)' WHERE name=?", (iso(now()), ",".join(names), actor))
     since = parse_iso(_agent(conn, actor)["waiting_since"])
     limit = parse_duration(setting(conn, "wait_max", agent=actor))
     step = parse_duration(step or setting(conn, "wait_step", agent=actor))
