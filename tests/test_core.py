@@ -1012,10 +1012,13 @@ class GoalOwners(Base):
         core.goal_add(self.c, "shop", "g1", actor="t")
         core.goal_own(self.c, "g1", "ag")
         x = core.item_add(self.c, "shop", "task", actor="bo", goals=["g1"])["id"]
-        core.claim(self.c, x, "bo")
-        core.done(self.c, x, "shipped", "bo")
+        with self.assertRaisesRegex(RiverError, "reserved for ag, who owns goal g1"):
+            core.claim(self.c, x, "bo")  # the owner's agent items are reserved for it
+        core.register(self.c, "mk", human=True)  # a person is not bound by the reservation
+        core.claim(self.c, x, "mk")
+        core.done(self.c, x, "shipped", "mk")
         notes = [m["body"] for m in core.inbox(self.c, "ag") if m["kind"] == "notice"]
-        self.assertEqual([n.split(" #")[0] for n in notes], ["bo added", "bo claimed", "bo finished"])
+        self.assertEqual([n.split(" #")[0] for n in notes], ["bo added", "mk claimed", "mk finished"])
         core.goal_give(self.c, "g1", "cy", "ag")
         self.assertEqual(core.goal_show(self.c, "g1")["owner"], "cy")
 
@@ -1025,6 +1028,56 @@ class GoalOwners(Base):
         self.c.execute("UPDATE goals SET owner_expires_at=?", (core.iso(core.now() - timedelta(seconds=1)),))
         core.activity(self.c, "bo")
         self.assertIsNone(core.goal_show(self.c, "g1")["owner"])
+
+
+class GoalClaim(Base):
+    """A goal owner's claim on the goal's items (#285)."""
+
+    def setUp(self):
+        super().setUp()
+        core.project_add(self.c, "shop", path=self.dir.name)
+        for n in ("ag", "bo"):
+            core.register(self.c, n)
+        core.goal_add(self.c, "shop", "g1", actor="t")
+        self.x = core.item_add(self.c, "shop", "agent task", goals=["g1"])["id"]
+        self.h = core.item_add(self.c, "shop", "person step", doer="human", goals=["g1"])["id"]
+        self.loose = core.item_add(self.c, "shop", "other work", priority=3)["id"]
+
+    def left(self, when):
+        return core.parse_iso(when) - core.now()
+
+    def test_owner_gets_the_goal_items_others_do_not(self):
+        core.goal_own(self.c, "g1", "ag")
+        ann = core.annotate(self.c)
+        self.assertEqual((ann[self.x]["reserved_for"], ann[self.x]["goal_reserved"]), ("ag", "g1"))
+        self.assertIsNone(ann[self.h]["reserved_for"])  # a person's item stays on their list
+        self.assertEqual([a["id"] for a in core.next_item(self.c, actor="bo", limit=5)], [self.loose])
+        with self.assertRaisesRegex(RiverError, "reserved for ag, who owns goal g1"):
+            core.claim(self.c, self.x, "bo")
+        self.assertEqual(core.go(self.c, self.dir.name, "bo")["item"]["id"], self.loose)
+        core.release(self.c, self.loose, actor="bo")
+        b = core.go(self.c, self.dir.name, "ag")
+        self.assertEqual(b["item"]["id"], self.x)
+        lease = self.left(core._item(self.c, self.x)["lease_expires_at"])
+        self.assertTrue(timedelta(hours=3, minutes=59) < lease <= timedelta(hours=4))  # goal_lease, not lease_ttl
+
+    def test_lease_length_renewal_release_and_expiry(self):
+        core.goal_own(self.c, "g1", "ag", lease="6h")
+        self.assertTrue(self.left(core.goal_show(self.c, "g1")["owner_expires_at"]) > timedelta(hours=5, minutes=59))
+        self.c.execute("UPDATE goals SET owner_expires_at=?", (core.iso(core.now() + timedelta(minutes=5)),))
+        core.activity(self.c, "ag")  # any command of the owner renews the claim for its lease
+        self.assertTrue(self.left(core.goal_show(self.c, "g1")["owner_expires_at"]) > timedelta(hours=5, minutes=59))
+        core.goal_release(self.c, "g1", "ag")
+        self.assertIsNone(core.annotate(self.c)[self.x]["reserved_for"])
+        core.goal_own(self.c, "g1", "ag")  # a new ownership starts from goal_lease again
+        self.assertTrue(self.left(core.goal_show(self.c, "g1")["owner_expires_at"]) <= timedelta(hours=4))
+        self.c.execute("UPDATE goals SET owner_expires_at=?", (core.iso(core.now() - timedelta(seconds=1)),))
+        self.assertIsNone(core.annotate(self.c)[self.x]["reserved_for"])  # expired: free before any sweep
+        core.activity(self.c, "bo")
+        self.assertIn("open to every agent", [m for m in core.inbox(self.c, "ag") if m["kind"] == "notice"][-1]["body"])
+        core.claim(self.c, self.x, "bo")
+        with self.assertRaises(RiverError):
+            core.goal_own(self.c, "g1", "ag", lease="soon")
 
 
 class DbLocation(unittest.TestCase):

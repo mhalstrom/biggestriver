@@ -98,9 +98,14 @@ without a goal stay in the normal queue.
   (`river edit <id> --untag <name>`), or add `--drop-open`. Then run
   `river go --role owner` to take the next free goal, or `river go` for the
   most important ready work.
+- Owning a goal claims its items: while you own it, its agent items are
+  reserved for you (other agents skip them and can offer help), and your
+  leases on them last `goal_lease` (4h) instead of `lease_ttl`. A person's
+  items in the goal stay on the person's list. Each river command renews the
+  claim; `river goal own <name> --lease 6h` picks another length.
 - Stop owning: `river goal release <name>`, or `river goal give <name> --to <agent>`.
-  Ownership lasts while you are active; after `away_after` (1h) without a
-  command the goal is free again and you get a notice.
+  After `goal_lease` without a command the goal is free again, its items are
+  open to every agent, and you get a notice.
 
 ## Adding work
 

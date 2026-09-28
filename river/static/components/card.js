@@ -1,5 +1,5 @@
 // Cards: goal cards, project cards, and the .ny cards of targets, blocked items, takeovers and the inbox.
-import { esc } from "../lib.js";
+import { esc, left } from "../lib.js";
 import { chip, ownerChip } from "./chip.js";
 import { bar, pct } from "./bar.js";
 
@@ -24,7 +24,7 @@ export function goalCard(g, { selected, me }) {
     open ? `<span class="link" data-goal-act="done" data-g="${esc(g.name)}">complete</span>` : `<span class="link" data-goal-act="reopen" data-g="${esc(g.name)}">reopen</span>`,
   ].filter(Boolean).join("");
   return `<div class="goal${selected ? " on" : ""}${open ? "" : " complete"}" data-goal="${esc(g.name)}" title="${esc(tip)}">
-    <div class="gh"><b>${esc(g.name)}</b>${open ? ownerChip(g.owner) : chip("c-done", "complete", null, ' style="text-decoration:none"')}</div>
+    <div class="gh"><b>${esc(g.name)}</b>${open ? ownerChip(g.owner) : chip("c-done", "complete", null, ' style="text-decoration:none"')}${open && g.owner && g.owner_expires_at ? `<span class="muted" style="font-size:12px" title="Its agent items are reserved for the owner until then; each river command of the owner renews it">${left(g.owner_expires_at)} left</span>` : ""}</div>
     ${bar(done)}
     <div class="go">${g.items_done.length}/${total} done${g.items_open.length ? " · " + g.items_open.length + " open" : ""} · ${esc(open ? (g.outcome || "no outcome") : (g.result || g.outcome))}</div>
     <div class="ga">${acts}</div></div>`;

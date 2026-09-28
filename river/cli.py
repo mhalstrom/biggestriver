@@ -368,7 +368,10 @@ def build_parser():
     x = gls.add_parser("edit"); x.add_argument("name"); x.add_argument("--outcome"); x.add_argument("--done-when", dest="done_when")
     x.add_argument("--rename")
     for verb in ("own", "take"):
-        x = gls.add_parser(verb, help="own a goal: you create and take the items that reach it"); x.add_argument("name")
+        x = gls.add_parser(verb, help="own a goal: you create and take the items that reach it; its agent items "
+                           "are reserved for you"); x.add_argument("name")
+        x.add_argument("--lease", help="how long the claim lasts without a river command, and your leases on its "
+                       "items (default: the goal_lease setting, 4h)")
     x = gls.add_parser("give", help="hand a goal you own to another agent"); x.add_argument("name")
     x.add_argument("--to", required=True)
     x = gls.add_parser("release", help="stop owning a goal"); x.add_argument("name")
@@ -948,7 +951,7 @@ def dispatch(conn, a, actor):
         if g == "edit":
             return core.goal_edit(conn, a.name, a.outcome, a.done_when, a.rename, actor)
         if g in ("own", "take"):
-            return core.goal_own(conn, a.name, actor)
+            return core.goal_own(conn, a.name, actor, a.lease)
         if g == "give":
             return core.goal_give(conn, a.name, a.to, actor)
         if g == "release":
@@ -1312,6 +1315,8 @@ def render_go(b):
                    + ("   (you took it now: nobody owned it)" if b.get("took_goal") else ""))
         if gb["done_when"]:
             out.append(f"  done when: {gb['done_when']}")
+        out.append(f"  Its agent items are reserved for you while you own it; each river command renews your claim for "
+                   f"{gb['lease']} (goal_lease), and your leases on its items last that long too.")
         def st(o):
             return ("ready" if o["ready"] else o["status"].replace("_", " ")
                     + (f" by {o['assignee']}" if o["assignee"] else "")) + ("; human" if o["doer"] == "human" else "")

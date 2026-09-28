@@ -34,6 +34,10 @@ MESSAGE_STATES = ("open", "accepted", "declined", "answered", "read")
 DEFAULT_SETTINGS = {
     "lease_ttl": "30m",
     "hold_ttl": "2h",
+    # A goal owner's claim on its goal: how long the ownership lasts without a river command of the owner
+    # (each command renews it), and how long its leases on the goal's items last. river goal own --lease 6h
+    # picks another length for one ownership. While a goal has an owner, its agent items are reserved for it.
+    "goal_lease": "4h",
     # How long an agent may hold an item that waits on a person's item (added with --keep). Then river
     # releases the item (it still waits on the person), the agent takes other work, and the person is reminded.
     "human_wait_max": "30m",
@@ -166,6 +170,7 @@ CREATE TABLE IF NOT EXISTS goals (
   status            TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','complete')),
   owner             TEXT,
   owner_expires_at  TEXT,
+  owner_lease       TEXT,                     -- river goal own --lease; NULL: the goal_lease setting
   result            TEXT NOT NULL DEFAULT '',
   created_at        TEXT NOT NULL,
   completed_at      TEXT
@@ -543,6 +548,8 @@ def _migrate(conn):
         conn.execute("ALTER TABLE items ADD COLUMN reserved_for TEXT")
         conn.execute("ALTER TABLE items ADD COLUMN hold_expires_at TEXT")
         conn.execute("ALTER TABLE items ADD COLUMN replan INTEGER NOT NULL DEFAULT 0")
+    if "owner_lease" not in {r["name"] for r in conn.execute("PRAGMA table_info(goals)")}:
+        conn.execute("ALTER TABLE goals ADD COLUMN owner_lease TEXT")
     if "held_at" not in {r["name"] for r in conn.execute("PRAGMA table_info(items)")}:
         conn.execute("ALTER TABLE items ADD COLUMN held_at TEXT")
 
@@ -612,7 +619,7 @@ def _scope(conn, project=None, item=None, agent=None) -> str:
 def config_set(conn, key, value, project=None, item=None, agent=None, actor=None):
     if key not in DEFAULT_SETTINGS:
         raise RiverError(f"unknown setting {key!r}; known: {', '.join(sorted(DEFAULT_SETTINGS))}")
-    if key.endswith(("_ttl", "_after", "_before", "_interval", "_window")) or key in ("wait_max", "wait_step", "human_wait_max"):
+    if key.endswith(("_ttl", "_after", "_before", "_interval", "_window")) or key in ("wait_max", "wait_step", "human_wait_max", "goal_lease"):
         parse_duration(value)
     elif key in ("keep_prereq_limit", "replan_threshold", "max_leases", "serve_port", "smtp_port"):
         if not value.isdigit():
@@ -926,9 +933,26 @@ def goal_edit(conn, name, outcome=None, done_when=None, new_name=None, actor=Non
     return goal_show(conn, name)
 
 
-def goal_own(conn, name, actor=None):
-    """Own a goal: create and take the items that reach it. One owner at a time; the ownership frees
-    when the owner is away (away_after without a river command)."""
+def _goal_lease(conn, g, actor):
+    """How long a goal owner's claim lasts: the length it chose (goal own --lease), else goal_lease."""
+    return parse_duration(g["owner_lease"] or setting(conn, "goal_lease", agent=actor))
+
+
+def _lease_for(conn, item_id, actor):
+    """An item lease: goal_lease (or the owner's --lease) when the actor owns a goal the item serves, else lease_ttl."""
+    g = conn.execute("SELECT g.* FROM item_goals ig JOIN goals g ON g.id=ig.goal_id WHERE ig.item_id=? AND g.owner=? "
+                     "AND g.status='open' ORDER BY g.rank LIMIT 1", (item_id, actor)).fetchone() if actor else None
+    if g is not None:
+        return _goal_lease(conn, g, actor)
+    return parse_duration(setting(conn, "lease_ttl", item_id=item_id, agent=actor))
+
+
+def goal_own(conn, name, actor=None, lease=None):
+    """Own a goal: create and take the items that reach it. One owner at a time. Its agent items are
+    reserved for the owner, and its leases last goal_lease (or --lease); the ownership frees after that
+    long without a river command of the owner."""
+    if lease is not None:
+        parse_duration(lease)
     if not actor:
         raise RiverError("owning a goal needs an agent name: set RIVER_AGENT or pass --as <name>")
     with tx(conn):
@@ -939,10 +963,12 @@ def goal_own(conn, name, actor=None):
         if g["owner"] and g["owner"] != actor:
             raise RiverError(f"goal {name} is owned by {g['owner']}; ask them (river send question --to {g['owner']} ...), "
                              f"or take another: river goal list")
-        ttl = parse_duration(setting(conn, "away_after", agent=actor))
-        conn.execute("UPDATE goals SET owner=?, owner_expires_at=? WHERE id=?", (actor, iso(now() + ttl), g["id"]))
+        conn.execute("UPDATE goals SET owner=?, owner_lease=? WHERE id=?",
+                     (actor, lease if lease is not None else (g["owner_lease"] if g["owner"] == actor else None), g["id"]))
+        ttl = _goal_lease(conn, _goal(conn, name), actor)
+        conn.execute("UPDATE goals SET owner_expires_at=? WHERE id=?", (iso(now() + ttl), g["id"]))
         if g["owner"] != actor:
-            _event(conn, None, actor, f"owns goal {name}")
+            _event(conn, None, actor, f"owns goal {name} (its agent items are reserved for {actor}; lease {_short(ttl)})")
     return goal_show(conn, name)
 
 
@@ -951,8 +977,8 @@ def goal_release(conn, name, actor=None):
         g = _goal(conn, name)
         if g["owner"] != actor:
             raise RiverError(f"goal {name} is " + (f"owned by {g['owner']}" if g["owner"] else "not owned"))
-        conn.execute("UPDATE goals SET owner=NULL, owner_expires_at=NULL WHERE id=?", (g["id"],))
-        _event(conn, None, actor, f"released goal {name}")
+        conn.execute("UPDATE goals SET owner=NULL, owner_expires_at=NULL, owner_lease=NULL WHERE id=?", (g["id"],))
+        _event(conn, None, actor, f"released goal {name}; its items are open to every agent")
     return goal_show(conn, name)
 
 
@@ -966,8 +992,9 @@ def goal_give(conn, name, to, actor=None):
         rec = _agent(conn, to)
         if to == actor:
             raise RiverError("you own it already")
-        ttl = parse_duration(setting(conn, "away_after", agent=to))
-        conn.execute("UPDATE goals SET owner=?, owner_expires_at=? WHERE id=?", (rec["name"], iso(now() + ttl), g["id"]))
+        ttl = parse_duration(setting(conn, "goal_lease", agent=to))
+        conn.execute("UPDATE goals SET owner=?, owner_expires_at=?, owner_lease=NULL WHERE id=?",
+                     (rec["name"], iso(now() + ttl), g["id"]))
         _event(conn, None, actor, f"gave goal {name} to {to}")
         _send(conn, "notice", actor, f"{actor} gave you goal {name}: {g['outcome']} (river goal show {name})", to=to)
     return goal_show(conn, name)
@@ -1809,7 +1836,7 @@ def give(conn, item_id, to, actor=None):
             n = conn.execute("SELECT COUNT(*) c FROM items WHERE assignee=? AND status='in_progress'", (to,)).fetchone()["c"]
             if it["status"] == "in_progress" and n >= limit:
                 raise RiverError(f"refused: {to} already holds {n} item(s) (max_leases {limit}); they can release one first")
-            ttl = parse_duration(setting(conn, "lease_ttl", item_id=it["id"], agent=to))
+            ttl = _lease_for(conn, it["id"], to)
             if it["status"] == "in_progress":
                 conn.execute("UPDATE items SET assignee=?, claimed_at=?, lease_expires_at=? WHERE id=?",
                              (to, iso(t), iso(t + ttl), it["id"]))
@@ -1967,7 +1994,7 @@ def _resume_holds(conn, closed_id):
     for r in conn.execute("SELECT i.id, i.assignee FROM deps d JOIN items i ON i.id=d.item_id "
                           "WHERE d.blocked_by=? AND d.kind<>'conflicts' AND i.status='held'", (closed_id,)).fetchall():
         if not _open_prereqs(conn, r["id"]):
-            ttl = parse_duration(setting(conn, "lease_ttl", item_id=r["id"], agent=r["assignee"]))
+            ttl = _lease_for(conn, r["id"], r["assignee"])
             conn.execute("UPDATE items SET status='in_progress', hold_expires_at=NULL, claimed_at=?, lease_expires_at=? "
                          "WHERE id=?", (iso(now()), iso(now() + ttl), r["id"]))
             _event(conn, r["id"], "river", f"prerequisites done; back in progress for {r['assignee']}")
@@ -2035,6 +2062,10 @@ def annotate(conn):
     for r in conn.execute("SELECT ig.item_id, g.name FROM item_goals ig JOIN goals g ON g.id=ig.goal_id "
                           "ORDER BY g.rank, g.id"):
         tags.setdefault(r["item_id"], []).append(r["name"])
+    # A goal with an owner reserves its agent items for the owner (a person's items stay theirs).
+    goal_owners = {r["name"]: r["owner"] for r in conn.execute(
+        "SELECT name, owner FROM goals WHERE status='open' AND owner IS NOT NULL AND owner_expires_at >= ?",
+        (iso(now()),))}
     refs: dict[int, list] = {}
     for r in conn.execute("SELECT item_id, ref, url, synced_at FROM item_refs ORDER BY created_at, ref"):
         refs.setdefault(r["item_id"], []).append({"ref": r["ref"], "url": r["url"], "synced_at": r["synced_at"]})
@@ -2101,6 +2132,11 @@ def annotate(conn):
                 due, due_from = items[d]["due"], d
         a["effective_due"], a["due_from"] = (due, due_from) if is_open[i] else (it["due"], None)
         a["goals"] = tags.get(i, [])
+        a["goal_reserved"] = None
+        if not a["reserved_for"] and it["doer"] != "human" and it["status"] == "open":
+            g = next((g for g in a["goals"] if g in goal_owners), None)
+            if g:
+                a["reserved_for"], a["goal_reserved"] = goal_owners[g], g
         a["refs"] = refs.get(i, [])
         a["due_text"] = show_time(a["effective_due"], zone)
         a["due_state"] = (None if not is_open[i] or not a["effective_due"]
@@ -2236,12 +2272,11 @@ def _touch_agent(conn, actor):
         conn.execute("UPDATE items SET hold_expires_at=? WHERE id=?", (iso(_hold_until(conn, r["id"], actor, t)), r["id"]))
     owner_ttl = parse_duration(setting(conn, "owner_ttl", agent=actor))
     conn.execute("UPDATE targets SET owner_expires_at=? WHERE owner=?", (iso(t + owner_ttl), actor))
-    # A goal owner keeps the goal while it is active; it frees when the owner is away (away_after).
-    away = parse_duration(setting(conn, "away_after", agent=actor))
-    conn.execute("UPDATE goals SET owner_expires_at=? WHERE owner=? AND status='open'", (iso(t + away), actor))
+    # A goal owner keeps the goal while it runs river commands; it frees after goal_lease without one.
+    for g in conn.execute("SELECT * FROM goals WHERE owner=? AND status='open'", (actor,)).fetchall():
+        conn.execute("UPDATE goals SET owner_expires_at=? WHERE id=?", (iso(t + _goal_lease(conn, g, actor)), g["id"]))
     for r in conn.execute("SELECT id FROM items WHERE assignee=? AND status='in_progress'", (actor,)).fetchall():
-        ttl = parse_duration(setting(conn, "lease_ttl", item_id=r["id"], agent=actor))
-        conn.execute("UPDATE items SET lease_expires_at=? WHERE id=?", (iso(t + ttl), r["id"]))
+        conn.execute("UPDATE items SET lease_expires_at=? WHERE id=?", (iso(t + _lease_for(conn, r["id"], actor)), r["id"]))
 
 
 def _sweep(conn):
@@ -2275,9 +2310,10 @@ def _sweep(conn):
     _due_warnings(conn, t)
     for r in conn.execute("SELECT name, owner FROM goals WHERE owner IS NOT NULL AND owner_expires_at < ?",
                           (t,)).fetchall():
-        conn.execute("UPDATE goals SET owner=NULL, owner_expires_at=NULL WHERE name=?", (r["name"],))
+        conn.execute("UPDATE goals SET owner=NULL, owner_expires_at=NULL, owner_lease=NULL WHERE name=?", (r["name"],))
         _event(conn, None, "river", f"goal {r['name']} ownership expired (was {r['owner']})")
-        _send(conn, "notice", "river", f"your ownership of goal {r['name']} expired; nobody owns it now. "
+        _send(conn, "notice", "river", f"your ownership of goal {r['name']} expired (goal_lease without a river "
+              f"command); nobody owns it now, and its items are open to every agent. "
               f"Take it again if you still work on it: river goal own {r['name']}", to=r["owner"])
     _question_nudges(conn)
     for r in conn.execute("SELECT id, title, assignee FROM items WHERE status='held' AND hold_expires_at < ?",
@@ -2678,6 +2714,13 @@ def _claim_row(conn, item_id, actor):
                          f"(the user is told, and can undo it): river takeover {item_id} --note \"<how you will do it>\"")
     if it0["reserved_for"] and it0["reserved_for"] != actor:
         raise RiverError(f"refused: #{item_id} is reserved for {it0['reserved_for']}, who holds the item it unblocks")
+    if ag["kind"] == "ai" and it0["doer"] != "human":
+        g = conn.execute("SELECT g.name, g.owner FROM item_goals ig JOIN goals g ON g.id=ig.goal_id WHERE ig.item_id=? "
+                         "AND g.status='open' AND g.owner IS NOT NULL AND g.owner<>? AND g.owner_expires_at >= ? "
+                         "ORDER BY g.rank LIMIT 1", (item_id, actor, iso(now()))).fetchone()
+        if g:
+            raise RiverError(f"refused: #{item_id} is reserved for {g['owner']}, who owns goal {g['name']}. "
+                             f"Offer help: river offer \"<what you can take>\" --goal {g['name']}")
     limit = int(setting(conn, "max_leases", agent=actor))
     # A hold does not use up a lease when the agent takes one of its own reserved prerequisites.
     count_sql = ("SELECT COUNT(*) c FROM items WHERE assignee=? AND status='in_progress'"
@@ -2695,7 +2738,7 @@ def _claim_row(conn, item_id, actor):
             raise RiverError(f"refused: #{item_id} deploys to target {it['target']}, and only its owner can take it "
                              f"(owner: {owner['owner'] if owner and owner['owner'] else 'nobody'}). "
                              f"Become the owner first: river target own {it['target']}")
-    ttl = parse_duration(setting(conn, "lease_ttl", item_id=item_id, agent=actor))
+    ttl = _lease_for(conn, item_id, actor)
     t = now()
     cur = conn.execute(
         "UPDATE items SET status='in_progress', assignee=?, claimed_at=?, lease_expires_at=? "
@@ -2706,7 +2749,7 @@ def _claim_row(conn, item_id, actor):
         conn.execute("UPDATE items SET reserved_until=NULL WHERE id=?", (item_id,))
         conn.execute("UPDATE messages SET state='accepted', read_at=COALESCE(read_at, ?) "
                      "WHERE kind='alert' AND item_id=? AND to_agent=? AND state='open'", (iso(t), item_id, actor))
-    _event(conn, item_id, actor, f"claimed (lease {setting(conn, 'lease_ttl', item_id=item_id, agent=actor)})")
+    _event(conn, item_id, actor, f"claimed (lease {_short(ttl)})")
     _goal_notice(conn, item_id, actor, "claimed")
     return ag
 
@@ -3925,7 +3968,8 @@ def _goal_brief(conn, name, actor):
     return {"name": g["name"], "project": g["project"], "outcome": g["outcome"], "done_when": g["done_when"],
             "items_open": [{"id": a["id"], "title": a["title"], "status": a["status"], "ready": a["ready"],
                             "assignee": a["assignee"], "doer": a["doer"]} for a in open_items],
-            "items_done": len(g["items_done"]), "blockers_held": blockers}
+            "items_done": len(g["items_done"]), "blockers_held": blockers,
+            "lease": _short(_goal_lease(conn, _goal(conn, name), actor))}
 
 
 def go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None):

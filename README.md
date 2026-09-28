@@ -117,7 +117,7 @@ river next --unblocks 12 --claim                 # take one that clears item 12'
 river done 12 --output "merged in abc123"
 river goal add website checkout --outcome "customers can pay" --done-when "a test order succeeds"
 river add "Payment form" --goal checkout         # tag an item with a goal (repeatable)
-river goal own checkout                          # own it: plan, take, and unblock its items
+river goal own checkout                          # own it: its agent items are reserved for you (goal_lease 4h)
 river goal done checkout --result "live since 2026-10-02"
 river blockers 12                                # tree of what item 12 waits on
 river plan                                       # planner session: overview, open questions; plans, takes no work
