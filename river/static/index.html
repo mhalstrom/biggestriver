@@ -399,7 +399,7 @@ function left(iso) { const m = Math.round((Date.parse(iso) - Date.now()) / 60000
 
 function renderAgents() {
   $("#agents").innerHTML = S.agents.map(a => `<div class="agent" data-agent="${esc(a.name)}">
-      <div><span class="dot ${a.state}"></span><span class="nm">${esc(a.name)}</span> <span class="chip ${a.kind === "human" ? "c-human" : "c-ai"}">${a.kind === "human" ? "human" : "agent"}</span>${a.session ? ` <span class="muted" style="font-size:12px" title="Claude Code session">session ${esc(a.session)}</span>` : ""}</div>
+      <div><span class="dot ${a.state}"></span><span class="nm">${esc(a.name)}</span> <span class="chip ${a.kind === "human" ? "c-human" : "c-ai"}">${a.kind === "human" ? "human" : "agent"}</span>${a.session ? ` <span class="muted" style="font-size:12px" title="Claude Code session">session ${esc(a.session)}${a.session_ref ? " [" + esc(a.session_ref) + "]" : ""}</span>` : ""}</div>
       <div class="st">${a.state}, seen ${ago(a.last_seen)}${a.note ? " · " + esc(a.note) : ""}</div>
       ${a.holds.map(h => `<div class="st">holds <span class="link" data-open="${h.id}">#${h.id} ${esc(h.title)}</span>${h.lease_expires_at ? " · " + left(h.lease_expires_at) + " left" : ""}</div>`).join("") || '<div class="st">holds nothing</div>'}
       ${S.items.filter(i => i.status === "open" && i.reserved_until && i.reserved_for === a.name).map(i => `<div class="st">pushed <span class="link" data-open="${i.id}">#${i.id} ${esc(i.title)}</span> · ${left(i.reserved_until)} left · <span class="link" data-unpush="${i.id}">cancel</span></div>`).join("")}

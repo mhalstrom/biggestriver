@@ -440,6 +440,7 @@ def build_parser():
     x.add_argument("name"); x.add_argument("--human", action="store_true"); x.add_argument("--note", default="")
     x.add_argument("--session", help="the Claude Code session this agent runs in")
     x = sub.add_parser("session", help="record the Claude Code session you run in"); x.add_argument("name")
+    x.add_argument("--ref", help="the short code in brackets after the name in ListAgents")
     x = sub.add_parser("unregister", help="remove an agent that holds nothing"); x.add_argument("name")
     x = sub.add_parser("note", help="set your status note; with an agent, --holder-of, or --item: send a note")
     x.add_argument("words", nargs="+", metavar="[agent] text")
@@ -763,7 +764,7 @@ def dispatch(conn, a, actor):
     if c == "session":
         if not actor:
             raise RiverError("set RIVER_AGENT or pass --as <name>")
-        return core.set_session(conn, actor, a.name)
+        return core.set_session(conn, actor, a.name, a.ref)
     if c == "unregister":
         return core.unregister(conn, a.name, actor)
     if c == "note":
@@ -891,7 +892,7 @@ def render_go(b):
         out.append(f"Your shell may not keep environment variables, so pass --as {me} on every river command.")
     if not b.get("session"):
         out.append(f"Record your Claude Code session name once, so others can message this session "
-                   f"(ListAgents prints 'This session is <name>'): {r} session <name>")
+                   f"(ListAgents prints 'This session is <name> [<ref>]'): {r} session <name> --ref <ref>")
     for n in b["projects"]:
         d = b["descriptions"].get(n)
         out.append(f"Project {n}: {d}" if d else f"Project {n}.")
@@ -1184,7 +1185,8 @@ def render(a, res):
             holds = ", ".join(f"#{h['id']} {h['title']}" for h in ag["holds"]) or "nothing"
             note = f" — {ag['note']}" if ag["note"] else ""
             print(f"{ag['name']} ({ag['kind']}, {ag['state']}){note}"
-                  + (f"\n    session: {ag['session']}" if ag.get("session") else "") + f"\n    holds: {holds}"
+                  + (f"\n    session: {ag['session']}" + (f" [{ag['session_ref']}]" if ag.get("session_ref") else "")
+                     if ag.get("session") else "") + f"\n    holds: {holds}"
                   + (f"\n    owns: {', '.join(o['name'] for o in ag['owns'])}" if ag.get("owns") else ""))
             for t in ag.get("touching", []):
                 print(f"    touches: #{t['id']} {', '.join(t['paths'])}")
@@ -1214,7 +1216,8 @@ def render(a, res):
         print(f"{res['name']} ({res['kind']}) registered. Set RIVER_AGENT={res['name']} in your shell.")
         return
     if c == "session":
-        print(f"{res['name']}: session {res['session']} recorded")
+        print(f"{res['name']}: session {res['session']}" + (f" [{res['session_ref']}]" if res["session_ref"] else "")
+              + " recorded")
         return
     if c == "heartbeat":
         print("leases renewed")

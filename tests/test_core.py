@@ -807,6 +807,10 @@ class Sessions(Base):
         self.assertEqual(b["session"], "web-7")
         with self.assertRaises(RiverError):
             core.set_session(self.c, "ag", "two words")
+        r = core.set_session(self.c, "ag", "toolscaledcore-90 [46d1d3]")
+        self.assertEqual((r["session"], r["session_ref"]), ("toolscaledcore-90", "46d1d3"))
+        r = core.set_session(self.c, "ag", "toolscaledcore-90", ref="922c83")
+        self.assertEqual(r["session_ref"], "922c83")
 
 
 class WhoFile(Base):

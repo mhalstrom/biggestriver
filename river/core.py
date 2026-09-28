@@ -143,6 +143,7 @@ CREATE TABLE IF NOT EXISTS agents (
   note           TEXT NOT NULL DEFAULT '',
   role           TEXT,
   session        TEXT,
+  session_ref    TEXT,
   registered_at  TEXT NOT NULL,
   last_seen      TEXT NOT NULL
 );
@@ -366,6 +367,8 @@ def _migrate(conn):
         conn.execute("ALTER TABLE agents ADD COLUMN role TEXT")
     if "session" not in acols:
         conn.execute("ALTER TABLE agents ADD COLUMN session TEXT")
+    if "session_ref" not in acols:
+        conn.execute("ALTER TABLE agents ADD COLUMN session_ref TEXT")
     if "auto" not in {r["name"] for r in conn.execute("PRAGMA table_info(deps)")}:
         conn.execute("ALTER TABLE deps ADD COLUMN auto INTEGER NOT NULL DEFAULT 0")
     icols = {r["name"] for r in conn.execute("PRAGMA table_info(items)")}
@@ -1866,16 +1869,23 @@ def register(conn, name, human=False, note="", session=None):
     return agent_status(conn, name)
 
 
-def set_session(conn, name, session):
-    """Record the Claude Code session an agent runs in, so people and agents can message that session."""
-    session = (session or "").strip()
-    if not session or len(session) > 128 or any(c.isspace() for c in session):
-        raise RiverError("a session name is one word of up to 128 characters (the name ListAgents shows for this session)")
+def set_session(conn, name, session, ref=None):
+    """Record the Claude Code session an agent runs in, so people and agents can message that session.
+
+    Session names can repeat, so keep the short ref too: ListAgents prints 'name [ref]', and either
+    form is accepted here ('name [ref]' in one string, or name plus ref)."""
+    m = re.match(r"^\s*(\S+)\s*(?:\[\s*([0-9A-Za-z]+)\s*\])?\s*$", session or "")
+    if not m or len(m.group(1)) > 128:
+        raise RiverError("a session name is one word of up to 128 characters, optionally with its ref: "
+                         "river session <name> --ref <ref>  (ListAgents prints 'This session is <name> [<ref>]')")
+    session, ref = m.group(1), (ref or m.group(2) or "").strip("[] ") or None
+    if ref and not re.match(r"^[0-9A-Za-z]{1,32}$", ref):
+        raise RiverError("a session ref is the short code in brackets that ListAgents prints, such as b5e2e0")
     with tx(conn):
-        old = _agent(conn, name)["session"]
-        if old != session:
-            conn.execute("UPDATE agents SET session=? WHERE name=?", (session, name))
-            _event(conn, None, name, f"session: {session}")
+        old = _agent(conn, name)
+        if (old["session"], old["session_ref"]) != (session, ref):
+            conn.execute("UPDATE agents SET session=?, session_ref=? WHERE name=?", (session, ref, name))
+            _event(conn, None, name, f"session: {session}" + (f" [{ref}]" if ref else ""))
     return agent_status(conn, name)
 
 
