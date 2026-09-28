@@ -477,12 +477,28 @@ def build_parser():
     x.add_argument("id", type=int)
     rv = sub.add_parser("review", help="release reviews: pass one, or send the release back with fixes")
     rvs = rv.add_subparsers(dest="rcmd", required=True)
-    x = rvs.add_parser("pass", help="accept the release (runs review_cmd first when it is set)"); x.add_argument("id", type=int)
+    x = rvs.add_parser("pass", help="accept the release (runs the command steps and review_cmd first)"); x.add_argument("id", type=int)
     x.add_argument("--output", help="what you checked; default: review passed")
+    x.add_argument("--confirm", action="append", metavar="all|IDS",
+                   help="the written review steps you did: all, or step ids (3,5); required when the release has any")
     x = rvs.add_parser("fail", help="add fix items the review waits on, and release the review")
     x.add_argument("id", type=int); x.add_argument("fixes", nargs="+", help="one title per fix item")
     x.add_argument("--note", help="what the review found (goes into each fix item's context)")
     x.add_argument("--project", help="project for the fix items (default: of the first item the review covers)")
+    st = rvs.add_parser("step", help="the review steps of a project: what a release review of it follows")
+    sts = st.add_subparsers(dest="scmd", required=True)
+    x = sts.add_parser("list", help="the steps of one project, or of all"); x.add_argument("project", nargs="?")
+    x = sts.add_parser("add", help="add a step: a written instruction, or with --run a command that must exit 0")
+    x.add_argument("project"); x.add_argument("text", help="the instruction, or the command with --run")
+    x.add_argument("--run", action="store_true", help="the text is a command, run in the project folder")
+    x.add_argument("--at", type=int, help="position (1 is first; default: last)")
+    x = sts.add_parser("edit", help="change a step's text or kind"); x.add_argument("id", type=int)
+    x.add_argument("--text"); k = x.add_mutually_exclusive_group()
+    k.add_argument("--run", dest="run", action="store_true", default=None, help="make it a command")
+    k.add_argument("--do", dest="run", action="store_false", help="make it a written instruction")
+    x = sts.add_parser("rm", help="remove a step"); x.add_argument("id", type=int)
+    x = sts.add_parser("move", help="move a step within its project"); x.add_argument("id", type=int)
+    x.add_argument("to", type=int, help="new position (1 is first)")
     x = sub.add_parser("release", help="give a claimed item back"); x.add_argument("id", type=int); x.add_argument("--note")
     x = sub.add_parser("drop", help="close an item without doing it"); x.add_argument("id", type=int)
     x.add_argument("--note", help="why (required when an agent drops a person's item)")
@@ -929,7 +945,17 @@ def dispatch(conn, a, actor):
         return core.ship(conn, a.id, actor)
     if c == "review":
         if a.rcmd == "pass":
-            return core.review_pass(conn, a.id, a.output, actor, os.getcwd())
+            return core.review_pass(conn, a.id, a.output, actor, os.getcwd(), confirm=a.confirm)
+        if a.rcmd == "step":
+            if a.scmd == "list":
+                return core.review_steps(conn, a.project)
+            if a.scmd == "add":
+                return core.review_step_add(conn, a.project, a.text, a.run, a.at, actor)
+            if a.scmd == "edit":
+                return core.review_step_edit(conn, a.id, a.text, a.run, actor)
+            if a.scmd == "rm":
+                return core.review_step_remove(conn, a.id, actor)
+            return core.review_step_move(conn, a.id, a.to, actor)
         return core.review_fail(conn, a.id, a.fixes, a.note, a.project, actor)
     if c == "release":
         return core.release(conn, a.id, a.note, actor)
@@ -1218,13 +1244,23 @@ def render_go(b):
             out.append(f"  release {it.get('target')}: the deploy waits on this review. It covers:")
             for d in it["waits_on_detail"]:
                 out.append(f"    #{d['id']} {d['title']} ({d['status']})   {r} show {d['id']}")
+            groups = it.get("review_steps") or []
             out += ["",
-                    "Review the release as a whole: read each item's output (commit ids) and the changes in its project folder.",
-                    ("Your review process: " + it["context"]) if it.get("context")
-                    else "No review_prompt is set: check correctness, tests, and security, and read the diffs."]
+                    "Review the release as a whole: read each item's output (commit ids) and the changes in its project folder."]
+            if it.get("context"):
+                out.append("Your review process: " + it["context"])
+            elif not groups:
+                out.append("No review steps or review_prompt are set: check correctness, tests, and security, and read the diffs.")
+            if groups:
+                out.append("Review steps, per project (do each; pass runs the [run] steps in the project folder, and they must exit 0):")
+                for g in groups:
+                    out.append(f"  {g['project']}:")
+                    for st in g["steps"]:
+                        out.append(f"    {st['pos']}. [{st['kind']}] {st['text']}   (step {st['id']})")
             if it.get("check"):
                 out.append(f"Pass runs this check first, and it must exit 0: {it['check']}")
-            out += [f"  It is good:   {r} review pass {it['id']} --output \"<what you checked>\"",
+            conf = " --confirm all" if any(st["kind"] == "do" for g in groups for st in g["steps"]) else ""
+            out += [f"  It is good:   {r} review pass {it['id']}{conf} --output \"<what you checked>\"",
                     f"  Problems:     {r} review fail {it['id']} \"<fix 1>\" \"<fix 2>\" --note \"<what you found>\" [--project <name>]",
                     "                (river adds the fixes as items the review waits on; the review comes back after them)",
                     "",
@@ -1402,6 +1438,21 @@ def render(a, res):
                 if not g.get("items"):
                     print(f"  no items yet: river add \"<title>\" --goal {g['name']}")
         return
+    if c == "review" and a.rcmd == "step":
+        rows = [res] if isinstance(res, dict) else res
+        if not rows:
+            where = f" for {a.project}" if getattr(a, "project", None) and a.scmd == "list" else ""
+            print(f"(no review steps{where}: river review step add <project> \"<instruction>\"  or  --run \"<command>\")")
+        last = None
+        for r in rows:
+            if r["project"] != last:
+                print(f"{r['project']}:")
+                last = r["project"]
+            print(f"  {r['pos']}. [{r['kind']}] {r['text']}   (step {r['id']})")
+        return
+    if c == "review" and a.rcmd == "pass" and isinstance(res, dict) and res.get("review_steps"):
+        for r in res["review_steps"]:
+            print(f"  step {r['id']} ({r['project']}): {r['result']}   {r['text']}")
     if c == "project" and a.pcmd == "tracker":
         print(f"{res['name']}: tracker " + (res["tracker"] or "none"))
         return

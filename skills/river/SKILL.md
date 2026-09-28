@@ -62,8 +62,10 @@ A person registers with `--human`.
    With the setting `review` on, the deploy item first waits on one review
    of the whole release. `river go` gives a ready review before new work
    (role REVIEWER; `--role reviewer` takes any). Follow the review process in
-   its context, then `river review pass <id> --output "<what you checked>"`
-   (runs `review_cmd` first when set), or
+   its context and the review steps the brief lists for each project, then
+   `river review pass <id> --confirm all --output "<what you checked>"`
+   (confirms the written steps; runs the command steps and `review_cmd`, which
+   must exit 0), or
    `river review fail <id> "<fix>" ... --note "<what you found>"`: river adds
    the fixes as items the review waits on, and the review comes back after them.
 

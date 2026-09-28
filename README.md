@@ -229,6 +229,15 @@ blocker trees, the agent registry, capacity, settings, and the web page.
   `/code-review` or `codex review`); `review_cmd`, when set, must exit 0.
   The reviewer runs `river review pass <id>`, or `river review fail <id>
   "<fix>" ...`, which adds fix items the review waits on.
+- Review steps per project: an ordered list the review of each release follows,
+  for every project the release ships. `river review step add <project>
+  "<instruction>"` adds a written step; `--run "<command>"` adds a command that
+  must exit 0 in the project folder (`--at <n>` sets the position). Also
+  `river review step list [<project>]`, `edit <id> --text ... --run|--do`,
+  `move <id> <n>`, and `rm <id>`. The REVIEWER brief shows the steps, and
+  `river review pass <id> --confirm all` (or the step ids) confirms the written
+  steps, runs the commands, and records each result in the review's history.
+  `review_prompt` and `review_cmd` still apply next to the steps.
 - Overviews: `river status`, and `river log` with a Done tab on the page.
 - Cleanup: `river cleanup` lists open items that may be done or stale (a
   lease ran out without done, a commit names the item, a person's files
