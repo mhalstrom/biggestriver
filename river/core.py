@@ -732,7 +732,8 @@ def targets_view(conn, ann=None):
         last = done[-1] if done else None
         out.append(dict(t,
             project_names=[r["name"] for r in conn.execute(
-                "SELECT name FROM projects WHERE target=? AND archived=0 ORDER BY rank, id", (t["name"],))],
+                "SELECT name FROM projects WHERE target=? AND archived=0 AND name<>? ORDER BY rank, id",
+                (t["name"], f"deploy-{t['name']}"))],
             pending=[{"id": a["id"], "title": a["title"], "status": a["status"], "assignee": a["assignee"],
                       "ready": a["ready"], "ships": ships(a)} for a in pending],
             last_deploy=({"id": last["id"], "title": last["title"], "closed_at": last["closed_at"],
