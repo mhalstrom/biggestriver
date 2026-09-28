@@ -21,6 +21,7 @@
   "build": {
     "appId": "com.biggestriver.app",
     "productName": "Biggest River",
+    "publish": null,
     "directories": {
       "output": "out"
     },
