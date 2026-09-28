@@ -78,6 +78,11 @@ river add <project> "first item" --doer ai
 river serve --open    # watch the board at http://127.0.0.1:8765
 ```
 
+The first time you open the page, a setup guide shows what river found (people,
+the block in each project folder, skills, agents for the Start button, phone
+notifications), with a button to fix each step. "Don't show again" hides it;
+the Settings tab opens it again.
+
 To see it with sample data first: `./seed/example.sh` on an empty database.
 
 ## Use it

@@ -62,6 +62,7 @@ DEFAULT_SETTINGS = {
     # Agents the page can start, as "Label=command" entries separated by ";". The first is the default.
     "launch_agents": "Claude Code=claude go",
     "launch_in": "tab",
+    "setup_done": "off",
 }
 
 SCHEMA = """
@@ -553,6 +554,8 @@ def config_set(conn, key, value, project=None, item=None, agent=None, actor=None
             raise RiverError(f"{key} takes a whole number")
     elif key == "launch_agents":
         parse_launch_agents(value)
+    elif key == "setup_done" and value not in ("on", "off"):
+        raise RiverError("setup_done is on or off")
     elif key == "launch_in" and value not in ("tab", "window"):
         raise RiverError("launch_in is tab or window")
     elif key == "auto_continue" and value not in ("on", "off"):

@@ -157,3 +157,44 @@ class LaunchAgent(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SetupGuide(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        os.environ["RIVER_DB"] = os.path.join(self.dir.name, "t.db")
+        self.c = core.connect()
+        self.folder = os.path.join(self.dir.name, "shop")
+        os.mkdir(self.folder)
+        core.project_add(self.c, "shop", path=self.folder)
+
+    def tearDown(self):
+        self.c.close()
+        os.environ.pop("RIVER_DB", None)
+        self.dir.cleanup()
+
+    def test_block_fix_writes_both_files_and_status_follows(self):
+        before = server.setup_status(self.c)
+        self.assertFalse(before["done"])
+        self.assertEqual(before["folders"][0]["claude_md"], "missing")
+        server.setup_block(self.c, self.folder)
+        f = server.setup_status(self.c)["folders"][0]
+        self.assertEqual((f["claude_md"], f["agents_md"]), ("current", "current"))
+
+    def test_block_fix_refuses_a_folder_that_is_not_a_project(self):
+        with self.assertRaises(RiverError):
+            server.setup_block(self.c, self.dir.name)
+        self.assertFalse(os.path.exists(os.path.join(self.dir.name, "CLAUDE.md")))
+
+    def test_add_agent_appends_to_launch_agents_once(self):
+        server.setup_agent_add(self.c, "Codex")
+        labels = server.setup_agent_add(self.c, "Codex")
+        self.assertEqual(labels, ["Claude Code", "Codex"])
+        with self.assertRaises(RiverError):
+            server.setup_agent_add(self.c, "nope")
+
+    def test_dismiss_is_a_setting(self):
+        core.config_set(self.c, "setup_done", "on")
+        self.assertTrue(server.setup_status(self.c)["done"])
+        with self.assertRaises(RiverError):
+            core.config_set(self.c, "setup_done", "maybe")

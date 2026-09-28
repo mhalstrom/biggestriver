@@ -66,6 +66,85 @@ def launch_agent(conn, project=None, runner=None, agent=None):
     return t
 
 
+# Agent CLIs the setup guide offers for the Start button. Each gets an explicit first prompt, so it works
+# even where the agent does not read the project's instruction file.
+KNOWN_AGENTS = [
+    ("Claude Code", "claude", "claude go"),
+    ("Codex", "codex", 'codex "run river go in this folder and follow the briefing"'),
+    ("Grok", "grok", 'grok "run river go in this folder and follow the briefing"'),
+    ("OpenCode", "opencode", 'opencode --prompt "run river go in this folder and follow the briefing"'),
+    ("Gemini", "gemini", 'gemini -i "run river go in this folder and follow the briefing"'),
+]
+
+
+def _block_state(path):
+    from .cli import AGENT_SNIPPET
+    if not path.exists():
+        return "missing"
+    text = path.read_text(errors="replace")
+    return "current" if AGENT_SNIPPET in text else "old" if "Biggest River" in text else "missing"
+
+
+def setup_status(conn):
+    """What the setup guide shows: each check, and whether it is done."""
+    import shutil
+    folders = {}
+    for p in core.project_list(conn):
+        if p["path"]:
+            folders.setdefault(p["path"], []).append(p["name"])
+    skills = Path("~/.claude/skills").expanduser()
+    agents = core.parse_launch_agents(core.setting(conn, "launch_agents"))
+    have = {label for label, _ in agents}
+    return {
+        "done": core.setting(conn, "setup_done") == "on",
+        "folders": [{"path": d, "projects": names, "exists": Path(d).is_dir(),
+                     "claude_md": _block_state(Path(d, "CLAUDE.md")), "agents_md": _block_state(Path(d, "AGENTS.md"))}
+                    for d, names in folders.items()],
+        "projects_without_folder": [p["name"] for p in core.project_list(conn) if not p["path"]],
+        "people": [r["name"] for r in conn.execute("SELECT name FROM agents WHERE kind='human' ORDER BY name")],
+        "claude_home": Path("~/.claude").expanduser().is_dir(),
+        "skills": {n: ("installed" if (skills / n / "SKILL.md").is_file() else "missing") for n in ("river", "river-planner")},
+        "launch_agents": [label for label, _ in agents],
+        "agent_clis": [{"label": label, "found": bool(shutil.which(exe)), "added": label in have, "command": cmd}
+                       for label, exe, cmd in KNOWN_AGENTS],
+        "notify_channels": core._channels(core.setting(conn, "notify_channels")),
+        "ntfy_ready": bool(core.setting(conn, "ntfy_topic")),
+    }
+
+
+def setup_block(conn, path):
+    """Add or update the work queue block in CLAUDE.md and AGENTS.md of a registered project folder."""
+    from .cli import _append_block
+    folder = Path(path).expanduser().resolve()
+    if folder not in {Path(p["path"]).resolve() for p in core.project_list(conn) if p["path"]}:
+        raise RiverError(f"{path} is not the folder of a river project")
+    if not folder.is_dir():
+        raise RiverError(f"{path} does not exist")
+    return [_append_block(folder / f) for f in ("CLAUDE.md", "AGENTS.md")]
+
+
+def setup_skills():
+    from .cli import install_skills
+    return install_skills(Path("~/.claude/skills").expanduser())
+
+
+def setup_agent_add(conn, label, actor=None):
+    """Add one of KNOWN_AGENTS to launch_agents (the Start button's list)."""
+    cmd = next((c for lab, _, c in KNOWN_AGENTS if lab == label), None)
+    if cmd is None:
+        raise RiverError(f"unknown agent {label!r}")
+    agents = core.parse_launch_agents(core.setting(conn, "launch_agents"))
+    if label not in {a for a, _ in agents}:
+        agents.append((label, cmd))
+        core.config_set(conn, "launch_agents", "; ".join(f"{a}={c}" for a, c in agents), actor=actor)
+    return [a for a, _ in agents]
+
+
+def setup_ntfy(conn, actor=None):
+    from . import notify
+    return notify.setup_ntfy(conn, actor=actor)
+
+
 # Operations the page may call. Each maps JSON args to one core function.
 OPS = {
     "project_add": lambda c, a, who: core.project_add(c, a["name"], a.get("rank"), a.get("notes", ""), who),
@@ -120,6 +199,10 @@ OPS = {
     "offer": lambda c, a, who: core.offer(c, a["body"], int(a["item"]), a.get("to"), who),
     "give": lambda c, a, who: core.give(c, int(a["id"]), a["to"], who),
     "split": lambda c, a, who: core.split(c, int(a["id"]), [t for t in a["titles"] if t.strip()], who),
+    "setup_block": lambda c, a, who: setup_block(c, a["path"]),
+    "setup_skills": lambda c, a, who: setup_skills(),
+    "setup_agent_add": lambda c, a, who: setup_agent_add(c, a["label"], who),
+    "setup_ntfy": lambda c, a, who: setup_ntfy(c, who),
     "launch_agent": lambda c, a, who: launch_agent(c, a.get("project"), agent=a.get("agent")),
     "decline_message": lambda c, a, who: core.decline_message(c, int(a["msg"]), a.get("note"), who),
 }
@@ -212,6 +295,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"messages": core.inbox(conn, q.get("agent"), bool(q.get("all")), mark_read=False)})
             except RiverError as e:
                 return self._send(400, {"error": str(e)})
+            finally:
+                conn.close()
+        if path == "/api/setup":
+            conn = core.connect()
+            try:
+                return self._send(200, setup_status(conn))
             finally:
                 conn.close()
         if path.startswith("/api/thread/"):

@@ -119,6 +119,16 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; padding
 .actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .tree { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg); border-radius: 6px; padding: 8px; }
 .link { color: var(--accent); cursor: pointer; }
+#setup { position: fixed; inset: 0; z-index: 15; background: rgba(0,0,0,.45); display: flex; align-items: flex-start; justify-content: center; padding: 6vh 16px; overflow-y: auto; }
+#setup.hidden { display: none; }
+#setup .box { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.25); width: min(680px, 100%); padding: 18px 20px; }
+#setup .step { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 8px; padding: 10px 0; border-top: 1px solid var(--line); }
+#setup .mark { font-weight: 700; }
+#setup .mark.ok { color: #1a7f37; }
+#setup .mark.todo { color: #bf8700; }
+#setup .sub { font-size: 12px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
+#setup .fix { margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+#setup code { font-size: 12px; }
 #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 8px; display: none; z-index: 20; max-width: 90vw; }
 #toast.err { background: var(--warn); color: #fff; }
 #graph { overflow: auto; }
@@ -342,6 +352,7 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
       <div class="muted" style="font-size:12px;margin-bottom:8px">The most specific value wins: item, then agent, then project, then global, then the built-in default.<br>
         <b>launch_agents</b> lists the agents the Start button offers, as <code>Label=command</code> entries separated by <code>;</code>. The first is the default. Agents other than Claude Code do not read CLAUDE.md, so tell them what to do, for example:
         <code>Claude Code=claude go; Codex=codex "run river go in this folder and follow the briefing"; Grok=grok "run river go in this folder and follow the briefing"</code></div>
+      <div style="margin-bottom:8px"><button class="btn" id="openSetup">Open setup guide</button></div>
       <table class="settings" id="settingsTable"></table>
       <div class="form" style="margin-top:12px;max-width:640px">
         <div class="two">
@@ -362,6 +373,19 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
 <div id="toast"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.min.js" integrity="sha384-EOXBFmc3gx5mb+vn0vPvvGqACToJD24hhacX5Yx+8NUUQrHIle/Qi5Bg9o3zKwW2" crossorigin="anonymous"></script>
+<div id="setup" class="hidden" role="dialog" aria-modal="true" aria-labelledby="setupTitle"><div class="box">
+  <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
+    <h2 id="setupTitle" style="margin:0">Set up Biggest River</h2>
+    <button class="iconbtn" id="setupClose" title="Close for now">✕</button>
+  </div>
+  <div class="muted" style="font-size:13px;margin:4px 0 8px">Each step shows what river found on this computer. Use the buttons to fix a step. Settings has a button that opens this guide again.</div>
+  <div id="setupSteps"></div>
+  <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px">
+    <button class="btn" id="setupLater">Close for now</button>
+    <button class="btn primary" id="setupDone">Don't show again</button>
+  </div>
+</div></div>
+
 <script>
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -1122,6 +1146,73 @@ function setTab(name) {
   return renderGraph(true);
 }
 // Links into the page: #item-4, #tab-graph, #as-alex, or several joined with & (#as-alex&item-4).
+// Setup guide: an overlay that shows until the user dismisses it for good (setting setup_done).
+let setupSeen = false;
+async function openSetup() {
+  const r = await fetch("/api/setup"); if (!r.ok) return;
+  renderSetup(await r.json()); $("#setup").classList.remove("hidden");
+}
+function closeSetup() { $("#setup").classList.add("hidden"); }
+function renderSetup(st) {
+  const step = (ok, title, sub, fix) => `<div class="step"><div class="mark ${ok ? "ok" : "todo"}">${ok ? "✓" : "•"}</div>
+    <div><b>${title}</b>${sub ? `<div class="sub">${sub}</div>` : ""}${!ok && fix ? `<div class="fix">${fix}</div>` : ""}</div></div>`;
+  const out = [];
+  out.push(step(st.people.length > 0, "Register yourself as a person",
+    st.people.length ? "People: " + st.people.map(esc).join(", ") + ". Pick your name in the top bar." : "River shows you what needs you and sends you notifications.",
+    `<input id="suName" placeholder="your name" style="width:140px"><button class="btn" data-su="register">Register</button>`));
+  const blocks = st.folders.filter(f => f.exists && (f.claude_md !== "current" || f.agents_md !== "current"));
+  const state = (f) => `CLAUDE.md ${f.claude_md}, AGENTS.md ${f.agents_md}`;
+  out.push(step(st.folders.length > 0 && blocks.length === 0, "Tell agents about the queue in each project folder",
+    st.folders.length ? st.folders.map(f => `<div>${esc(f.path)} (${f.projects.map(esc).join(", ")}): ${f.exists ? esc(state(f)) : "folder not found"}</div>`).join("")
+      + (st.projects_without_folder.length ? `<div>No folder: ${st.projects_without_folder.map(esc).join(", ")}</div>` : "")
+      : "No project has a folder yet. In a project folder, run <code>river init</code>.",
+    blocks.map(f => `<button class="btn" data-su="block" data-path="${esc(f.path)}">Update ${esc(f.path.split("/").pop())}</button>`).join("")));
+  const missing = Object.entries(st.skills).filter(([, v]) => v !== "installed").map(([k]) => k);
+  if (st.claude_home) out.push(step(missing.length === 0, "Install the Claude Code skills",
+    missing.length ? "Missing in ~/.claude/skills: " + missing.join(", ") : "river and river-planner are installed.",
+    `<button class="btn" data-su="skills">Install skills</button>`));
+  const addable = st.agent_clis.filter(a => a.found && !a.added);
+  out.push(step(addable.length === 0, "Agents for the Start button",
+    "Start button offers: " + st.launch_agents.map(esc).join(", ")
+      + (addable.length ? ". Also on this computer: " + addable.map(a => esc(a.label)).join(", ") : ""),
+    addable.map(a => `<button class="btn" data-su="agent" data-label="${esc(a.label)}" title="${esc(a.command)}">Add ${esc(a.label)}</button>`).join("")));
+  out.push(step(st.ntfy_ready && st.notify_channels.includes("ntfy"), "Phone notifications (ntfy)",
+    st.ntfy_ready ? "Channels: " + (st.notify_channels.map(esc).join(", ") || "none") : "Get a push on your phone when an item needs you.",
+    `<button class="btn" data-su="ntfy">Turn on ntfy</button><span id="suNtfy" class="sub"></span>`));
+  $("#setupSteps").innerHTML = out.join("");
+}
+$("#setupSteps").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-su]"); if (!b) return;
+  const k = b.dataset.su;
+  try {
+    if (k === "register") {
+      const n = $("#suName").value.trim(); if (!n) return toast("Type your name first", true);
+      await act("register", { name: n, human: true, note: "" });
+      $("#actor").value = n; store("river.actor", n);
+    } else if (k === "block") await act("setup_block", { path: b.dataset.path });
+    else if (k === "skills") await act("setup_skills", {});
+    else if (k === "agent") await act("setup_agent_add", { label: b.dataset.label });
+    else if (k === "ntfy") {
+      const r = await act("setup_ntfy", {});
+      await openSetup();
+      $("#suNtfy").textContent = (r && r.subscribe || []).join(" ");
+      return;
+    }
+    await openSetup();
+  } catch (err) { /* act() showed the error */ }
+});
+$("#setupClose").onclick = closeSetup;
+$("#setupLater").onclick = closeSetup;
+$("#setupDone").onclick = async () => { await act("config_set", { key: "setup_done", value: "on" }).catch(() => {}); closeSetup(); };
+$("#openSetup").onclick = openSetup;
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#setup").classList.contains("hidden")) closeSetup(); });
+function maybeSetup() {
+  if (setupSeen || !S) return;
+  setupSeen = true;
+  const done = S.settings.overrides.some(x => x.key === "setup_done" && x.scope === "global" && x.value === "on");
+  if (!done) openSetup();
+}
+
 async function openFromHash() {
   for (const part of location.hash.slice(1).split("&")) {
     const m = part.match(/^(item|tab|as)-(.+)$/); if (!m) continue;
@@ -1132,7 +1223,7 @@ async function openFromHash() {
   }
 }
 window.addEventListener("hashchange", openFromHash);
-refresh().then(openFromHash); setInterval(() => { if (!document.hidden) refresh().catch(() => {}); }, 3000);
+refresh().then(openFromHash).then(maybeSetup); setInterval(() => { if (!document.hidden) refresh().catch(() => {}); }, 3000);
 // A hidden tab stops the full refresh but keeps asking what needs a person, so notifications still arrive.
 setInterval(() => { if (document.hidden) pollNeedsYou().catch(() => {}); }, 15000);
 </script>
