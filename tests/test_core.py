@@ -657,6 +657,11 @@ class Ship(Base):
         done = core.done(self.c, d1["id"], "release r-42", "ops")
         self.assertEqual([x["id"] for x in done["ships"]], sorted([a, b]))
         self.assertEqual(core.unread(self.c, "ops")["unread"], 1)  # notice for the request made while ops owned it
+        t = core.state(self.c)["targets"][0]
+        self.assertEqual((t["name"], t["owner"], t["project_names"]), ("web", "ops", ["site", "api"]))
+        self.assertEqual([(d["id"], [x["id"] for x in d["ships"]]) for d in t["pending"]], [(d2["id"], [c])])
+        self.assertEqual((t["last_deploy"]["id"], t["last_deploy"]["output"]), (d1["id"], "release r-42"))
+        self.assertEqual([x["id"] for x in t["last_deploy"]["ships"]], sorted([a, b]))
 
     def test_ship_refusals_and_repeat(self):
         core.project_add(self.c, "misc")

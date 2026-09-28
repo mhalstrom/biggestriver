@@ -192,6 +192,7 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
       <div id="blockedList"></div>
     </div>
     <div class="panel" id="capacity"></div>
+    <div class="panel hidden" id="targetsPanel"><h2>Deploy targets</h2><div id="targets"></div></div>
     <div class="grid">
       <div>
         <div class="panel">
@@ -396,6 +397,20 @@ function renderAgents() {
       ${a.holds.map(h => `<div class="st">holds <span class="link" data-open="${h.id}">#${h.id} ${esc(h.title)}</span>${h.lease_expires_at ? " · " + left(h.lease_expires_at) + " left" : ""}</div>`).join("") || '<div class="st">holds nothing</div>'}
       ${S.items.filter(i => i.status === "open" && i.reserved_until && i.reserved_for === a.name).map(i => `<div class="st">pushed <span class="link" data-open="${i.id}">#${i.id} ${esc(i.title)}</span> · ${left(i.reserved_until)} left · <span class="link" data-unpush="${i.id}">cancel</span></div>`).join("")}
     </div>`).join("") || `<div class="muted">No agents registered.</div>`;
+}
+
+function renderTargets() {
+  const T = S.targets || [];
+  $("#targetsPanel").classList.toggle("hidden", !T.length);
+  const shipList = (s) => s.map(x => `<span class="link" data-open="${x.id}">#${x.id}</span> ${esc(clip(x.title, 50))} <span class="muted">(${esc(x.status.replace("_", " "))})</span>`).join("; ") || '<span class="muted">nothing yet</span>';
+  $("#targets").innerHTML = T.map(t => `<div class="ny">
+      <div class="ny-h"><b>${esc(t.name)}</b>
+        ${t.owner ? `<span class="chip c-ai">owner · ${esc(t.owner)}</span><span class="muted" style="font-size:12px">${t.owner_expires_at ? left(t.owner_expires_at) + " left" : ""}</span>` : `<span class="chip c-waiting">no owner</span>`}
+        <span class="muted" style="font-size:12px">${t.project_names.length ? "projects: " + t.project_names.map(esc).join(", ") : "no projects"}</span></div>
+      ${t.description ? `<div class="ny-c">${esc(clip(t.description, 300))}</div>` : ""}
+      ${t.pending.map(d => `<div class="st" style="margin-top:4px"><span class="link" data-open="${d.id}">#${d.id}</span> ${d.ready ? "ready to deploy" : d.status === "open" ? "collecting" : esc(d.status.replace("_", " ")) + (d.assignee ? " · " + esc(d.assignee) : "")}: ${shipList(d.ships)}</div>`).join("") || '<div class="st muted">No pending ship requests.</div>'}
+      ${t.last_deploy ? `<div class="st" style="margin-top:4px">Last deploy <span class="link" data-open="${t.last_deploy.id}">#${t.last_deploy.id}</span> ${ago(t.last_deploy.closed_at)}${t.last_deploy.output ? ": " + esc(clip(t.last_deploy.output, 200)) : ""}<div class="muted" style="font-size:12px">shipped ${shipList(t.last_deploy.ships)}</div></div>` : '<div class="st muted">Never deployed.</div>'}
+    </div>`).join("");
 }
 
 function renderBlocked() {
@@ -769,7 +784,7 @@ async function needsYouAction(t) {
 async function refresh() {
   const r = await fetch("/api/state"); S = await r.json();
   if (S.dev_build) { if (window._build && window._build !== S.dev_build) return location.reload(); window._build = S.dev_build; }
-  renderSelects(); renderCapacity(); renderNext(); renderProjects(); renderAgents(); renderEvents(); renderSettings(); renderTakeovers(); renderBlocked();
+  renderSelects(); renderCapacity(); renderNext(); renderProjects(); renderAgents(); renderEvents(); renderSettings(); renderTakeovers(); renderBlocked(); renderTargets();
   renderGraph(false); renderLog(false); pollNeedsYou().catch(() => {}); pollInbox().catch(() => {});
   $("#stamp").textContent = "updated " + new Date().toLocaleTimeString();
   if (openItem != null && $("#drawer").classList.contains("open")) openDrawer(openItem);

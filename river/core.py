@@ -719,6 +719,27 @@ def target_show(conn, name):
     return t
 
 
+def targets_view(conn, ann=None):
+    """Each target with its owner, projects, open deploy items (with what they ship), and last finished deploy."""
+    ann = ann if ann is not None else annotate(conn)
+    ships = lambda a: [{"id": b, "title": ann[b]["title"], "status": ann[b]["status"], "project": ann[b]["project"]}
+                       for b in a["waits_on"] if b in ann]
+    out = []
+    for t in target_list(conn):
+        deploys = [a for a in ann.values() if a["kind"] == "deploy" and a["target"] == t["name"]]
+        pending = sorted((a for a in deploys if a["status"] in OPEN_STATES), key=lambda a: a["id"])
+        done = sorted((a for a in deploys if a["status"] == "done"), key=lambda a: a["closed_at"] or "")
+        last = done[-1] if done else None
+        out.append(dict(t,
+            project_names=[r["name"] for r in conn.execute(
+                "SELECT name FROM projects WHERE target=? AND archived=0 ORDER BY rank, id", (t["name"],))],
+            pending=[{"id": a["id"], "title": a["title"], "status": a["status"], "assignee": a["assignee"],
+                      "ready": a["ready"], "ships": ships(a)} for a in pending],
+            last_deploy=({"id": last["id"], "title": last["title"], "closed_at": last["closed_at"],
+                          "output": last["output"], "ships": ships(last)} if last else None)))
+    return out
+
+
 # ---------------------------------------------------------------- items
 
 def _item(conn, item_id):
@@ -2495,6 +2516,7 @@ def state(conn):
         "items": [{k: v for k, v in a.items() if k != "sort_key"} for a in items if not a["project_archived"]],
         "agents": [agent_status(conn, r["name"]) for r in conn.execute("SELECT name FROM agents ORDER BY name")],
         "capacity": capacity(conn, ann),
+        "targets": targets_view(conn, ann),
         "settings": config_list(conn),
         "events": recent_events(conn),
         "takeovers": takeovers(conn),
