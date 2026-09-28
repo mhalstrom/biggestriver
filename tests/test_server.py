@@ -1,4 +1,5 @@
 import os
+import re
 import tempfile
 import unittest
 
@@ -134,7 +135,7 @@ class LaunchAgent(unittest.TestCase):
                 del os.environ["RIVER_DB"]
             else:
                 os.environ["RIVER_DB"] = old
-        self.assertRegex(sent[0], r"RIVER_DB=\S*q\.db claude go")
+        self.assertRegex(sent[0], r"RIVER_DB=\S*q\.db'? claude go")  # the path is quoted when it needs it
 
     def test_dispatch_starts_a_named_session_for_one_item(self):
         core.project_add(self.c, "shop", path=self.dir.name)
@@ -409,7 +410,7 @@ class SetupGuide(unittest.TestCase):
         self.assertEqual(labels, ["Claude Code", "Codex"])
         # Codex's sandbox writes only in the project folder: the command lets it write the queue too.
         codex = dict(core.parse_launch_agents(core.setting(self.c, "launch_agents")))["Codex"]
-        self.assertIn("--add-dir " + str(core.db_path().resolve().parent), codex)
+        self.assertRegex(codex, r"--add-dir [\"']?" + re.escape(str(core.db_path().resolve().parent)))
         self.assertNotIn("{river_dir}", codex)
         with self.assertRaises(RiverError):
             server.setup_agent_add(self.c, "nope")
