@@ -326,10 +326,16 @@ _CLOCK = re.compile(r"^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$")
 def local_zone(name: str = ""):
     """The zone for times a person types and reads: the timezone setting, else the machine's own."""
     if name:
-        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        # UTC needs no time zone database; Windows has none unless the tzdata package is installed.
+        if name.upper() in ("UTC", "Z", "GMT", "ETC/UTC"):
+            return timezone.utc
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
         try:
             return ZoneInfo(name)
         except (ZoneInfoNotFoundError, ValueError):
+            if not available_timezones():
+                raise RiverError(f"time zone {name!r}: this computer has no time zone database (Windows has none "
+                                 f"by default). Install it: python -m pip install tzdata; or use UTC")
             raise RiverError(f"unknown time zone {name!r}: use a name such as America/New_York or UTC")
     return datetime.now().astimezone().tzinfo
 

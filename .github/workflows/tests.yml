@@ -40,8 +40,10 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
-      - name: Tests (standard library only)
-        run: python -m unittest discover -s tests -t . -v
+      - name: Tests (standard library, plus tzdata: Windows has no time zone database)
+        run: |
+          python -m pip install --quiet tzdata
+          python -m unittest discover -s tests -t . -v
       - name: Desktop smoke test (river serve starts and stops)
         if: always()
         working-directory: desktop

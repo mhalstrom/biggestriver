@@ -112,6 +112,19 @@ class Ordering(Base):
         self.assertEqual([(n["to_agent"], n["body"].split(" ended")[0]) for n in notes],
                          [("ag", f"the wait on #{y} agent step")])
 
+    def test_zones_without_a_time_zone_database(self):
+        # Windows has no zone database unless tzdata is installed: UTC still works, other names say how to fix it.
+        from unittest import mock
+        import zoneinfo
+        def missing(name):
+            raise zoneinfo.ZoneInfoNotFoundError(name)
+        with mock.patch.object(zoneinfo, "ZoneInfo", missing), mock.patch.object(zoneinfo, "available_timezones", set):
+            self.assertEqual(core.local_zone("UTC").utcoffset(None), timedelta(0))
+            with self.assertRaisesRegex(RiverError, "pip install tzdata"):
+                core.local_zone("America/New_York")
+        with self.assertRaisesRegex(RiverError, "unknown time zone"):
+            core.local_zone("Mars/Olympus")
+
     def test_parse_when(self):
         start = core.parse_iso("2026-09-27T15:00:00Z")  # a Sunday
         w = lambda s: core.iso(core.parse_when(s, start=start))
