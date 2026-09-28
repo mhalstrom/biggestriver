@@ -106,6 +106,8 @@ on this computer. The Codex command gets `--add-dir <river data folder>`, so its
 sandbox can write the queue.
 
 To see it with sample data first: `./seed/example.sh` on an empty database.
+The pictures in `site/img/` come from `seed/shoot.js` (demo data from `seed/screenshots.sh`):
+`cd desktop && npm ci && npx electron ../seed/shoot.js`.
 
 ## Use it
 

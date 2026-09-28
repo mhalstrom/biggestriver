@@ -34,4 +34,16 @@ $R --as alex edit 4 --due "$(date -u -v+5d +%Y-%m-%d 2>/dev/null || date -u -d +
 $R --as alex add website "Resize the product photos" --doer human \
   --context "The photos in web/public/products/ are 4000 px wide." >/dev/null                            # 10
 $R --as web-agent takeover 10 --note "A script in web/scripts/ can resize them" >/dev/null
+# Goals: an outcome with a test for done, owned by one agent that plans and takes its items.
+$R --as alex goal add website checkout-launch --outcome "Customers can pay for an order on the new checkout" \
+  --done-when "A test order goes from cart to paid on staging" >/dev/null
+for i in 4 7 8; do $R --as alex edit $i --goal checkout-launch >/dev/null; done
+$R --as web-agent goal own checkout-launch >/dev/null
+# A deploy target: finished work ships in one deploy item, after one review of the whole release.
+$R target add storefront --description "web/ to Cloudflare Pages, api/ to Fly.io; a push to main deploys" >/dev/null
+$R project target website storefront >/dev/null
+$R project target backend storefront >/dev/null
+$R --as api-agent target own storefront >/dev/null
+$R config set review on >/dev/null
+$R --as alex ship 1 >/dev/null
 echo "Loaded. Try: river serve --open, river status, river go --project website"
