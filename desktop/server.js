@@ -26,6 +26,14 @@ function findPython(candidates = PYTHONS) {
   return null;
 }
 
+// The Python a packaged app carries (scripts/fetch-python.js puts it in river-app/python), or null:
+// then the app looks for one on the Mac (npm start in the repo).
+function bundledPython(riverRoot) {
+  const exe = process.platform === "win32" ? path.join(riverRoot, "python", "python.exe")
+    : path.join(riverRoot, "python", "bin", "python3");
+  return fs.existsSync(exe) ? [exe] : null;
+}
+
 function freePort() {
   return new Promise((resolve, reject) => {
     const s = net.createServer();
@@ -46,7 +54,8 @@ function get(url) {
 // Start the server from the river folder (the repo, or the app's bundled copy). Resolves to
 // { url, port, child, stop } once /api/state answers; rejects with a message a person can act on.
 async function startRiver({ riverRoot, python, env = process.env, timeoutMs = 20000, find = findPython } = {}) {
-  const py = python || find();
+  const own = python ? null : bundledPython(riverRoot);
+  const py = python || own || find();
   if (!py) throw new Error("Biggest River needs Python 3.10 or newer. Install it (" + (process.platform === "win32"
     ? "from python.org, or: winget install Python.Python.3.13" : "for example: brew install python") + "), then open the app again.");
   const [pyCmd, ...pyArgs] = Array.isArray(py) ? py : [py];
@@ -54,7 +63,9 @@ async function startRiver({ riverRoot, python, env = process.env, timeoutMs = 20
   if (!fs.existsSync(bin)) throw new Error(`river is missing from ${riverRoot}`);
   const port = await freePort();
   const child = spawn(pyCmd, [...pyArgs, bin, "serve", "--port", String(port)],
-    { cwd: riverRoot, env: { ...env, RIVER_DESKTOP: "1" }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    { cwd: riverRoot, env: { ...env, RIVER_DESKTOP: "1",
+      // The app's own Python writes no .pyc files into the app bundle (they would break its signature).
+      ...(own ? { PYTHONDONTWRITEBYTECODE: "1", PYTHONNOUSERSITE: "1" } : {}) }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   let log = "";
   child.stdout.on("data", (d) => { log += d; });
   child.stderr.on("data", (d) => { log += d; });
@@ -75,4 +86,4 @@ async function startRiver({ riverRoot, python, env = process.env, timeoutMs = 20
   throw new Error(`river serve did not answer on ${url} within ${timeoutMs / 1000}s:\n${log.trim().slice(-800)}`);
 }
 
-module.exports = { findPython, freePort, startRiver };
+module.exports = { findPython, bundledPython, freePort, startRiver };

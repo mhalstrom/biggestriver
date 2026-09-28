@@ -37,3 +37,21 @@ test("starts river serve on a free port, in desktop mode, and stops it", async (
 test("says clearly when Python is missing", async () => {
   await assert.rejects(startRiver({ riverRoot: repo, find: () => null }), /needs Python 3\.10 or newer/);
 });
+
+test("a packaged app starts river with the Python it carries, without looking for one", { skip: process.platform === "win32" }, async () => {
+  // A copy of the app's river-app folder: river and bin from the repo, python/bin/python3 = this machine's Python.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "river-app-"));
+  fs.symlinkSync(path.join(repo, "river"), path.join(root, "river"));
+  fs.symlinkSync(path.join(repo, "bin"), path.join(root, "bin"));
+  fs.mkdirSync(path.join(root, "python", "bin"), { recursive: true });
+  const real = require("node:child_process").execFileSync(findPython()[0], ["-c", "import sys; print(sys.executable)"], { encoding: "utf8" }).trim();
+  fs.symlinkSync(real, path.join(root, "python", "bin", "python3"));
+  const r = await startRiver({ riverRoot: root, find: () => null, env: { ...process.env, RIVER_DB: path.join(root, "t.db") } });
+  try {
+    assert.strictEqual((await fetchJson(r.url + "api/state")).desktop, true);
+    assert.strictEqual(r.child.spawnargs[0], path.join(root, "python", "bin", "python3"));
+  } finally {
+    await r.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
