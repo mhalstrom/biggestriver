@@ -913,18 +913,18 @@ def item_edit(conn, item_id, title=None, notes=None, doer=None, project=None, ac
             if t != it["due"]:
                 conn.execute("UPDATE items SET due=?, due_warned=0 WHERE id=?", (t, it["id"]))
                 _event(conn, it["id"], actor, f"due {show_time(t, zone)}" if t else "due date removed")
-        if title is not None:
+        if title is not None and title != it["title"]:
             conn.execute("UPDATE items SET title=? WHERE id=?", (title, it["id"]))
             _event(conn, it["id"], actor, "title changed")
-        if notes is not None:
+        if notes is not None and notes != it["notes"]:
             conn.execute("UPDATE items SET notes=? WHERE id=?", (notes, it["id"]))
             _event(conn, it["id"], actor, "notes changed")
-        if doer is not None:
+        if doer is not None and doer != it["doer"]:
             if doer not in DOERS:
                 raise RiverError(f"doer is one of {', '.join(DOERS)}")
             conn.execute("UPDATE items SET doer=? WHERE id=?", (doer, it["id"]))
             _event(conn, it["id"], actor, f"doer {it['doer']} -> {doer}")
-        if project is not None:
+        if project is not None and _project(conn, project)["id"] != it["project_id"]:
             p = _project(conn, project)
             conn.execute("UPDATE items SET project_id=? WHERE id=?", (p["id"], it["id"]))
             _event(conn, it["id"], actor, f"moved to project {project}")

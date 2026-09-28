@@ -823,6 +823,19 @@ class DueDates(Base):
         self.assertIsNone(core.parse_due("none"))
 
 
+class EditHistory(Base):
+    def test_save_without_changes_logs_nothing(self):
+        core.project_add(self.c, "a")
+        x = self.add("a", "x")
+        before = self.c.execute("SELECT COUNT(*) FROM events WHERE item_id=?", (x,)).fetchone()[0]
+        core.item_edit(self.c, x, title="x", notes="", doer="any", project="a", context="", touches=[], check="")
+        after = self.c.execute("SELECT COUNT(*) FROM events WHERE item_id=?", (x,)).fetchone()[0]
+        self.assertEqual(after, before)
+        core.item_edit(self.c, x, title="y", doer="ai")
+        changes = [r[0] for r in self.c.execute("SELECT change FROM events WHERE item_id=? ORDER BY id", (x,))][-2:]
+        self.assertEqual(changes, ["title changed", "doer any -> ai"])
+
+
 class PlanFile(Base):
     PLAN = """# Launch
 - P0 Live test order (human)
