@@ -78,6 +78,8 @@ first only when neither applies (`river add <project> "<title>"`).
 - Something unrelated: `river add "<title>" --found-during <id>`.
   Do not do it inside your current item.
 - Waiting on something outside the queue: `river blocked <id> --reason "<what>"`.
+  Add `--until <time>` (`2h`, `2026-09-28T07:00`, `'mon 07:00 America/New_York'`)
+  when you know when it ends: the item becomes ready by itself then.
 
 ## When you need the user
 

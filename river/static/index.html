@@ -74,6 +74,7 @@ main { padding: 16px; max-width: 1500px; margin: 0 auto; }
 .row .t { overflow: hidden; }
 .row .t .title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row .t .why { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .t .blk { color: var(--wait); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chips { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
 .chip { font-size: 11px; padding: 1px 7px; border-radius: 999px; white-space: nowrap; border: 1px solid transparent; }
 .c-ready { background: var(--ready-bg); color: var(--ready); }
@@ -170,6 +171,10 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
     <div class="panel hidden" id="needsYouPanel">
       <h2>Needs you <span class="spacer"></span><button class="btn" id="copyAll" title="One prompt for an agent that walks you through all of these">Copy prompt for all</button><button class="btn hidden" id="notifyOn">Turn on browser notifications</button></h2>
       <div id="needsYou"></div>
+    </div>
+    <div class="panel hidden" id="blockedPanel">
+      <h2>Blocked outside the queue</h2>
+      <div id="blockedList"></div>
     </div>
     <div class="panel" id="capacity"></div>
     <div class="grid">
@@ -297,7 +302,7 @@ function statusChip(it) {
 function baseStatusChip(it) {
   if (it.status === "open") {
     if (it.ready) return `<span class="chip c-ready">ready</span>`;
-    if (it.blocked_reason) return `<span class="chip c-blocked" title="${esc(it.blocked_reason)}">blocked</span>`;
+    if (it.blocked_reason) return `<span class="chip c-blocked" title="${esc(it.blocked_text)}">${it.blocked_until ? "blocked · " + left(it.blocked_until) : "blocked"}</span>`;
     return `<span class="chip c-waiting">waits on ${it.open_blockers.map(b => "#" + b).join(",")}</span>`;
   }
   const who = it.assignee ? " · " + esc(it.assignee) : "";
@@ -312,7 +317,7 @@ function doerChip(it) { return it.doer === "any" ? "" : `<span class="chip c-${i
 function rowHtml(it, why) {
   return `<div class="row" data-id="${it.id}"${it.status === "open" ? ' draggable="true"' : ""}>
     <div class="id">#${it.id}</div>
-    <div class="t"><div class="title">${esc(it.title)}</div>${why ? `<div class="why">${esc(why)}</div>` : ""}</div>
+    <div class="t"><div class="title">${esc(it.title)}</div>${it.blocked_reason && it.status === "open" ? `<div class="blk">${esc(it.blocked_text)}</div>` : ""}${why ? `<div class="why">${esc(why)}</div>` : ""}</div>
     <div class="chips">${prioChip(it)}${doerChip(it)}${statusChip(it)}</div></div>`;
 }
 
@@ -376,6 +381,15 @@ function renderAgents() {
       ${a.holds.map(h => `<div class="st">holds <span class="link" data-open="${h.id}">#${h.id} ${esc(h.title)}</span>${h.lease_expires_at ? " · " + left(h.lease_expires_at) + " left" : ""}</div>`).join("") || '<div class="st">holds nothing</div>'}
       ${S.items.filter(i => i.status === "open" && i.reserved_until && i.reserved_for === a.name).map(i => `<div class="st">pushed <span class="link" data-open="${i.id}">#${i.id} ${esc(i.title)}</span> · ${left(i.reserved_until)} left · <span class="link" data-unpush="${i.id}">cancel</span></div>`).join("")}
     </div>`).join("") || `<div class="muted">No agents registered.</div>`;
+}
+
+function renderBlocked() {
+  const B = S.items.filter(i => i.blocked_reason && !["done", "dropped"].includes(i.status));
+  $("#blockedPanel").classList.toggle("hidden", !B.length);
+  $("#blockedList").innerHTML = B.map(i => `<div class="ny">
+      <div class="ny-h"><b class="link" data-open="${i.id}">#${i.id} ${esc(i.title)}</b> <span class="chip c-p">${esc(i.project)}</span>${doerChip(i)}</div>
+      <div class="ny-c">${esc(i.blocked_reason)}</div>
+      <div class="muted" style="font-size:12px">${i.blocked_at ? "since " + ago(i.blocked_at) : "since: not recorded"} · ${i.blocked_until ? `until ${esc(i.blocked_until_text)} (${left(i.blocked_until)} left), then ready by itself` : "until someone clears it"}${i.blocked_set_by ? " · set by " + esc(i.blocked_set_by) : ""}</div></div>`).join("");
 }
 
 function renderTakeovers() {
@@ -533,7 +547,8 @@ async function openDrawer(id) {
            <div class="muted" style="font-size:12px;margin-top:4px">Or drag the item row onto an agent. It is reserved for them for a while; their river go takes it first.</div>`}
     </div>` : ""}
     <div class="sec"><h4>Outside blocker</h4>
-      ${it.blocked_reason ? `<div>${esc(it.blocked_reason)} <span class="link" data-do="unblock">clear</span></div>` : `<div class="actions"><input id="dBlock" placeholder="waiting on …" style="flex:1"><button class="btn" data-do="block">Set</button></div>`}
+      ${it.blocked_reason ? `<div>${esc(it.blocked_text)} <span class="link" data-do="unblock">clear</span></div>${it.blocked_at ? `<div class="muted" style="font-size:12px">since ${ago(it.blocked_at)}${it.blocked_until ? ", ready by itself in " + left(it.blocked_until) : ""}</div>` : ""}`
+        : `<div class="actions"><input id="dBlock" placeholder="waiting on …" style="flex:1"><input id="dUntil" placeholder="until (optional): 2h, mon 07:00" style="width:170px"><button class="btn" data-do="block">Set</button></div>`}
     </div>
     <div class="sec"><h4>History</h4>${it.events.map(e => `<div class="ev">${ago(e.at)} · <b>${esc(e.actor)}</b> ${esc(e.change)}</div>`).join("")}</div>`;
   d.classList.add("open");
@@ -550,7 +565,7 @@ async function drawerAction(what) {
     if (what === "reopen") await act("reopen", { id });
     if (what === "unblock") await act("unblock", { id });
     if (what === "push") { const to = $("#dPushTo").value; if (to) { await act("push", { id, to, note: $("#dPushNote").value.trim() || undefined }); toast(`Pushed #${id} to ${to}`); } }
-    if (what === "block") { const r = $("#dBlock").value.trim(); if (r) await act("block", { id, reason: r }); }
+    if (what === "block") { const r = $("#dBlock").value.trim(), u = $("#dUntil").value.trim(); if (r || u) await act("block", { id, reason: r || undefined, until: u || undefined }); }
     if (what === "dep") { const on = $("#dDep").value.split(/[\s,]+/).filter(Boolean).map(Number); if (on.length) await act("dep_add", { id, on }); }
     if (what === "save") {
       await act("item_edit", { id, title: $("#dTitle").value, notes: $("#dNotes").value, context: $("#dContext").value, touches: $("#dTouches").value, check: $("#dCheck").value, doer: $("#dDoer").value, project: $("#dProject").value !== it.project ? $("#dProject").value : undefined });
@@ -649,7 +664,7 @@ async function needsYouAction(t) {
 async function refresh() {
   const r = await fetch("/api/state"); S = await r.json();
   if (S.dev_build) { if (window._build && window._build !== S.dev_build) return location.reload(); window._build = S.dev_build; }
-  renderSelects(); renderCapacity(); renderNext(); renderProjects(); renderAgents(); renderEvents(); renderSettings(); renderTakeovers();
+  renderSelects(); renderCapacity(); renderNext(); renderProjects(); renderAgents(); renderEvents(); renderSettings(); renderTakeovers(); renderBlocked();
   renderGraph(false); renderLog(false); pollNeedsYou().catch(() => {});
   $("#stamp").textContent = "updated " + new Date().toLocaleTimeString();
   if (openItem != null && $("#drawer").classList.contains("open")) openDrawer(openItem);

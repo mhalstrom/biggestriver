@@ -81,6 +81,50 @@ class Ordering(Base):
         core.unblock(self.c, x)
         self.assertEqual(len(core.ready_list(self.c)), 1)
 
+    def test_timed_blocker_ends_by_itself(self):
+        core.project_add(self.c, "a")
+        core.register(self.c, "sam", human=True)
+        core.register(self.c, "ag")
+        x = self.add("a", "file the EIN form", doer="human")
+        y = self.add("a", "agent step")
+        core.block(self.c, x, "IRS form closed", "ag", until="2m")
+        core.block(self.c, y, None, "ag", until="3h")
+        a = core.annotate(self.c)
+        self.assertFalse(a[x]["ready"])
+        self.assertTrue(a[x]["blocked_text"].startswith("blocked until "))
+        self.assertEqual(a[y]["blocked_reason"], "waiting for a set time")
+        self.assertEqual(core.needs_you(self.c), [])
+        with self.assertRaises(RiverError):
+            core.block(self.c, x, "x", "ag", until="2020-01-01T00:00Z")
+        with self.assertRaises(RiverError):
+            core.block(self.c, x, None, "ag")
+        # Time passes: the sweep that every command runs clears both blockers.
+        past = core.iso(core.now() - timedelta(seconds=1))
+        self.c.execute("UPDATE items SET blocked_until=?", (past,))
+        core.activity(self.c, "ag")
+        a = core.annotate(self.c)
+        self.assertTrue(a[x]["ready"] and a[y]["ready"])
+        self.assertIsNone(a[x]["blocked_until"])
+        self.assertEqual([n["item_id"] for n in core.needs_you(self.c)], [x])
+        notes = self.c.execute("SELECT to_agent, body FROM messages WHERE kind='notice'").fetchall()
+        self.assertEqual([(n["to_agent"], n["body"].split(" ended")[0]) for n in notes],
+                         [("ag", f"the wait on #{y} agent step")])
+
+    def test_parse_when(self):
+        start = core.parse_iso("2026-09-27T15:00:00Z")  # a Sunday
+        w = lambda s: core.iso(core.parse_when(s, start=start))
+        self.assertEqual(w("2h"), "2026-09-27T17:00:00Z")
+        self.assertEqual(w("mon 07:00 America/New_York"), "2026-09-28T11:00:00Z")
+        self.assertEqual(w("Monday 7am America/New_York"), "2026-09-28T11:00:00Z")
+        self.assertEqual(w("2026-09-28T07:00-04:00"), "2026-09-28T11:00:00Z")
+        self.assertEqual(w("tomorrow 9 UTC"), "2026-09-28T09:00:00Z")
+        self.assertEqual(w("sun 10:00 UTC"), "2026-10-04T10:00:00Z")  # today's has passed
+        self.assertEqual(w("16:00 UTC"), "2026-09-27T16:00:00Z")
+        for bad in ("soon", "25:00", "mon 07:00 Mars/Base"):
+            with self.assertRaises(RiverError):
+                w(bad)
+        self.assertEqual(core.show_time("2026-09-28T11:00:00Z", "America/New_York")[-9:], " 7:00 EDT")
+
 
 class Claims(Base):
     def setUp(self):

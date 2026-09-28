@@ -57,7 +57,7 @@ OPS = {
     "release": lambda c, a, who: core.release(c, a["id"], a.get("note"), who),
     "drop": lambda c, a, who: core.drop(c, a["id"], who),
     "reopen": lambda c, a, who: core.reopen(c, a["id"], who),
-    "block": lambda c, a, who: core.block(c, a["id"], a["reason"], who),
+    "block": lambda c, a, who: core.block(c, a["id"], a.get("reason"), who, a.get("until")),
     "unblock": lambda c, a, who: core.unblock(c, a["id"], who),
     "register": lambda c, a, who: core.register(c, a["name"], bool(a.get("human")), a.get("note", "")),
     "config_set": lambda c, a, who: core.config_set(c, a["key"], str(a["value"]), a.get("project"), a.get("item"),

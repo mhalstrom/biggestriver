@@ -53,6 +53,7 @@ DEFAULT_SETTINGS = {
     "smtp_port": "587",
     "smtp_user": "",
     "email_batch_window": "10m",
+    "timezone": "",
 }
 
 SCHEMA = """
@@ -87,6 +88,9 @@ CREATE TABLE IF NOT EXISTS items (
   status            TEXT NOT NULL DEFAULT 'open'
                     CHECK (status IN ('open','in_progress','held','done','dropped')),
   blocked_reason    TEXT,
+  blocked_at        TEXT,
+  blocked_until     TEXT,
+  blocked_set_by    TEXT,
   assignee          TEXT,
   claimed_at        TEXT,
   lease_expires_at  TEXT,
@@ -226,6 +230,96 @@ def parse_duration(s: str) -> timedelta:
             "h": timedelta(hours=n), "d": timedelta(days=n)}[unit]
 
 
+WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+_DAY_NAMES = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+_CLOCK = re.compile(r"^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$")
+
+
+def local_zone(name: str = ""):
+    """The zone for times a person types and reads: the timezone setting, else the machine's own."""
+    if name:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        try:
+            return ZoneInfo(name)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise RiverError(f"unknown time zone {name!r}: use a name such as America/New_York or UTC")
+    return datetime.now().astimezone().tzinfo
+
+
+def parse_when(s: str, zone: str = "", start: datetime | None = None) -> datetime:
+    """A future moment from what a person types, in UTC.
+
+    Accepts a duration ('2h', '3d'), an ISO time ('2026-09-28T07:00', with Z or an
+    offset, else in the zone), or '[day] [time] [zone]' where day is today,
+    tomorrow, a weekday (mon .. sun, the next one), or YYYY-MM-DD, time is 7,
+    07:00, or 7am, and zone is a name such as America/New_York. A weekday or a
+    time alone means the next such moment; a day alone means its midnight."""
+    start = start or now()
+    text = s.strip()
+    if _DURATION.match(text):
+        return start + parse_duration(text)
+    words = text.split()
+    if words and "/" in words[-1] or (words and words[-1].upper() in ("UTC", "Z")):
+        zone, words = ("UTC" if words[-1].upper() in ("UTC", "Z") else words[-1]), words[:-1]
+    tz = local_zone(zone)
+    if len(words) == 1 and "T" in words[0]:
+        try:
+            t = datetime.fromisoformat(words[0].replace("Z", "+00:00"))
+        except ValueError:
+            raise RiverError(f"bad time {s!r}: use for example 2026-09-28T07:00")
+        t = t if t.tzinfo else t.replace(tzinfo=tz)
+        return t.astimezone(timezone.utc).replace(microsecond=0)
+    here = start.astimezone(tz)
+    day = weekday = clock = None
+    for w in words:
+        lw = w.lower()
+        if lw in ("today", "tomorrow"):
+            day = here.date() + timedelta(days=1 if lw == "tomorrow" else 0)
+        elif lw[:3] in WEEKDAYS and lw in (WEEKDAYS[WEEKDAYS.index(lw[:3])], _DAY_NAMES[WEEKDAYS.index(lw[:3])]):
+            weekday = WEEKDAYS.index(lw[:3])
+        elif re.match(r"^\d{4}-\d{2}-\d{2}$", lw):
+            day = datetime.strptime(lw, "%Y-%m-%d").date()
+        elif _CLOCK.match(lw):
+            m = _CLOCK.match(lw)
+            h, mi = int(m.group(1)), int(m.group(2) or 0)
+            if m.group(3):
+                h = h % 12 + (12 if m.group(3) == "pm" else 0)
+            if h > 23 or mi > 59:
+                raise RiverError(f"bad time of day {w!r}")
+            clock = (h, mi)
+        else:
+            raise RiverError(f"bad time {s!r}: use a duration (2h), an ISO time (2026-09-28T07:00), "
+                             f"or a day and time such as 'mon 07:00 America/New_York'")
+    if day is None and weekday is None and clock is None:
+        raise RiverError(f"bad time {s!r}: give a day, a time of day, or both")
+    h, mi = clock or (0, 0)
+
+    def at(d):
+        return datetime(d.year, d.month, d.day, h, mi, tzinfo=tz)
+
+    if day is not None:
+        t = at(day)
+    elif weekday is not None:
+        t = at(here.date() + timedelta(days=(weekday - here.weekday()) % 7))
+        if t <= here:
+            t += timedelta(days=7)
+    else:
+        t = at(here.date())
+        if t <= here:
+            t = at(here.date() + timedelta(days=1))
+    return t.astimezone(timezone.utc)
+
+
+def show_time(iso_s: str | None, zone: str = "") -> str:
+    """'Mon 7:00 EDT' for a stored UTC time, in the zone; the date too when it is more than six days away."""
+    if not iso_s:
+        return ""
+    tz = local_zone(zone)
+    t = parse_iso(iso_s).astimezone(tz)
+    day = t.strftime("%a") if abs((t - now().astimezone(tz)).days) < 6 else t.strftime("%a %Y-%m-%d")
+    return f"{day} {t.hour}:{t.minute:02d} {t.strftime('%Z')}".strip()
+
+
 # ---------------------------------------------------------------- connection
 
 def db_path() -> Path:
@@ -272,6 +366,9 @@ def _migrate(conn):
             conn.execute(f"ALTER TABLE items ADD COLUMN {col} {typ}")
     if "found_during" not in icols:
         conn.execute("ALTER TABLE items ADD COLUMN found_during INTEGER REFERENCES items(id)")
+    if "blocked_until" not in icols:
+        for col in ("blocked_at", "blocked_until", "blocked_set_by"):
+            conn.execute(f"ALTER TABLE items ADD COLUMN {col} TEXT")
     if "reserved_for" not in icols:
         conn.execute("ALTER TABLE items ADD COLUMN reserved_for TEXT")
         conn.execute("ALTER TABLE items ADD COLUMN hold_expires_at TEXT")
@@ -1111,19 +1208,32 @@ def _resume_holds(conn, closed_id):
     return back
 
 
-def block(conn, item_id, reason, actor=None):
-    """Record a blocker that is not an item in the queue ("waiting on Stripe review")."""
+def block(conn, item_id, reason=None, actor=None, until=None):
+    """Record a blocker that is not an item in the queue ("waiting on Stripe review").
+
+    With `until` (see parse_when) the blocker ends by itself at that time: the
+    sweep clears it, and the item is ready again."""
+    if not reason and not until:
+        raise RiverError("say what the item waits on: --reason \"<what>\", --until <time>, or both")
     with tx(conn):
         it = _item(conn, item_id)
-        conn.execute("UPDATE items SET blocked_reason=? WHERE id=?", (reason, it["id"]))
-        _event(conn, it["id"], actor, f"blocked: {reason}")
+        zone = setting(conn, "timezone")
+        t = iso(parse_when(until, zone)) if until else None
+        if t and t <= iso(now()):
+            raise RiverError(f"{until!r} is not in the future ({show_time(t, zone)})")
+        reason = reason or "waiting for a set time"
+        conn.execute("UPDATE items SET blocked_reason=?, blocked_until=?, blocked_set_by=?, "
+                     "blocked_at=COALESCE(CASE WHEN blocked_reason IS NOT NULL THEN blocked_at END, ?) WHERE id=?",
+                     (reason, t, actor, iso(now()), it["id"]))
+        _event(conn, it["id"], actor, f"blocked: {reason}" + (f" (until {show_time(t, zone)})" if t else ""))
     return item_show(conn, item_id)
 
 
 def unblock(conn, item_id, actor=None):
     with tx(conn):
         it = _item(conn, item_id)
-        conn.execute("UPDATE items SET blocked_reason=NULL WHERE id=?", (it["id"],))
+        conn.execute("UPDATE items SET blocked_reason=NULL, blocked_until=NULL, blocked_at=NULL, blocked_set_by=NULL "
+                     "WHERE id=?", (it["id"],))
         _event(conn, it["id"], actor, "outside blocker cleared")
     return item_show(conn, item_id)
 
@@ -1153,6 +1263,7 @@ def annotate(conn):
     """Compute readiness, effective priority, unblock counts, and sort keys for every item."""
     projects, items, waits_on, waited_by, conflicts, feeds = _load_graph(conn)
     is_open = {i: items[i]["status"] in OPEN_STATES for i in items}
+    zone = setting(conn, "timezone")
 
     # Open dependents, transitive, of each open item.
     memo: dict[int, frozenset] = {}
@@ -1208,6 +1319,9 @@ def annotate(conn):
             ready=ready,
             depth=depth(i) if is_open[i] else None,
         )
+        a["blocked_until_text"] = show_time(it["blocked_until"], zone)
+        a["blocked_text"] = ("" if not it["blocked_reason"] else "blocked" + (
+            f" until {a['blocked_until_text']}" if it["blocked_until"] else "") + f": {it['blocked_reason']}")
         a["reason"] = _reason(a)
         a["sort_key"] = (eff, p["rank"], -len(deps_i), it["rank"], it["created_at"], i)
         out[i] = a
@@ -1358,6 +1472,16 @@ def _sweep(conn):
         for who in {r["reserved_for"], r["reserved_by"]} - {None}:
             _send(conn, "notice", "river", f"the push of #{r['id']} {r['title']} to {r['reserved_for']} expired "
                   f"without an answer; it is open to every agent again", to=who, item_id=r["id"])
+    for r in conn.execute("SELECT id, title, blocked_reason, blocked_set_by, doer FROM items "
+                          "WHERE blocked_until <= ? AND blocked_reason IS NOT NULL", (t,)).fetchall():
+        conn.execute("UPDATE items SET blocked_reason=NULL, blocked_until=NULL, blocked_at=NULL, blocked_set_by=NULL "
+                     "WHERE id=?", (r["id"],))
+        _event(conn, r["id"], "river", f"wait ended ({r['blocked_reason']}); outside blocker cleared")
+        # A person's item reaches them through Needs you (sync_needs_you opens it once it is ready);
+        # for other items, tell whoever set the wait.
+        if r["blocked_set_by"] and r["doer"] != "human":
+            _send(conn, "notice", "river", f"the wait on #{r['id']} {r['title']} ended "
+                  f"({r['blocked_reason']}); it can start now", to=r["blocked_set_by"], item_id=r["id"])
     for r in conn.execute("SELECT id, assignee FROM items WHERE status='held' AND hold_expires_at < ?", (t,)).fetchall():
         _unhold(conn, r["id"], "river", f"hold expired (was {r['assignee']}); released")
         _send(conn, "notice", "river", f"your hold on #{r['id']} expired, so it is open to every agent now, and its "
@@ -1670,7 +1794,7 @@ def claim(conn, item_id, actor=None):
         a = annotate(conn)[_item(conn, item_id)["id"]]
         if not a["ready"]:
             why = (f"waits on {', '.join('#' + str(b) for b in a['open_blockers'])}" if a["open_blockers"]
-                   else f"blocked: {a['blocked_reason']}" if a["blocked_reason"]
+                   else a["blocked_text"] if a["blocked_reason"]
                    else f"conflicts with {', '.join('#' + str(b) for b in a['busy_conflicts'])}, which is in progress "
                         f"(both edit the same files)" if a["busy_conflicts"] and a["status"] == "open"
                    else f"status is {a['status']}" + (f" (held by {a['assignee']})" if a["assignee"] else ""))
@@ -1918,7 +2042,7 @@ def blockers(conn, item_id):
             left = int((parse_iso(a["lease_expires_at"]) - now()).total_seconds())
         return {
             "id": i, "title": a["title"], "status": a["status"], "assignee": a["assignee"],
-            "ready": a["ready"], "blocked_reason": a["blocked_reason"], "lease_seconds_left": left,
+            "ready": a["ready"], "blocked_reason": a["blocked_reason"], "blocked_text": a["blocked_text"], "lease_seconds_left": left,
             "busy_conflicts": [{"id": c, "title": ann[c]["title"], "assignee": ann[c]["assignee"]}
                                for c in a["busy_conflicts"]],
             "children": [node(b, trail | {i}) for b in a["waits_on"]
@@ -2453,7 +2577,7 @@ def go(conn, cwd, actor=None, project=None, role=None):
     if role == "planner" or (role is None and needs_plan):
         brief.update(role="planner", item=None,
                      open_items=[{"id": a["id"], "title": a["title"], "blocked_reason": a["blocked_reason"],
-                                  "open_blockers": a["open_blockers"]} for a in open_in_area],
+                                  "blocked_text": a["blocked_text"], "open_blockers": a["open_blockers"]} for a in open_in_area],
                      why=("the project has no open items" if not open_in_area
                           else "every open item waits on something outside the queue"))
         _set_role_note(conn, actor, "planner", None)
@@ -2535,7 +2659,8 @@ def plan(conn, cwd, actor=None, project=None):
     focus = [a for a in live if not names or a["project"] in names]
     brief_item = lambda a: {"id": a["id"], "project": a["project"], "title": a["title"]}
     no_notes = [a for a in focus if not a["notes"].strip() and not a["context"].strip() and a["kind"] != "deploy"]
-    stuck = [dict(brief_item(a), reason=a["blocked_reason"], holds_up=a["unblocks_count"])
+    stuck = [dict(brief_item(a), reason=a["blocked_reason"], blocked_text=a["blocked_text"],
+                  blocked_until=a["blocked_until"], holds_up=a["unblocks_count"])
              for a in focus if a["blocked_reason"]]
     stuck.sort(key=lambda x: -x["holds_up"])
     return {

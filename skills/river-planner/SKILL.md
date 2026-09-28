@@ -77,7 +77,7 @@ river undep <id> --on <id> ...
 river prio <id> <0-4>               # 0 is most important
 river move <id> --before|--after <id>   # manual order inside a project
 river edit <id> [--title] [--notes] [--doer] [--project] [--context] [--touches ...] [--check]
-river blocked <id> --reason "..." / river unblock <id>
+river blocked <id> --reason "..." [--until "mon 07:00 America/New_York"] / river unblock <id>
 river drop <id> / river reopen <id>
 ```
 

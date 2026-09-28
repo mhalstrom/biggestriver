@@ -94,7 +94,7 @@ def _fmt_item(a, show_reason=True):
     elif a["open_blockers"]:
         flags.append("waits on " + ",".join(f"#{b}" for b in a["open_blockers"]))
     elif a["blocked_reason"]:
-        flags.append(f"blocked: {a['blocked_reason']}")
+        flags.append(a["blocked_text"])
     elif a.get("busy_conflicts"):
         flags.append("conflicts with " + ",".join(f"#{b}" for b in a["busy_conflicts"]) + " (in progress)")
     else:
@@ -181,7 +181,7 @@ def _print_tree(n, prefix="", last=True, root=True):
     who = f", {n['assignee']}{left}" if n["assignee"] else ""
     state = "ready" if n["ready"] else n["status"]
     if n["blocked_reason"]:
-        state += f', blocked: "{n["blocked_reason"]}"'
+        state += ", " + n["blocked_text"]
     for c in n.get("busy_conflicts", []):
         state += f", conflicts with #{c['id']} held by {c['assignee']}"
     label = f"#{n['id']} {n['title']}  ({state}{who})"
@@ -397,7 +397,9 @@ def build_parser():
     x.add_argument("id", type=int); x.add_argument("titles", nargs="+"); x.add_argument("--doer", default="any", choices=core.DOERS)
     x = sub.add_parser("keep", help="hold an item again while you do its open prerequisites"); x.add_argument("id", type=int)
     x = sub.add_parser("undep", help="remove waits or conflict links"); x.add_argument("id", type=int); x.add_argument("--on", type=int, nargs="+", required=True)
-    x = sub.add_parser("blocked", help="record a blocker outside the queue"); x.add_argument("id", type=int); x.add_argument("--reason", required=True)
+    x = sub.add_parser("blocked", help="record a blocker outside the queue, optionally until a time")
+    x.add_argument("id", type=int); x.add_argument("--reason")
+    x.add_argument("--until", help="it ends by itself then: 2h, 2026-09-28T07:00, or 'mon 07:00 America/New_York'")
     x = sub.add_parser("unblock", help="clear an outside blocker"); x.add_argument("id", type=int)
     x = sub.add_parser("blockers", help="tree of what an item waits on"); x.add_argument("id", type=int)
 
@@ -700,7 +702,7 @@ def dispatch(conn, a, actor):
     if c == "undep":
         return core.dep_remove(conn, a.id, a.on, actor)
     if c == "blocked":
-        return core.block(conn, a.id, a.reason, actor)
+        return core.block(conn, a.id, a.reason, actor, a.until)
     if c == "unblock":
         return core.unblock(conn, a.id, actor)
     if c == "blockers":
@@ -809,7 +811,7 @@ def render_plan(b):
     section("Projects with no description", q["projects_without_description"],
             lambda n: f"{n}   ({r} project describe {n} \"...\")")
     section("Stuck on something outside the queue", q["stuck"],
-            lambda x: f"#{x['id']:<4} [{x['project']}] {_cut(x['title'], 60)}: {x['reason']}"
+            lambda x: f"#{x['id']:<4} [{x['project']}] {_cut(x['title'], 60)}  ({x['blocked_text']})"
                       + (f" (holds up {x['holds_up']})" if x["holds_up"] else ""))
     section("Waiting on a human", q["human_waiting"], lambda x: f"#{x['id']:<4} [{x['project']}] {_cut(x['title'])}")
     section("Items with no notes or context", q["items_without_notes"],
@@ -894,7 +896,7 @@ def render_go(b):
         if b.get("open_items"):
             out.append("Open items that cannot move:")
             for o in b["open_items"]:
-                why = f"blocked: {o['blocked_reason']}" if o["blocked_reason"] else (
+                why = o["blocked_text"] if o["blocked_reason"] else (
                     "waits on " + ",".join(f"#{x}" for x in o["open_blockers"]) if o["open_blockers"] else "held")
                 out.append(f"  #{o['id']} {o['title']}  ({why})")
         out += [
