@@ -89,12 +89,23 @@ main { padding: 16px; max-width: 1500px; margin: 0 auto; }
 .c-ai { border-color: var(--line); color: var(--muted); }
 .c-p0 { background: var(--warn-bg); color: var(--warn); font-weight: 600; }
 .c-p { border-color: var(--line); color: var(--muted); }
-.proj { margin-bottom: 14px; }
-.proj-h { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-.proj-h b { font-size: 15px; }
-.proj-h .counts { color: var(--muted); font-size: 12px; }
-.pdesc { font-size: 12px; color: var(--muted); margin: 0 0 6px 22px; }
-.proj-h .rk { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+/* Projects tab: one card per project, so where one project ends and the next begins is plain. */
+.proj { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 14px; background: var(--bg); }
+.proj-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.proj-h b { font-size: 17px; overflow-wrap: anywhere; }
+.proj-h .rk { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px; border-radius: 6px; background: var(--wait-bg); color: var(--muted); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.proj-h .fold { background: none; border: 0; cursor: pointer; color: var(--muted); font-size: 13px; padding: 0 2px; width: 18px; }
+.proj-h .spacer { flex: 1; }
+.pmeta { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+.pmeta code { font-size: 12px; overflow-wrap: anywhere; }
+.pdesc { font-size: 13px; color: var(--ink); margin: 8px 0 0; line-height: 1.45; }
+.pcounts { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 0; }
+.pcounts .chip b { font-variant-numeric: tabular-nums; margin-right: 3px; }
+.pwho { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+.pwho b { color: var(--ink); font-weight: 600; }
+.psec { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 14px 0 6px; }
+.proj .goals { margin: 0 0 4px; }
+.proj.closed .pbody { display: none; }
 .iconbtn { background: none; border: 1px solid var(--line); border-radius: 5px; cursor: pointer; padding: 0 6px; color: var(--muted); }
 details summary { cursor: pointer; color: var(--muted); font-size: 12px; padding: 4px 6px; }
 .agent { padding: 8px 0; border-top: 1px solid var(--line); }
@@ -488,6 +499,8 @@ function renderNext() {
   $("#next").innerHTML = ready.slice(0, 5).map(i => rowHtml(i, i.reason)).join("") || `<div class="muted">Nothing is ready${area ? " in " + esc(area) : ""}.</div>`;
 }
 
+// Projects folded closed on the Projects tab, remembered in this browser.
+function projClosed() { try { return JSON.parse(store("river.projClosed") || "[]"); } catch (e) { return []; } }
 function renderProjects() {
   const showDone = $("#showDone").checked;
   const G = goalSel(), goals = S.goals || [];
@@ -499,15 +512,30 @@ function renderProjects() {
     const closed = all.filter(i => ["done", "dropped"].includes(i.status));
     const ready = open.filter(i => i.ready).length, prog = open.filter(i => ["in_progress", "held"].includes(i.status)).length;
     const order = (a, b) => (b.ready - a.ready) || (a.effective_priority - b.effective_priority) || (b.unblocks_count - a.unblocks_count) || (a.rank - b.rank);
-    return `<div class="proj">
-      <div class="proj-h"><span class="rk">${p.rank}.</span><b>${esc(p.name)}</b>
+    const closedSet = projClosed(), isClosed = closedSet.includes(p.name);
+    const who = [...new Set(open.filter(i => i.assignee && ["in_progress", "held"].includes(i.status)).map(i => i.assignee))];
+    const home = p.path ? p.path.replace(/^\/(Users|home)\/[^/]+/, "~") : "";
+    const meta = [home ? `folder <code>${esc(home)}</code>` : "no folder",
+      p.target ? `deploys to <b>${esc(p.target)}</b>` : "", p.tracker ? `tracker ${esc(p.tracker)}` : ""].filter(Boolean);
+    const count = (n, label, cls) => `<span class="chip ${n ? cls : "c-p"}"><b>${n}</b>${label}</span>`;
+    return `<div class="proj${isClosed ? " closed" : ""}" id="proj-${esc(p.name)}">
+      <div class="proj-h">
+        <button class="fold" data-fold="${esc(p.name)}" title="${isClosed ? "Show" : "Hide"} this project's goals and items" aria-expanded="${!isClosed}">${isClosed ? "▸" : "▾"}</button>
+        <span class="rk" title="Project rank: 1 is the most important">${p.rank}</span><b>${esc(p.name)}</b>
+        <span class="spacer"></span>
         <button class="iconbtn" data-rank="${esc(p.name)}" data-to="${p.rank - 1}" title="more important">↑</button>
-        <button class="iconbtn" data-rank="${esc(p.name)}" data-to="${p.rank + 1}" title="less important">↓</button>
-        <span class="counts">${open.length} open · ${ready} ready · ${prog} in progress · ${closed.length} done</span></div>
-      <div class="pdesc">${p.notes ? esc(p.notes) : '<span class="muted">No description.</span>'} <span class="link" data-describe="${esc(p.name)}">edit</span></div>
-      <div class="goals">${pg.map(goalCard).join("")}<span class="link" style="font-size:12px;align-self:center" data-addgoal="${esc(p.name)}">${pg.length ? "+ goal" : "No goals yet. + Add a goal"}</span></div>
-      ${open.sort(order).map(i => rowHtml(i, i.notes)).join("")}
-      ${showDone && closed.length ? closed.map(i => rowHtml(i, i.output)).join("") : ""}
+        <button class="iconbtn" data-rank="${esc(p.name)}" data-to="${p.rank + 1}" title="less important">↓</button></div>
+      <div class="pmeta">${meta.map(m => `<span>${m}</span>`).join("")}</div>
+      <div class="pcounts">${count(ready, "ready", "c-ready")}${count(prog, "in progress", "c-in_progress")}${count(open.length, "open", "c-p")}${count(closed.length, "done", "c-p")}${pg.length ? count(pg.length, pg.length === 1 ? "goal" : "goals", "c-p") : ""}</div>
+      <div class="pbody">
+        <div class="pdesc">${p.notes ? esc(p.notes) : '<span class="muted">No description.</span>'} <span class="link" data-describe="${esc(p.name)}">edit</span></div>
+        <div class="pwho">${who.length ? "Working here now: " + who.map(n => `<b>${esc(n)}</b>`).join(", ") : "Nobody works here now."}</div>
+        <div class="psec">Goals</div>
+        <div class="goals">${pg.map(goalCard).join("")}<span class="link" style="font-size:12px;align-self:center" data-addgoal="${esc(p.name)}">${pg.length ? "+ goal" : "No goals yet. + Add a goal"}</span></div>
+        <div class="psec">Open items (${open.length})${ready ? `, ready first` : ""}</div>
+        ${open.sort(order).map(i => rowHtml(i, i.notes)).join("") || '<div class="muted" style="font-size:12px">No open items.</div>'}
+        ${showDone && closed.length ? `<div class="psec">Done (${closed.length})</div>` + closed.map(i => rowHtml(i, i.output)).join("") : ""}
+      </div>
     </div>`;
   }).join("");
   $("#projects").innerHTML = html || `<div class="muted">No projects yet.</div>`;
@@ -1074,6 +1102,7 @@ document.addEventListener("click", async (e) => {
     const args = { key: t.dataset.unset }; if (kind !== "global") args[kind] = kind === "item" ? +name : name;
     return act("config_unset", args).catch(() => {}); }
   if (t.dataset.tab) return setTab(t.dataset.tab);
+  if (t.dataset.fold) { const c = projClosed(), n = t.dataset.fold; store("river.projClosed", JSON.stringify(c.includes(n) ? c.filter(x => x !== n) : c.concat(n))); return renderProjects(); }
 });
 
 $("#actor").addEventListener("change", () => { store("river.actor", $("#actor").value); ibSig = ""; pollInbox().catch(() => {}); });
