@@ -43,6 +43,10 @@ jobs:
       - name: Build the .dmg files (unsigned)
         working-directory: desktop
         run: npm run dist
+      - name: The apps are signed (ad hoc) as a whole; a broken signature makes macOS call the app damaged
+        working-directory: desktop
+        run: |
+          for a in out/mac*/"Biggest River.app"; do codesign --verify --deep --strict "$a" && echo "signature OK: $a"; done
       - name: The app starts river from its own bundle, with its own Python
         working-directory: desktop
         run: |

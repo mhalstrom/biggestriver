@@ -54,9 +54,10 @@
     ],
     "mac": {
       "category": "public.app-category.productivity",
-      "identity": null,
+      "identity": "-",
       "target": "dmg",
-      "icon": "icon.png"
+      "icon": "icon.png",
+      "hardenedRuntime": false
     },
     "dmg": {
       "artifactName": "Biggest-River-${version}-${arch}.${ext}"
