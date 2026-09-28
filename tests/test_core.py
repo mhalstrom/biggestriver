@@ -2032,6 +2032,34 @@ class ReleaseReview(Base):
         self.review = [i for i in self.deploy if core.item_show(self.c, i)["kind"] == "review"][0]
         self.deploy = [i for i in self.deploy if i != self.review][0]
 
+    def test_fail_with_ask_waits_on_the_user_and_adds_only_approved_fixes(self):
+        core.register(self.c, "mark", human=True)
+        core.claim(self.c, self.review, "rev")
+        r = core.review_fail(self.c, self.review, ["null check in form", "rename a variable"],
+                             note="crash on empty form", actor="rev", ask=True)
+        h = r["asked"]["id"]
+        it = core.item_show(self.c, h)
+        self.assertEqual((it["doer"], it["kind"], it["notes"]), ("human", "fixes", "- null check in form\n- rename a variable"))
+        self.assertEqual(core._item(self.c, self.review)["status"], "open")  # released; it waits on the person
+        self.assertIn(h, core.item_show(self.c, self.review)["waits_on"])
+        self.assertIn(h, [e["item_id"] for e in core.needs_you(self.c, "mark")])
+        core.item_edit(self.c, h, notes="- null check in form", actor="mark")  # the person keeps one fix
+        res = core.done(self.c, h, "approved one", "mark")
+        self.assertEqual([f["title"] for f in res["fixes_added"]], ["null check in form"])
+        fix = res["fixes_added"][0]["id"]
+        self.assertIn(fix, core.item_show(self.c, self.review)["waits_on"])
+        self.assertFalse(core.annotate(self.c)[self.review]["ready"])
+        core.claim(self.c, fix, "dev")
+        core.done(self.c, fix, "fixed", "dev")
+        self.assertTrue(core.annotate(self.c)[self.review]["ready"])  # the review comes back after the fix
+
+    def test_fail_with_ask_then_drop_adds_no_fixes(self):
+        core.claim(self.c, self.review, "rev")
+        h = core.review_fail(self.c, self.review, ["something"], actor="rev", ask=True)["asked"]["id"]
+        core.drop(self.c, h, note="the user said no", actor="ops")
+        self.assertTrue(core.annotate(self.c)[self.review]["ready"])
+        self.assertEqual(len(core.item_show(self.c, self.review)["waits_on"]), 3)  # a, b, and the dropped ask
+
     def test_one_review_covers_the_release_and_gates_the_deploy(self):
         rv = core.item_show(self.c, self.review)
         self.assertEqual(sorted(rv["waits_on"]), sorted([self.a, self.b]))

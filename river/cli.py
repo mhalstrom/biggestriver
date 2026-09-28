@@ -213,6 +213,12 @@ def _print_show(a):
         print("  reviews:", ", ".join(f"#{d['id']} {d['title']} ({d['status']})" for d in a["waits_on_detail"]))
     if a.get("fixes"):
         print("  sent back with fixes:", ", ".join(f"#{f['id']} {f['title']} ({f['project']})" for f in a["fixes"]))
+    if a.get("asked"):
+        print(f"  blocked; the user decides first: #{a['asked']['id']} {a['asked']['title']} (in Needs you). "
+              "Done adds the fixes still in its list; drop adds none.")
+    if a.get("fixes_added"):
+        print("  approved fixes added (the release review waits on them):",
+              ", ".join(f"#{f['id']} {f['title']}" for f in a["fixes_added"]))
     elif a["waits_on_detail"]:
         print("  waits on:", ", ".join(f"#{d['id']} {d['title']} ({d['status']}"
                                        + ("; feeds: you read its output" if d.get("kind") == "feeds" else "") + ")"
@@ -507,6 +513,8 @@ def build_parser():
     x.add_argument("id", type=int); x.add_argument("fixes", nargs="+", help="one title per fix item")
     x.add_argument("--note", help="what the review found (goes into each fix item's context)")
     x.add_argument("--project", help="project for the fix items (default: of the first item the review covers)")
+    x.add_argument("--ask", action="store_true",
+                   help="ask the user first: one item for a person lists the proposed fixes; done adds them")
     st = rvs.add_parser("step", help="the review steps of a project: what a release review of it follows")
     sts = st.add_subparsers(dest="scmd", required=True)
     x = sts.add_parser("list", help="the steps of one project, or of all"); x.add_argument("project", nargs="?")
@@ -1068,7 +1076,7 @@ def dispatch(conn, a, actor):
             if a.scmd == "rm":
                 return core.review_step_remove(conn, a.id, actor)
             return core.review_step_move(conn, a.id, a.to, actor)
-        return core.review_fail(conn, a.id, a.fixes, a.note, a.project, actor)
+        return core.review_fail(conn, a.id, a.fixes, a.note, a.project, actor, a.ask)
     if c == "release":
         return core.release(conn, a.id, a.note, actor)
     if c == "drop":
@@ -1395,6 +1403,8 @@ def render_go(b):
             out += [f"  It is good:   {r} review pass {it['id']}{conf} --output \"<what you checked>\"",
                     f"  Problems:     {r} review fail {it['id']} \"<fix 1>\" \"<fix 2>\" --note \"<what you found>\" [--project <name>]",
                     "                (river adds the fixes as items the review waits on; the review comes back after them)",
+                    "                Add --ask to let the user approve the list first (one item in Needs you).",
+                    f"  Findings that do not block the release: {r} add \"<title>\" --found-during {it['id']} --project <name>",
                     "",
                     f"Then continue:  {r} go" + ("   at once, in the same turn." if b.get("auto_continue") else "")]
         elif b.get("has_history") and not b.get("new_name"):

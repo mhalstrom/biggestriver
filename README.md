@@ -248,7 +248,10 @@ blocker trees, the agent registry, capacity, settings, and the web page.
   review. `review_prompt` holds your review process (for example
   `/code-review` or `codex review`); `review_cmd`, when set, must exit 0.
   The reviewer runs `river review pass <id>`, or `river review fail <id>
-  "<fix>" ...`, which adds fix items the review waits on.
+  "<fix>" ...`, which adds fix items the review waits on. With `--ask`, the
+  release waits on the user first: one item in Needs you lists the proposed
+  fixes; the user edits the list and marks it done (river adds the fixes), or
+  drops it (no fixes).
 - Review steps per project: an ordered list the review of each release follows,
   for every project the release ships. `river review step add <project>
   "<instruction>"` adds a written step; `--run "<command>"` adds a command that

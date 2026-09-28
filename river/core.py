@@ -2874,8 +2874,27 @@ def unsynced(conn, actor=None):
              "refs": [x for x in ann[r["id"]]["refs"] if not x["synced_at"]]} for r in rows]
 
 
+def _approved_fixes(conn, it, actor):
+    """A person approved the fixes a review proposed (an item of kind fixes is done): add each '- ' line
+    of its notes as a fix item that the review it blocks waits on."""
+    titles = [l[2:].strip() for l in (it["notes"] or "").splitlines() if l.startswith("- ") and l[2:].strip()]
+    reviews = [r["item_id"] for r in conn.execute(
+        "SELECT d.item_id FROM deps d JOIN items i ON i.id=d.item_id WHERE d.blocked_by=? AND i.kind='review' "
+        f"AND i.status IN {OPEN_STATES}", (it["id"],))]
+    if not titles or not reviews:
+        return []
+    project = _project_name(conn, it["project_id"])
+    added = [item_add(conn, project, t, priority=it["priority"], doer="ai", actor=actor,
+                      context=f"Approved in #{it['id']} ({it['title']}): {it['context']}") for t in titles]
+    for r in reviews:
+        dep_add(conn, r, [a["id"] for a in added], actor)
+    return [{"id": a["id"], "title": a["title"]} for a in added]
+
+
 def done(conn, item_id, output=None, actor=None, ship_it=False, note=None, synced_=False):
     res = _close(conn, item_id, "done", actor, output, note)
+    if res["kind"] == "fixes":
+        res["fixes_added"] = _approved_fixes(conn, _item(conn, item_id), actor)
     if synced_ and res["refs"]:
         res = dict(synced(conn, item_id, actor=actor), now_ready=res["now_ready"], resumed=res["resumed"])
     res["tracker"] = setting(conn, "tracker", item_id=item_id) if res["refs"] else ""
@@ -3130,11 +3149,13 @@ def review_pass(conn, item_id, output=None, actor=None, cwd=None, runner=None, c
     return res
 
 
-def review_fail(conn, item_id, fixes, note=None, project=None, actor=None):
+def review_fail(conn, item_id, fixes, note=None, project=None, actor=None, ask=False):
     """Send a release back: add fix items that the review waits on, and release the review.
 
     The fixes go to the named project, else to the project of the first item the review covers.
-    When they are done, the review is ready again for any reviewer."""
+    When they are done, the review is ready again for any reviewer. With ask, the release waits on the
+    user first: one item for a person lists the proposed fixes; done adds the fixes still in its list
+    (the person may edit it), drop adds none. Either way the review comes back afterwards."""
     it = _review_item(conn, item_id, actor)
     fixes = [f.strip() for f in fixes if f and f.strip()]
     if not fixes:
@@ -3145,6 +3166,19 @@ def review_fail(conn, item_id, fixes, note=None, project=None, actor=None):
         if r is None:
             raise RiverError("the review covers no items; name the project for the fixes: --project <name>")
         project = r["name"]
+    if ask:
+        body = "\n".join(f"- {t}" for t in fixes)
+        h = item_add(conn, project, f"Release {it['target']} is blocked: approve {len(fixes)} proposed fix(es)",
+                     priority=it["priority"], doer="human", actor=actor, notes=body,
+                     context=(f"The review of release {it['target']} (#{it['id']}) found problems that block it"
+                              + (f": {note}" if note else "") + ". The proposed fixes are the '- ' lines in the notes. "
+                              "Keep, edit, or delete lines, then mark this done: river adds each remaining line as a fix "
+                              "item the release waits on. Drop it to add no fixes; the review then comes back."))
+        conn.execute("UPDATE items SET kind='fixes' WHERE id=?", (h["id"],))
+        dep_add(conn, it["id"], [h["id"]], actor, mode="release")
+        res = item_show(conn, it["id"])
+        res["asked"] = {"id": h["id"], "title": h["title"], "fixes": fixes}
+        return res
     added = [item_add(conn, project, t, priority=it["priority"], doer="ai", actor=actor,
                       context=f"Found in the review of release {it['target']} (#{it['id']})" + (f": {note}" if note else ""))
              for t in fixes]

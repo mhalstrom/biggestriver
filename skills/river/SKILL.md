@@ -68,6 +68,10 @@ A person registers with `--human`.
    must exit 0), or
    `river review fail <id> "<fix>" ... --note "<what you found>"`: river adds
    the fixes as items the review waits on, and the review comes back after them.
+   With `--ask`, the user approves the list first: river adds one item for the
+   user with the proposed fixes; done adds the fixes still in its list, drop
+   adds none. Findings that do not block the release are ordinary items:
+   `river add "<title>" --found-during <review-id>`, then pass.
 
 ## Owning a goal
 
