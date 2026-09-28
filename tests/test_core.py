@@ -1074,6 +1074,24 @@ class GoalClaim(Base):
     def left(self, when):
         return core.parse_iso(when) - core.now()
 
+    def test_owner_can_give_a_goal_item_and_the_other_agent_claims_it(self):
+        core.goal_own(self.c, "g1", "ag")
+        core.register(self.c, "cy")
+        core.give(self.c, self.x, "bo", "ag")
+        it = core._item(self.c, self.x)
+        self.assertEqual((it["reserved_for"], it["reserved_by"]), ("bo", "ag"))
+        self.assertIsNotNone(it["reserved_until"])  # it comes back to the goal if bo does not take it
+        with self.assertRaisesRegex(RiverError, "reserved for bo"):
+            core.claim(self.c, self.x, "cy")
+        self.assertEqual(core.claim(self.c, self.x, "bo")["assignee"], "bo")
+        with self.assertRaisesRegex(RiverError, "not yours to give"):
+            core.give(self.c, self.loose, "bo", "cy")  # nobody's goal item: nothing to give
+
+    def test_a_goal_item_pushed_to_another_agent_can_be_accepted(self):
+        core.goal_own(self.c, "g1", "ag")
+        core.push(self.c, self.x, "bo", actor="ag")
+        self.assertEqual(core.accept(self.c, self.x, "bo")["assignee"], "bo")
+
     def test_owner_gets_the_goal_items_others_do_not(self):
         core.goal_own(self.c, "g1", "ag")
         ann = core.annotate(self.c)

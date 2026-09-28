@@ -1861,6 +1861,17 @@ def _accept_offers(conn, holder, helper, t):
                  "WHERE kind='offer' AND state='open' AND to_agent=? AND from_agent=?", (t, t, holder, helper))
 
 
+def _goal_holder(conn, item_id):
+    """Who owns an open goal of an open agent item right now (its items are reserved for them), or None."""
+    it = _item(conn, item_id)
+    if it["status"] != "open" or it["doer"] == "human":
+        return None
+    g = conn.execute("SELECT g.owner FROM item_goals ig JOIN goals g ON g.id=ig.goal_id WHERE ig.item_id=? "
+                     "AND g.status='open' AND g.owner IS NOT NULL AND g.owner_expires_at >= ? ORDER BY g.rank LIMIT 1",
+                     (item_id, iso(now()))).fetchone()
+    return g["owner"] if g else None
+
+
 def give(conn, item_id, to, actor=None):
     """Hand an item you hold (or that is reserved for you) to another agent; the lease moves with it."""
     with tx(conn):
@@ -1888,6 +1899,12 @@ def give(conn, item_id, to, actor=None):
                     conn.execute("UPDATE items SET reserved_for=? WHERE id=? AND reserved_for=?", (to, r, actor))
         elif it["reserved_for"] == actor and it["status"] == "open":
             conn.execute("UPDATE items SET reserved_for=? WHERE id=?", (to, it["id"]))
+        elif it["status"] == "open" and not it["reserved_for"] and _goal_holder(conn, it["id"]) == actor:
+            # A goal owner hands on one of the goal's items: it is reserved for the other agent like a push,
+            # and comes back to the goal when they do not take it within reserve_ttl.
+            ttl = parse_duration(setting(conn, "reserve_ttl", item_id=it["id"], agent=to))
+            conn.execute("UPDATE items SET reserved_for=?, reserved_until=?, reserved_by=? WHERE id=?",
+                         (to, iso(t + ttl), actor, it["id"]))
         else:
             raise RiverError(f"#{item_id} is not yours to give (" + (f"{it['status']} by {it['assignee']}" if it["assignee"]
                              else f"reserved for {it['reserved_for']}" if it["reserved_for"] else it["status"]) + ")")
@@ -2755,7 +2772,8 @@ def _claim_row(conn, item_id, actor):
                          f"(the user is told, and can undo it): river takeover {item_id} --note \"<how you will do it>\"")
     if it0["reserved_for"] and it0["reserved_for"] != actor:
         raise RiverError(f"refused: #{item_id} is reserved for {it0['reserved_for']}, who holds the item it unblocks")
-    if ag["kind"] == "ai" and it0["doer"] != "human":
+    # A goal's items are its owner's, unless one was pushed or given to this agent.
+    if ag["kind"] == "ai" and it0["doer"] != "human" and it0["reserved_for"] != actor:
         g = conn.execute("SELECT g.name, g.owner FROM item_goals ig JOIN goals g ON g.id=ig.goal_id WHERE ig.item_id=? "
                          "AND g.status='open' AND g.owner IS NOT NULL AND g.owner<>? AND g.owner_expires_at >= ? "
                          "ORDER BY g.rank LIMIT 1", (item_id, actor, iso(now()))).fetchone()
