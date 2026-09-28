@@ -220,7 +220,7 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
         </div>
       </div>
       <div>
-        <div class="panel"><h2>Agents</h2><div id="agents"></div>
+        <div class="panel"><h2>Agents <span class="spacer"></span><label class="sub hidden" id="showIdleWrap"><input type="checkbox" id="showIdle"> <span id="showIdleText"></span></label></h2><div id="agents"></div>
           <details style="margin-top:8px"><summary>Register an agent or person</summary>
             <div class="form" style="margin-top:8px">
               <div class="two"><input id="regName" placeholder="name"><label style="flex-direction:row;display:flex;align-items:center;gap:6px"><input type="checkbox" id="regHuman"> human</label></div>
@@ -428,7 +428,7 @@ function renderProjects() {
         <button class="iconbtn" data-rank="${esc(p.name)}" data-to="${p.rank + 1}" title="less important">↓</button>
         <span class="counts">${open.length} open · ${ready} ready · ${prog} in progress · ${closed.length} done</span></div>
       <div class="pdesc">${p.notes ? esc(p.notes) : '<span class="muted">No description.</span>'} <span class="link" data-describe="${esc(p.name)}">edit</span></div>
-      ${pg.length ? `<div class="goals">${pg.map(goalCard).join("")}</div>` : ""}
+      <div class="goals">${pg.map(goalCard).join("")}<span class="link" style="font-size:12px;align-self:center" data-addgoal="${esc(p.name)}">${pg.length ? "+ goal" : "No goals yet. + Add a goal"}</span></div>
       ${open.sort(order).map(i => rowHtml(i, i.notes)).join("")}
       ${showDone && closed.length ? closed.map(i => rowHtml(i, i.output)).join("") : ""}
     </div>`;
@@ -443,8 +443,18 @@ function ago(iso) {
 }
 function left(iso) { const m = Math.round((Date.parse(iso) - Date.now()) / 60000); return m >= 60 * 24 ? Math.round(m / 1440) + "d" : m >= 60 ? Math.round(m / 60) + "h" : m + "m"; }
 
+// An agent session not seen for away_after, holding and owning nothing, has most likely stopped: hide it.
+// People always show, and so does any agent that still holds an item, owns a goal or target, or has a push waiting.
+function agentShown(a) {
+  if (a.kind === "human" || a.state === "active" || a.holds.length || (a.owns || []).length) return true;
+  if ((S.goals || []).some(g => g.owner === a.name && g.status === "open")) return true;
+  return S.items.some(i => i.status === "open" && i.reserved_until && i.reserved_for === a.name);
+}
 function renderAgents() {
-  $("#agents").innerHTML = S.agents.map(a => `<div class="agent" data-agent="${esc(a.name)}">
+  const hidden = S.agents.filter(a => !agentShown(a)), showIdle = $("#showIdle").checked;
+  $("#showIdleWrap").classList.toggle("hidden", !hidden.length);
+  $("#showIdleText").textContent = `show ${hidden.length} stopped`;
+  $("#agents").innerHTML = S.agents.filter(a => showIdle || agentShown(a)).map(a => `<div class="agent" data-agent="${esc(a.name)}">
       <div><span class="dot ${a.state}"></span><span class="nm">${esc(a.name)}</span> <span class="chip ${a.kind === "human" ? "c-human" : "c-ai"}">${a.kind === "human" ? "human" : "agent"}</span>${a.session ? ` <span class="muted" style="font-size:12px" title="Claude Code session">session ${esc(a.session)}${a.session_ref ? " [" + esc(a.session_ref) + "]" : ""}</span>` : ""}</div>
       <div class="st">${a.state}, seen ${ago(a.last_seen)}${a.note ? " · " + esc(a.note) : ""}</div>
       ${(S.goals || []).filter(g => g.owner === a.name && g.status === "open").map(g => `<div class="st">owns goal <span class="link" data-goal="${esc(g.name)}">${esc(g.name)}</span>${g.owner_expires_at ? " · " + left(g.owner_expires_at) + " left" : ""}</div>`).join("")}
@@ -880,6 +890,7 @@ async function refresh() {
 
 document.addEventListener("click", async (e) => {
   const t = e.target;
+  if (t.dataset.addgoal) { const d = $("#goalName").closest("details"); d.open = true; $("#goalProject").value = t.dataset.addgoal; d.scrollIntoView({ block: "center" }); $("#goalName").focus(); return; }
   if (t.dataset.goalAct) return goalAction(t.dataset.goalAct, t.dataset.g);
   if (t.dataset.untag) { await act("item_edit", { id: openItem, untag: [t.dataset.untag] }).catch(() => {}); return openDrawer(openItem); }
   const card = t.closest("[data-goal]"); if (card) { const g = card.dataset.goal; setGoal(goalSel() === g ? "" : g); return; }
@@ -953,6 +964,7 @@ $("#goalGo").addEventListener("click", async () => {
 });
 $("#area").addEventListener("change", renderNext);
 $("#showDone").addEventListener("change", renderProjects);
+$("#showIdle").addEventListener("change", renderAgents);
 $("#graphProject").addEventListener("change", () => renderGraph(true));
 $("#graphDone").addEventListener("change", () => renderGraph(true));
 $("#logProject").addEventListener("change", () => renderLog(true));
