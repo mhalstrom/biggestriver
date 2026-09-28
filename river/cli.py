@@ -43,7 +43,19 @@ More:
   river --help         every command
 """
 
+# The block river init puts in AGENTS.md: only what an agent needs before its first river command.
+# How to work (keep going, wait, report) is in the go and plan briefings, which update with river.
 AGENT_SNIPPET = """## Work queue
+
+This project uses Biggest River (`river`) to track work and who is doing it.
+When the user says "go" (or asks you to take work from the queue), run
+`river go` in this folder and follow the briefing it prints, to its end.
+When the user says "plan", run `river plan` and follow its briefing.
+"""
+
+# Earlier versions of the block, longest first; river init replaces them with AGENT_SNIPPET,
+# and river go says when a folder still has one.
+_WAIT_BLOCK = """## Work queue
 
 This project uses Biggest River (`river`) to track work and who is doing it.
 When the user says "go" (or asks you to take work from the queue), run
@@ -57,8 +69,6 @@ finished.
 When the user says "plan", run `river plan` instead and ask the user what
 outcome they want before you add items.
 """
-
-# Earlier versions of the block, longest first; river init replaces them with AGENT_SNIPPET.
 _KEEP_GOING_BLOCK = """## Work queue
 
 This project uses Biggest River (`river`) to track work and who is doing it.
@@ -80,7 +90,7 @@ gives you a role and an item, and says what to run when you finish.
 When the user says "plan", run `river plan` instead and ask the user what
 outcome they want before you add items.
 """
-OLD_SNIPPETS = [_KEEP_GOING_BLOCK, _PLAN_BLOCK, _PLAN_BLOCK.split('When the user says "plan"')[0]]
+OLD_SNIPPETS = [_WAIT_BLOCK, _KEEP_GOING_BLOCK, _PLAN_BLOCK, _PLAN_BLOCK.split('When the user says "plan"')[0]]
 
 SETUP = """Setting up agents to use river
 
@@ -775,6 +785,22 @@ def _append_block(f):
     return f"{f.name}: added the work queue block"
 
 
+def old_blocks(conn, cwd):
+    """Instructions files in this folder's projects that still hold an earlier agent block."""
+    dirs = {Path(core._project(conn, n)["path"]) for n in core.projects_for_dir(conn, cwd)} or {Path(cwd)}
+    found = []
+    for d in sorted(dirs):
+        for name in ("AGENTS.md", "CLAUDE.md"):
+            f = d / name
+            try:
+                text = f.read_text(errors="replace")
+            except OSError:
+                continue
+            if AGENT_SNIPPET not in text and any(prev in text for prev in OLD_SNIPPETS):
+                found.append(str(f))
+    return found
+
+
 def _imports_agents(text):
     """CLAUDE.md that imports AGENTS.md (a line @AGENTS.md): Claude Code reads the same rules as other agents."""
     return any(line.strip() == "@AGENTS.md" for line in text.splitlines())
@@ -1005,7 +1031,9 @@ def dispatch(conn, a, actor):
     if c == "log":
         return core.completed(conn, a.project, None if a.since == "all" else a.since)
     if c == "go":
-        return core.go(conn, os.getcwd(), actor, a.project, a.role, a.session)
+        res = core.go(conn, os.getcwd(), actor, a.project, a.role, a.session)
+        res["old_blocks"] = old_blocks(conn, os.getcwd())
+        return res
     if c == "plan":
         return core.plan(conn, os.getcwd(), actor, a.project)
     if c == "next":
@@ -1177,6 +1205,7 @@ def render_status(res):
 
 
 PLAN_RULES = """You are a PLANNER. Talk with the user about what they want done, then write it into the queue.
+Ask the user what outcome they want before you add items.
 Change the plan only; do not take or do the work (claims refuse for this session).
   Projects:      {r} project add <name> --description "..." [--path <dir>] [--target <t>]   (describe, rank, target)
   Items:         {r} add <project> "<title>" --doer ai|human --context "..." --touches <files> --check "<cmd>"
@@ -1253,6 +1282,9 @@ def render_go(b):
     r = f"river --as {me}"
     out = []
     out.append(f"You are river agent {me}. Role: {b['role'].upper()}. ({b['why']})")
+    if b.get("old_blocks"):
+        out.append(f"This folder's agent block is old ({', '.join(b['old_blocks'])}): run river init there to update "
+                   "it. This briefing is current; follow it.")
     if b["new_name"]:
         out.append(f"Your shell may not keep environment variables, so pass --as {me} on every river command.")
     if not b.get("session"):
@@ -1426,7 +1458,8 @@ def render_go(b):
             f"Wait for work: {r} wait",
             "  It returns when work is pushed to you, an item gets ready here, or a message comes (give the shell",
             "  command a 10-minute time limit). Then do what it prints: WORK: run go. No work yet: run wait again.",
-            "  END: no work came within wait_max; stop, and tell the user this session has ended.",
+            "  END: no work came within wait_max; stop, tell the user this session has ended, and report",
+            "  everything you finished in it.",
             f"  To work in another project instead: river project list, then {r} go --project <name>.",
         ]
     msg = _unread_text(b.get("messages") or {"unread": 0, "questions": 0}, me)

@@ -1,3 +1,5 @@
+import contextlib
+import io
 import os
 import tempfile
 import threading
@@ -1828,10 +1830,31 @@ class AgentBlock(unittest.TestCase):
             old.write_text("# Notes\n\n" + cli._PLAN_BLOCK)
             self.assertIn("updated", cli._append_block(old))
             text = old.read_text()
-            self.assertIn("Keep going", text)
+            self.assertIn(cli.AGENT_SNIPPET, text)
             self.assertEqual(text.count("## Work queue"), 1)
             self.assertIn("already", cli._append_block(old))
             self.assertEqual(new.read_text(), cli.AGENT_SNIPPET)
+
+    def test_go_names_an_old_block_until_init_updates_it(self):
+        from pathlib import Path
+        from river import cli
+        with tempfile.TemporaryDirectory() as d:
+            c = core.connect(Path(d, "r.db"))
+            core.project_add(c, "p", path=d)
+            f = Path(d, "AGENTS.md").resolve()  # the project keeps the resolved path (/tmp is /private/tmp on macOS)
+            f.write_text("# Rules\n\n" + cli._WAIT_BLOCK)
+            self.assertEqual(cli.old_blocks(c, d), [str(f)])
+            core.register(c, "ag")
+            b = core.go(c, d, "ag")
+            b["old_blocks"] = cli.old_blocks(c, d)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                cli.render_go(b)
+            self.assertIn(f"agent block is old ({f})", out.getvalue())
+            self.assertIn("updated", cli._append_block(f))
+            self.assertEqual(cli.old_blocks(c, d), [])
+            self.assertEqual(f.read_text(), "# Rules\n\n" + cli.AGENT_SNIPPET)
+            c.close()
 
     def test_instructions_one_file_for_every_agent(self):
         from pathlib import Path

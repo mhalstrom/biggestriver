@@ -2,15 +2,8 @@
 
 This project uses Biggest River (`river`) to track work and who is doing it.
 When the user says "go" (or asks you to take work from the queue), run
-`river go` in this folder and follow the briefing it prints: it names you,
-gives you a role and an item, and says what to run when you finish.
-Keep going: after each `river done`, run `river go` again at once and take the
-next item. When go gives you no item, run `river wait` as the briefing says:
-it returns when work comes, and ends the session after a while without work.
-Stop when wait says END or you need the user, then report everything you
-finished.
-When the user says "plan", run `river plan` instead and ask the user what
-outcome they want before you add items.
+`river go` in this folder and follow the briefing it prints, to its end.
+When the user says "plan", run `river plan` and follow its briefing.
 
 ## Working on Biggest River itself
 
