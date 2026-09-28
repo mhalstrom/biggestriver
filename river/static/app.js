@@ -1,68 +1,21 @@
 import { $, esc, store, actor, toast, act, ago, left, clip, copyText, fillSelect, hooks } from "./lib.js";
+import { chip, statusChip, prioChip, prioNumChip, doerChip, projectChip, ownerChip, countChip } from "./components/chip.js";
+import { bar, pct, capacityBars } from "./components/bar.js";
+import { nyCard, goalCard, projCard, agentCard } from "./components/card.js";
+import { itemRow, itemOrder, doneRow } from "./components/itemRow.js";
 hooks.refresh = refresh;
 let S = null, openItem = null, tab = "board", graphSig = "";
 
 let actorPicked = false;
 
-function statusChip(it) {
-  const pushed = it.status === "open" && it.reserved_until ? `<span class="chip c-human" title="pushed by ${esc(it.reserved_by || "?")}">pushed · ${esc(it.reserved_for)}</span>` : "";
-  return pushed + baseStatusChip(it);
-}
-function baseStatusChip(it) {
-  if (it.status === "open") {
-    if (it.ready) return `<span class="chip c-ready">ready</span>`;
-    if (it.blocked_reason) return `<span class="chip c-blocked" title="${esc(it.blocked_text)}">${it.blocked_until ? "blocked · " + left(it.blocked_until) : "blocked"}</span>`;
-    return `<span class="chip c-waiting">waits on ${it.open_blockers.map(b => "#" + b).join(",")}</span>`;
-  }
-  const who = it.assignee ? " · " + esc(it.assignee) : "";
-  return `<span class="chip c-${it.status}">${it.status.replace("_", " ")}${who}</span>`;
-}
-function prioChip(it) {
-  const inh = it.priority_from != null ? ` ← #${it.priority_from}` : "";
-  return `<span class="chip ${it.effective_priority === 0 ? "c-p0" : "c-p"}" title="own priority P${it.priority}">P${it.effective_priority}${inh}</span>`;
-}
-function dueChip(it) {
-  if (!it.effective_due || ["done", "dropped"].includes(it.status)) return "";
-  const cls = it.due_state === "overdue" ? "c-p0" : it.due_state === "soon" ? "c-blocked" : "c-p";
-  const word = it.due_state === "overdue" ? "overdue" : "due " + left(it.effective_due);
-  return `<span class="chip ${cls}" title="due ${esc(it.due_text)}${it.due_from ? " (from #" + it.due_from + ")" : ""}">${word}</span>`;
-}
 // Goal filter: "" all items, "__none" items without a goal, else one goal's items.
 function goalSel() { return $("#goalFilter").value; }
 function inGoal(it) { const g = goalSel(); return !g || (g === "__none" ? !(it.goals || []).length : (it.goals || []).includes(g)); }
-function goalChips(it) { return (it.goals || []).map(g => `<span class="chip c-goal" title="goal">${esc(g)}</span>`).join(""); }
-function goalCard(g) {
-  const total = g.items_open.length + g.items_done.length, pct = total ? Math.round(100 * g.items_done.length / total) : 0;
-  const me = actor(), open = g.status === "open";
-  const tip = (g.outcome ? g.outcome : "No outcome written.") + (g.done_when ? "\nDone when: " + g.done_when : "") + (g.result ? "\nResult: " + g.result : "");
-  const acts = [
-    `<span class="link" data-goal-act="up" data-g="${esc(g.name)}" title="more important">↑</span>`,
-    `<span class="link" data-goal-act="down" data-g="${esc(g.name)}" title="less important">↓</span>`,
-    open && me && g.owner !== me ? `<span class="link" data-goal-act="own" data-g="${esc(g.name)}">own</span>` : "",
-    open && me && g.owner === me ? `<span class="link" data-goal-act="release" data-g="${esc(g.name)}">release</span>` : "",
-    `<span class="link" data-goal-act="edit" data-g="${esc(g.name)}">edit</span>`,
-    open ? `<span class="link" data-goal-act="done" data-g="${esc(g.name)}">complete</span>` : `<span class="link" data-goal-act="reopen" data-g="${esc(g.name)}">reopen</span>`,
-  ].filter(Boolean).join("");
-  return `<div class="goal${goalSel() === g.name ? " on" : ""}${open ? "" : " complete"}" data-goal="${esc(g.name)}" title="${esc(tip)}">
-    <div class="gh"><b>${esc(g.name)}</b>${open ? (g.owner ? `<span class="chip c-ai">owner · ${esc(g.owner)}</span>` : `<span class="chip c-waiting">no owner</span>`) : `<span class="chip c-done" style="text-decoration:none">complete</span>`}</div>
-    <div class="bar"><div style="width:${pct}%"></div></div>
-    <div class="go">${g.items_done.length}/${total} done${g.items_open.length ? " · " + g.items_open.length + " open" : ""} · ${esc(open ? (g.outcome || "no outcome") : (g.result || g.outcome))}</div>
-    <div class="ga">${acts}</div></div>`;
-}
-function doerChip(it) { return it.doer === "any" ? "" : `<span class="chip c-${it.doer}">${it.doer === "human" ? "human" : "agent"}</span>`; }
 
-function rowHtml(it, why) {
-  return `<div class="row" data-id="${it.id}"${it.status === "open" ? ' draggable="true"' : ""}>
-    <div class="id">#${it.id}</div>
-    <div class="t"><div class="title">${esc(it.title)}</div>${it.blocked_reason && it.status === "open" ? `<div class="blk">${esc(it.blocked_text)}</div>` : ""}${why ? `<div class="why">${esc(why)}</div>` : ""}</div>
-    <div class="chips">${goalChips(it)}${prioChip(it)}${dueChip(it)}${doerChip(it)}${it.replan && !["done", "dropped"].includes(it.status) ? `<span class="chip c-blocked" title="${it.late_prereqs} prerequisites added while claimed: plan it again">replan</span>` : ""}${statusChip(it)}</div></div>`;
-}
 
 function renderCapacity() {
   const c = S.capacity;
-  const maxL = Math.max(1, ...c.layers.map(l => l.ai + l.human));
-  const layers = c.layers.map(l => `<div class="layer" style="height:${Math.round((l.ai + l.human) / maxL * 100)}%" title="step ${l.depth + 1}: ${l.ai} for agents, ${l.human} for humans">
-      <div class="a" style="flex:${l.ai}"></div><div class="h" style="flex:${l.human}"></div><div class="cap">${l.depth + 1}</div></div>`).join("");
+  const layers = capacityBars(c.layers);
   $("#capacity").innerHTML = `<h2>Parallel work</h2>
     <div class="stats">
       <div class="stat ${c.spare_slots ? "good" : ""}"${c.spare_slots ? ` data-launch="1" style="cursor:pointer" title="Click to start an agent session in Terminal"` : ""}><div class="n">${c.spare_slots}</div><div class="l">open slots: more agent sessions you can start now${c.spare_slots ? " (click to start one)" : ""}</div></div>
@@ -80,7 +33,7 @@ function renderNext() {
   const area = $("#area").value;
   if (area === "__mine") { $("#next").innerHTML = `<div class="muted">Use <b>Claim next</b>: the server picks the ready item closest to what "${esc(actor() || "(choose your name in You are)")}" claimed or finished before.</div>`; return; }
   const ready = S.items.filter(i => i.ready && (!area || i.project === area) && inGoal(i));
-  $("#next").innerHTML = ready.slice(0, 5).map(i => rowHtml(i, i.reason)).join("") || `<div class="muted">Nothing is ready${area ? " in " + esc(area) : ""}.</div>`;
+  $("#next").innerHTML = ready.slice(0, 5).map(i => itemRow(i, i.reason)).join("") || `<div class="muted">Nothing is ready${area ? " in " + esc(area) : ""}.</div>`;
 }
 
 // Projects folded closed on the Projects tab, remembered in this browser.
@@ -95,32 +48,23 @@ function renderProjects() {
     const open = all.filter(i => !["done", "dropped"].includes(i.status));
     const closed = all.filter(i => ["done", "dropped"].includes(i.status));
     const ready = open.filter(i => i.ready).length, prog = open.filter(i => ["in_progress", "held"].includes(i.status)).length;
-    const order = (a, b) => (b.ready - a.ready) || (a.effective_priority - b.effective_priority) || (b.unblocks_count - a.unblocks_count) || (a.rank - b.rank);
     const closedSet = projClosed(), isClosed = closedSet.includes(p.name);
     const who = [...new Set(open.filter(i => i.assignee && ["in_progress", "held"].includes(i.status)).map(i => i.assignee))];
     const home = p.path ? p.path.replace(/^\/(Users|home)\/[^/]+/, "~") : "";
     const meta = [home ? `folder <code>${esc(home)}</code>` : "no folder",
       p.target ? `deploys to <b>${esc(p.target)}</b>` : "", p.tracker ? `tracker ${esc(p.tracker)}` : ""].filter(Boolean);
-    const count = (n, label, cls) => `<span class="chip ${n ? cls : "c-p"}"><b>${n}</b>${label}</span>`;
-    return `<div class="proj${isClosed ? " closed" : ""}" id="proj-${esc(p.name)}">
-      <div class="proj-h">
-        <button class="fold" data-fold="${esc(p.name)}" title="${isClosed ? "Show" : "Hide"} this project's goals and items" aria-expanded="${!isClosed}">${isClosed ? "▸" : "▾"}</button>
-        <span class="rk" title="Project rank: 1 is the most important">${p.rank}</span><b>${esc(p.name)}</b>
-        <span class="spacer"></span>
-        <button class="iconbtn" data-rank="${esc(p.name)}" data-to="${p.rank - 1}" title="more important">↑</button>
-        <button class="iconbtn" data-rank="${esc(p.name)}" data-to="${p.rank + 1}" title="less important">↓</button></div>
-      <div class="pmeta">${meta.map(m => `<span>${m}</span>`).join("")}</div>
-      <div class="pcounts">${count(ready, "ready", "c-ready")}${count(prog, "in progress", "c-in_progress")}${count(open.length, "open", "c-p")}${count(closed.length, "done", "c-p")}${pg.length ? count(pg.length, pg.length === 1 ? "goal" : "goals", "c-p") : ""}</div>
+    const me = actor();
+    return projCard(p, isClosed, `<div class="pmeta">${meta.map(m => `<span>${m}</span>`).join("")}</div>
+      <div class="pcounts">${countChip(ready, "ready", "c-ready")}${countChip(prog, "in progress", "c-in_progress")}${countChip(open.length, "open", "c-p")}${countChip(closed.length, "done", "c-p")}${pg.length ? countChip(pg.length, pg.length === 1 ? "goal" : "goals", "c-p") : ""}</div>
       <div class="pbody">
         <div class="pdesc">${p.notes ? esc(p.notes) : '<span class="muted">No description.</span>'} <span class="link" data-describe="${esc(p.name)}">edit</span></div>
         <div class="pwho">${who.length ? "Working here now: " + who.map(n => `<b>${esc(n)}</b>`).join(", ") : "Nobody works here now."}</div>
         <div class="psec">Goals</div>
-        <div class="goals">${pg.map(goalCard).join("")}<span class="link" style="font-size:12px;align-self:center" data-addgoal="${esc(p.name)}">${pg.length ? "+ goal" : "No goals yet. + Add a goal"}</span></div>
+        <div class="goals">${pg.map(g => goalCard(g, { selected: G === g.name, me })).join("")}<span class="link" style="font-size:12px;align-self:center" data-addgoal="${esc(p.name)}">${pg.length ? "+ goal" : "No goals yet. + Add a goal"}</span></div>
         <div class="psec">Open items (${open.length})${ready ? `, ready first` : ""}</div>
-        ${open.sort(order).map(i => rowHtml(i, i.notes)).join("") || '<div class="muted" style="font-size:12px">No open items.</div>'}
-        ${showDone && closed.length ? `<div class="psec">Done (${closed.length})</div>` + closed.map(i => rowHtml(i, i.output)).join("") : ""}
-      </div>
-    </div>`;
+        ${open.sort(itemOrder).map(i => itemRow(i, i.notes)).join("") || '<div class="muted" style="font-size:12px">No open items.</div>'}
+        ${showDone && closed.length ? `<div class="psec">Done (${closed.length})</div>` + closed.map(i => itemRow(i, i.output)).join("") : ""}
+      </div>`);
   }).join("");
   $("#projects").innerHTML = html || `<div class="muted">No projects yet.</div>`;
 }
@@ -138,8 +82,8 @@ function giveWork(a) {
   const ready = S.items.filter(i => i.ready && i.doer !== "human" && i.kind === "work" && !i.reserved_for
     && (!where.length || where.includes(i.project)));
   const since = a.waiting_since ? ` since ${ago(a.waiting_since)}` : "";
-  if (!ready.length) return `<div class="st"><span class="chip c-ready">waiting${since}</span> no ready item in ${esc(where.join(", ") || "its projects")}</div>`;
-  return `<div class="st" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="chip c-ready">waiting${since}</span>
+  if (!ready.length) return `<div class="st">${chip("c-ready", "waiting" + since)} no ready item in ${esc(where.join(", ") || "its projects")}</div>`;
+  return `<div class="st" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${chip("c-ready", "waiting" + since)}
     <select data-give-item="${esc(a.name)}" style="max-width:220px">${ready.map(i => `<option value="${i.id}"${giveChoice[a.name] == i.id ? " selected" : ""}>#${i.id} ${esc(clip(i.title, 50))}</option>`).join("")}</select>
     <button class="btn" data-give="${esc(a.name)}">Give work</button></div>`;
 }
@@ -151,36 +95,28 @@ function renderAgents() {
   const hidden = S.agents.filter(a => !agentShown(a)), showIdle = $("#showIdle").checked;
   $("#showIdleWrap").classList.toggle("hidden", !hidden.length);
   $("#showIdleText").textContent = `show ${hidden.length} stopped`;
-  $("#agents").innerHTML = S.agents.filter(a => showIdle || agentShown(a)).map(a => `<div class="agent" data-agent="${esc(a.name)}">
-      <div><span class="dot ${a.state}"></span><span class="nm">${esc(a.name)}</span> <span class="chip ${a.kind === "human" ? "c-human" : "c-ai"}">${a.kind === "human" ? "human" : "agent"}</span>${a.session_url ? ` <a class="link" style="font-size:12px" href="${esc(a.session_url)}" target="_blank" rel="noopener">open session</a>` : ""}${a.session ? ` <span class="muted" style="font-size:12px" title="Claude Code session">session ${esc(a.session)}${a.session_ref ? " [" + esc(a.session_ref) + "]" : ""}</span>` : ""}</div>
-      <div class="st">${a.state}, seen ${ago(a.last_seen)}${a.note ? " · " + esc(a.note) : ""}</div>
+  $("#agents").innerHTML = S.agents.filter(a => showIdle || agentShown(a)).map(a => agentCard(a, `<div class="st">${a.state}, seen ${ago(a.last_seen)}${a.note ? " · " + esc(a.note) : ""}</div>
       ${a.role === "waiting" && !a.holds.length ? giveWork(a) : ""}
       ${(S.goals || []).filter(g => g.owner === a.name && g.status === "open").map(g => `<div class="st">owns goal <span class="link" data-goal="${esc(g.name)}">${esc(g.name)}</span>${g.owner_expires_at ? " · " + left(g.owner_expires_at) + " left" : ""}</div>`).join("")}
       ${a.holds.map(h => `<div class="st">holds <span class="link" data-open="${h.id}">#${h.id} ${esc(h.title)}</span>${h.lease_expires_at ? " · " + left(h.lease_expires_at) + " left" : ""}</div>`).join("") || '<div class="st">holds nothing</div>'}
-      ${S.items.filter(i => i.status === "open" && i.reserved_until && i.reserved_for === a.name).map(i => `<div class="st">pushed <span class="link" data-open="${i.id}">#${i.id} ${esc(i.title)}</span> · ${left(i.reserved_until)} left · <span class="link" data-unpush="${i.id}">cancel</span></div>`).join("")}
-    </div>`).join("") || `<div class="muted">No agents registered.</div>`;
+      ${S.items.filter(i => i.status === "open" && i.reserved_until && i.reserved_for === a.name).map(i => `<div class="st">pushed <span class="link" data-open="${i.id}">#${i.id} ${esc(i.title)}</span> · ${left(i.reserved_until)} left · <span class="link" data-unpush="${i.id}">cancel</span></div>`).join("")}`)).join("") || `<div class="muted">No agents registered.</div>`;
 }
 
 function renderTargets() {
   const T = S.targets || [];
   const shipList = (s) => s.map(x => `<span class="link" data-open="${x.id}">#${x.id}</span> ${esc(clip(x.title, 50))} <span class="muted">(${esc(x.status.replace("_", " "))})</span>`).join("; ") || '<span class="muted">nothing yet</span>';
-  $("#targets").innerHTML = T.map(t => `<div class="ny">
-      <div class="ny-h"><b>${esc(t.name)}</b>
-        ${t.owner ? `<span class="chip c-ai">owner · ${esc(t.owner)}</span><span class="muted" style="font-size:12px">${t.owner_expires_at ? left(t.owner_expires_at) + " left" : ""}</span>` : `<span class="chip c-waiting">no owner</span>`}
-        <span class="muted" style="font-size:12px">${t.project_names.length ? "projects: " + t.project_names.map(esc).join(", ") : "no projects"}</span></div>
-      ${t.description ? `<div class="ny-c">${esc(clip(t.description, 300))}</div>` : ""}
+  $("#targets").innerHTML = T.map(t => nyCard(`<b>${esc(t.name)}</b>
+        ${ownerChip(t.owner)}${t.owner ? `<span class="muted" style="font-size:12px">${t.owner_expires_at ? left(t.owner_expires_at) + " left" : ""}</span>` : ""}
+        <span class="muted" style="font-size:12px">${t.project_names.length ? "projects: " + t.project_names.map(esc).join(", ") : "no projects"}</span>`, `${t.description ? `<div class="ny-c">${esc(clip(t.description, 300))}</div>` : ""}
       ${t.pending.map(d => `<div class="st" style="margin-top:4px"><span class="link" data-open="${d.id}">#${d.id}</span> ${d.ready ? "ready to deploy" : d.status === "open" ? "collecting" : esc(d.status.replace("_", " ")) + (d.assignee ? " · " + esc(d.assignee) : "")}: ${shipList(d.ships)}</div>`).join("") || '<div class="st muted">No pending ship requests.</div>'}
-      ${t.last_deploy ? `<div class="st" style="margin-top:4px">Last deploy <span class="link" data-open="${t.last_deploy.id}">#${t.last_deploy.id}</span> ${ago(t.last_deploy.closed_at)}${t.last_deploy.output ? ": " + esc(clip(t.last_deploy.output, 200)) : ""}<div class="muted" style="font-size:12px">shipped ${shipList(t.last_deploy.ships)}</div></div>` : '<div class="st muted">Never deployed.</div>'}
-    </div>`).join("") || `<div class="muted">No deploy targets. Add one: river target add &lt;name&gt; --description "how it deploys"</div>`;
+      ${t.last_deploy ? `<div class="st" style="margin-top:4px">Last deploy <span class="link" data-open="${t.last_deploy.id}">#${t.last_deploy.id}</span> ${ago(t.last_deploy.closed_at)}${t.last_deploy.output ? ": " + esc(clip(t.last_deploy.output, 200)) : ""}<div class="muted" style="font-size:12px">shipped ${shipList(t.last_deploy.ships)}</div></div>` : '<div class="st muted">Never deployed.</div>'}`)).join("") || `<div class="muted">No deploy targets. Add one: river target add &lt;name&gt; --description "how it deploys"</div>`;
 }
 
 function renderBlocked() {
   const B = S.items.filter(i => i.blocked_reason && !["done", "dropped"].includes(i.status));
   $("#blockedPanel").classList.toggle("hidden", !B.length);
-  $("#blockedList").innerHTML = B.map(i => `<div class="ny">
-      <div class="ny-h"><b class="link" data-open="${i.id}">#${i.id} ${esc(i.title)}</b> <span class="chip c-p">${esc(i.project)}</span>${doerChip(i)}</div>
-      <div class="ny-c">${esc(i.blocked_reason)}</div>
-      <div class="muted" style="font-size:12px">${i.blocked_at ? "since " + ago(i.blocked_at) : "since: not recorded"} · ${i.blocked_until ? `until ${esc(i.blocked_until_text)} (${left(i.blocked_until)} left), then ready by itself` : "until someone clears it"}${i.blocked_set_by ? " · set by " + esc(i.blocked_set_by) : ""}</div></div>`).join("");
+  $("#blockedList").innerHTML = B.map(i => nyCard(`<b class="link" data-open="${i.id}">#${i.id} ${esc(i.title)}</b> ${projectChip(i.project)}${doerChip(i)}`, `<div class="ny-c">${esc(i.blocked_reason)}</div>
+      <div class="muted" style="font-size:12px">${i.blocked_at ? "since " + ago(i.blocked_at) : "since: not recorded"} · ${i.blocked_until ? `until ${esc(i.blocked_until_text)} (${left(i.blocked_until)} left), then ready by itself` : "until someone clears it"}${i.blocked_set_by ? " · set by " + esc(i.blocked_set_by) : ""}</div>`)).join("");
 }
 
 let takeoversOpen = false;
@@ -190,10 +126,8 @@ function renderTakeovers() {
   const words = { "took over": "took over", "done": "marked done", "dropped": "dropped" };
   const head = `<div class="nyl" data-takeovers-toggle="1"><span class="t">${takeoversOpen ? "▾" : "▸"} ${T.length} item${T.length === 1 ? "" : "s"} an agent took off your list: review or undo</span><span class="chips"><button class="btn" data-takeovers-okall="1" title="Accept all of them">OK all</button></span></div>`;
   if (!takeoversOpen) { $("#takeovers").innerHTML = head; return; }
-  $("#takeovers").innerHTML = head + T.map(t => `<div class="ny">
-      <div class="ny-h"><b>#${t.id} ${esc(t.title)}</b> <span class="chip c-p">${esc(t.project)}</span><span class="muted" style="font-size:12px">${ago(t.takeover_at)}</span></div>
-      <div class="ny-c"><b>${esc(t.takeover_by)}</b> ${words[t.takeover_kind] || t.takeover_kind} it: ${esc(t.takeover_note || "")}</div>
-      <div class="actions"><button class="btn" data-open="${t.id}">Open</button><button class="btn" data-undo-takeover="${t.id}">Undo: give it back to me</button><button class="btn primary" data-takeover-ok="${t.id}">OK</button></div></div>`).join("");
+  $("#takeovers").innerHTML = head + T.map(t => nyCard(`<b>#${t.id} ${esc(t.title)}</b> ${projectChip(t.project)}<span class="muted" style="font-size:12px">${ago(t.takeover_at)}</span>`, `<div class="ny-c"><b>${esc(t.takeover_by)}</b> ${words[t.takeover_kind] || t.takeover_kind} it: ${esc(t.takeover_note || "")}</div>
+      <div class="actions"><button class="btn" data-open="${t.id}">Open</button><button class="btn" data-undo-takeover="${t.id}">Undo: give it back to me</button><button class="btn primary" data-takeover-ok="${t.id}">OK</button></div>`)).join("");
 }
 
 // The status strip: counts you click to go where they are.
@@ -217,16 +151,15 @@ function renderStrip() {
 function workOpen() { try { return new Set(JSON.parse(store("river.work.open") || "[]")); } catch (e) { return new Set(); } }
 function renderWork() {
   const open = workOpen();
-  const order = (a, b) => (b.ready - a.ready) || (a.effective_priority - b.effective_priority) || (b.unblocks_count - a.unblocks_count) || (a.rank - b.rank);
   $("#work").innerHTML = S.projects.map(p => {
     const items = S.items.filter(i => i.project === p.name && !["done", "dropped"].includes(i.status));
     if (!items.length) return "";
     const ready = items.filter(i => i.ready).length, run = items.filter(i => ["in_progress", "held"].includes(i.status)).length;
     const hum = items.filter(i => i.ready && i.doer === "human").length;
-    const isOpen = open.has(p.name), shown = items.sort(order).slice(0, 8);
+    const isOpen = open.has(p.name), shown = items.sort(itemOrder).slice(0, 8);
     return `<div class="wp"><div class="wp-h" data-wp="${esc(p.name)}"><span class="tw">${isOpen ? "▾" : "▸"}</span><b>${esc(p.name)}</b>
         <span class="counts">${items.length} open · ${ready} ready${run ? ` · ${run} running` : ""}${hum ? ` · ${hum} for you` : ""}</span></div>
-      ${isOpen ? `<div class="wp-items">${shown.map(i => rowHtml(i)).join("")}${items.length > shown.length ? `<div class="muted" style="font-size:12px;padding:4px 6px">${items.length - shown.length} more: <span class="link" data-tab="projects">Projects tab</span></div>` : ""}</div>` : ""}</div>`;
+      ${isOpen ? `<div class="wp-items">${shown.map(i => itemRow(i)).join("")}${items.length > shown.length ? `<div class="muted" style="font-size:12px;padding:4px 6px">${items.length - shown.length} more: <span class="link" data-tab="projects">Projects tab</span></div>` : ""}</div>` : ""}</div>`;
   }).join("") || `<div class="muted">No open items.</div>`;
 }
 
@@ -259,7 +192,7 @@ function renderSelects() {
 function renderSettings() {
   const d = S.settings.defaults, o = S.settings.overrides;
   $("#settingsTable").innerHTML = `<tr><th>Key</th><th>Default</th><th>Overrides</th></tr>` + Object.keys(d).map(k => {
-    const ov = o.filter(x => x.key === k).map(x => `<span class="chip c-p">${esc(x.scope)} = ${esc(x.value)} <span class="link" data-unset="${esc(k)}" data-scope="${esc(x.scope)}">×</span></span>`).join(" ");
+    const ov = o.filter(x => x.key === k).map(x => chip("c-p", `${esc(x.scope)} = ${esc(x.value)} <span class="link" data-unset="${esc(k)}" data-scope="${esc(x.scope)}">×</span>`)).join(" ");
     return `<tr><td>${esc(k)}</td><td class="muted">${esc(d[k])}</td><td>${ov}</td></tr>`;
   }).join("");
 }
@@ -277,17 +210,13 @@ async function renderLog(force) {
   const dayName = (d) => new Date(d + "T12:00:00Z").toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
   $("#log").innerHTML = L.by_day.map(d => `<div class="day">
       <div class="day-h"><b>${esc(dayName(d.day))}</b><span class="muted">${d.items.length} done</span></div>
-      ${d.items.map(it => `<div class="done-row" data-open="${it.id}">
-        <div class="id">#${it.id}</div>
-        <div><div class="title">${esc(it.title)} <span class="chip c-p">${esc(it.project)}</span></div>${it.output ? `<div class="out">${esc(it.output)}</div>` : ""}</div>
-        <div class="when">${time(it.closed_at)}${it.by_agent && it.by_agent !== "?" ? "<br>" + esc(it.by_agent) : ""}</div>
-      </div>`).join("")}
+      ${d.items.map(it => doneRow(it, time(it.closed_at))).join("")}
     </div>`).join("") || `<div class="muted">Nothing done in this period.</div>`;
   const win = L.since ? $("#logSince").selectedOptions[0].textContent : null;
   $("#progress").innerHTML = L.progress.map(p => {
-    const pct = p.total ? Math.round(100 * p.done / p.total) : 0;
-    return `<div class="prog"><div class="prog-h"><b>${esc(p.project)}</b><span class="muted">${p.done}/${p.total} · ${pct}%</span></div>
-      <div class="bar"><div style="width:${pct}%"></div></div>
+    const done = pct(p.done, p.total);
+    return `<div class="prog"><div class="prog-h"><b>${esc(p.project)}</b><span class="muted">${p.done}/${p.total} · ${done}%</span></div>
+      ${bar(done)}
       ${win ? `<div class="muted" style="font-size:12px;margin-top:2px">+${p.done_in_window} in the ${esc(win)}</div>` : ""}</div>`;
   }).join("") || `<div class="muted">No items.</div>`;
 }
@@ -414,10 +343,10 @@ async function openDrawer(id) {
     <h3>${esc(it.title)}</h3>
     <div class="chips" style="justify-content:flex-start">${prioChip(it)}${doerChip(it)}${statusChip(it)}</div>
     <div class="actions" style="margin-top:6px;align-items:center"><span class="muted" style="font-size:12px">Goals:</span>
-      ${(it.goals || []).map(g => `<span class="chip c-goal">${esc(g)} <span class="link" data-untag="${esc(g)}" title="remove this goal tag">×</span></span>`).join("") || '<span class="muted" style="font-size:12px">none</span>'}
+      ${(it.goals || []).map(g => chip("c-goal", `${esc(g)} <span class="link" data-untag="${esc(g)}" title="remove this goal tag">×</span>`)).join("") || '<span class="muted" style="font-size:12px">none</span>'}
       ${(S.goals || []).some(g => g.status === "open" && !(it.goals || []).includes(g.name)) ? `<select id="dGoal">${(S.goals || []).filter(g => g.status === "open" && !(it.goals || []).includes(g.name)).sort((a, b) => (b.project === it.project) - (a.project === it.project)).map(g => `<option value="${esc(g.name)}">${esc(g.name)}${g.project !== it.project ? " (" + esc(g.project) + ")" : ""}</option>`).join("")}</select><button class="btn" data-do="tag">Add goal</button>` : ""}</div>
     ${(it.refs || []).length ? `<div class="actions" style="margin-top:6px;align-items:center"><span class="muted" style="font-size:12px">Tracker:</span>
-      ${it.refs.map(r => /^https?:\/\//.test(r.url || "") ? `<a class="chip c-p" href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.ref)} ↗</a>` : `<span class="chip c-p">${esc(r.ref)}</span>`).map((h, i) => h + (it.refs[i].synced_at ? '<span class="muted" style="font-size:12px">updated</span>' : ["done", "dropped"].includes(it.status) ? '<span class="chip c-human">tracker not updated</span>' : "")).join("")}</div>` : ""}
+      ${it.refs.map(r => /^https?:\/\//.test(r.url || "") ? `<a class="chip c-p" href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.ref)} ↗</a>` : chip("c-p", esc(r.ref))).map((h, i) => h + (it.refs[i].synced_at ? '<span class="muted" style="font-size:12px">updated</span>' : ["done", "dropped"].includes(it.status) ? chip("c-human", "tracker not updated") : "")).join("")}</div>` : ""}
     <div class="meta" style="margin-top:6px">${esc(it.reason)}${it.lease_expires_at ? " · lease " + left(it.lease_expires_at) + " left" : ""}</div>
     <div class="actions">
       ${it.status === "open" ? `<button class="btn primary" data-do="claim">Claim</button>` : ""}
@@ -501,7 +430,7 @@ async function drawerAction(what) {
 // ---- Inbox: messages for the person in "You are", with the answer each kind needs.
 let IB = [], ibSig = "";
 function msgLine(m) {
-  return `<div class="ev"><span class="chip c-p">${esc(m.kind)}</span> <b>${esc(m.from_agent)}</b> → ${esc(m.to_agent || "next holder")} · ${ago(m.created_at)}${m.state !== "open" && m.state !== "read" ? " · " + esc(m.state) : ""}<div class="body" style="white-space:pre-wrap">${esc(clip(m.body, 600))}</div></div>`;
+  return `<div class="ev">${chip("c-p", esc(m.kind))} <b>${esc(m.from_agent)}</b> → ${esc(m.to_agent || "next holder")} · ${ago(m.created_at)}${m.state !== "open" && m.state !== "read" ? " · " + esc(m.state) : ""}<div class="body" style="white-space:pre-wrap">${esc(clip(m.body, 600))}</div></div>`;
 }
 function offerHelpHtml(it) {
   const me = actor(), held = [];
@@ -546,14 +475,12 @@ function renderInbox() {
       acts += `<input id="rep-${m.id}" placeholder="reply"><button class="btn" data-ib="reply" data-msg="${m.id}">Reply</button>`;
       if (m.unread) acts += `<button class="btn" data-ib="read" data-msg="${m.id}">Mark read</button>`;
     }
-    return `<div class="ny msg ${m.unread || (open && ["question", "offer"].includes(m.kind)) ? "" : "read"}">
-      <div class="ny-h"><span class="chip ${m.kind === "alert" ? "c-p0" : "c-p"}">${esc(m.kind)}</span><b>${esc(m.from_agent)}</b>
+    return nyCard(`${chip(m.kind === "alert" ? "c-p0" : "c-p", esc(m.kind))}<b>${esc(m.from_agent)}</b>
         ${m.item_id ? `<span class="link" data-open="${m.item_id}">#${m.item_id} ${esc(clip(m.item_title || "", 60))}</span>` : ""}
         <span class="muted" style="font-size:12px">${ago(m.created_at)} · #${m.id}${m.state !== "open" && m.state !== "read" ? " · " + esc(m.state) : ""}</span>
-        <span class="link" data-thread="${m.id}">thread</span></div>
-      <div class="body">${esc(m.body)}</div>
+        <span class="link" data-thread="${m.id}">thread</span>`, `<div class="body">${esc(m.body)}</div>
       <div class="actions">${acts}</div>
-      <div class="thread hidden" id="thr-${m.id}"></div></div>`;
+      <div class="thread hidden" id="thr-${m.id}"></div>`, "msg" + (m.unread || (open && ["question", "offer"].includes(m.kind)) ? "" : " read"));
   }).join("") || `<div class="muted">No messages${$("#inboxAll").checked ? "" : " waiting"}.</div>`;
 }
 
@@ -614,7 +541,7 @@ function renderNeedsYou() {
     const title = isItem ? `#${e.item_id} ${e.item_title}` : `${e.message_kind} from ${e.from_agent}: ${e.body || ""}`;
     const open = nyOpen.has(e.id);
     return `<div class="nyl" data-nyt="${e.id}" title="${esc(clip(detail || title, 300))}"><span class="t">${esc(title)}</span>
-        <span class="chips">${e.priority != null ? `<span class="chip ${e.priority === 0 ? "c-p0" : "c-p"}" title="${esc(e.priority_from ? `priority from #${e.priority_from}` : "own priority")}${e.unblocks_count ? `; unblocks ${e.unblocks_count}` : ""}">P${e.priority}</span>` : ""}${e.project ? `<span class="chip c-p">${esc(e.project)}</span>` : ""}</span></div>
+        <span class="chips">${e.priority != null ? prioNumChip(e.priority, (e.priority_from ? `priority from #${e.priority_from}` : "own priority") + (e.unblocks_count ? `; unblocks ${e.unblocks_count}` : "")) : ""}${e.project ? projectChip(e.project) : ""}</span></div>
       ${open ? `<div class="nyx"><div class="muted" style="font-size:12px">${ago(e.opened_at)}${e.project ? " · " + esc(e.project) : ""}</div>${detail ? `<div class="ny-c">${esc(clip(detail, 800))}</div>` : ""}<div class="actions">${buttons}</div></div>` : ""}`;
   }).join("");
 }
@@ -921,34 +848,60 @@ async function openFromHash() {
 }
 window.addEventListener("hashchange", openFromHash);
 // Update button: shows how many new commits the river clone is missing; a click pulls them and restarts the server.
+// It also says when the server itself is out of date: code changed on disk after it started (mode "restart"),
+// or the server is too old to know the update route (mode "old": only a manual restart helps).
+const RESTART_BY_HAND = "This page is newer than its server. Stop river serve (Ctrl-C in its terminal) and start it again.";
+let updateMode = "update";
 async function checkUpdate() {
-  const r = await fetch("/api/update"); const u = await r.json(); const b = $("#updateBtn");
-  if (!r.ok || !u.git) return b.classList.toggle("hidden", !u.git && r.ok);
-  b.classList.toggle("primary", u.behind > 0);
-  b.textContent = u.behind ? `Update · ${u.behind} new` : "Update";
+  const r = await fetch("/api/update"), b = $("#updateBtn");
+  const u = r.ok ? await r.json() : {};
+  if (!r.ok) {
+    updateMode = "old";
+    b.classList.remove("hidden"); b.classList.add("primary");
+    b.textContent = "Restart needed"; b.title = RESTART_BY_HAND;
+    return;
+  }
+  if (!u.git && !u.stale) return b.classList.add("hidden");
+  b.classList.remove("hidden");
+  updateMode = u.behind ? "update" : u.stale ? "restart" : "update";
+  b.classList.toggle("primary", u.behind > 0 || !!u.stale);
+  b.textContent = u.behind ? `Update · ${u.behind} new` : u.stale ? "Restart · new code" : "Update";
   b.title = u.behind ? "New in Biggest River:\n" + u.commits.join("\n")
-    : u.fetch_error ? "Could not check for updates: " + u.fetch_error : `Up to date (${u.head})`;
+      + (u.ahead ? `\n\nThis clone also has ${u.ahead} commit(s) of its own, so it cannot fast-forward: push or rebase them first.` : "")
+    : u.stale ? "Biggest River's code changed since this server started. Restart the server to run it."
+    : u.fetch_error ? "Could not check for updates: " + u.fetch_error
+    : `Up to date (${u.head})` + (u.ahead ? `; this clone has ${u.ahead} commit(s) not on ${u.upstream} yet` : "");
+}
+async function waitForRestart(boot) {
+  for (let i = 0; i < 60; i++) {  // wait for the restarted server, then load the new page
+    await new Promise(res => setTimeout(res, 500));
+    try { const s = await (await fetch("/api/update?fetch=0")).json(); if (s.boot !== boot) return location.reload(); } catch (e) {}
+  }
+  toast("The server did not come back; run river serve again", true);
 }
 $("#updateBtn").onclick = async () => {
-  const b = $("#updateBtn"); b.disabled = true; b.textContent = "Updating…";
+  if (updateMode === "old") return toast(RESTART_BY_HAND, true);
+  const b = $("#updateBtn"); b.disabled = true; b.textContent = updateMode === "restart" ? "Restarting…" : "Updating…";
   try {
     const boot = (await (await fetch("/api/update?fetch=0")).json()).boot;
     const r = await fetch("/api/action", { method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({ op: "update", args: {}, actor: actor() }) });
+      body: JSON.stringify({ op: updateMode, args: {}, actor: actor() }) });
     const j = await r.json();
-    if (!r.ok) throw new Error(j.error || "update failed");
+    if (!r.ok) throw new Error(j.error || updateMode + " failed");
+    if (updateMode === "restart") { toast("Restarting the server…"); return await waitForRestart(boot); }
     const u = j.result;
     if (!u.updated) { toast(`Already up to date (${u.head})`); return; }
     toast(`Updated ${u.from} → ${u.head}. Restarting…`);
-    for (let i = 0; i < 60; i++) {  // wait for the restarted server, then load the new page
-      await new Promise(res => setTimeout(res, 500));
-      try { const s = await (await fetch("/api/update?fetch=0")).json(); if (s.boot !== boot) return location.reload(); } catch (e) {}
-    }
-    toast("The server did not come back; run river serve again", true);
+    await waitForRestart(boot);
   } catch (e) { toast(e.message, true); }
   finally { b.disabled = false; checkUpdate().catch(() => {}); }
 };
 checkUpdate().catch(() => {}); setInterval(() => { if (!document.hidden) checkUpdate().catch(() => {}); }, 30 * 60 * 1000);
+// A stale server is cheap to spot (no git fetch), so look for it more often than for new commits.
+setInterval(() => {
+  if (document.hidden || updateMode !== "update") return;  // hidden, or already asking for a restart
+  fetch("/api/update?fetch=0").then(r => r.ok ? r.json() : null).then(u => { if (u && u.stale) checkUpdate(); }).catch(() => {});
+}, 60 * 1000);
 refresh().then(openFromHash).then(maybeSetup); setInterval(() => { if (!document.hidden) refresh().catch(() => {}); }, 3000);
 // A hidden tab stops the full refresh but keeps asking what needs a person, so notifications still arrive.
 setInterval(() => { if (document.hidden) pollNeedsYou().catch(() => {}); }, 15000);

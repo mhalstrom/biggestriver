@@ -56,6 +56,20 @@ def _build_id():
     """Changes whenever a watched file changes; the page reloads itself in dev mode."""
     return str(max((f.stat().st_mtime_ns for f in _watched()), default=0))
 
+
+def _code_id():
+    """Changes when the server's Python code changes (git pull, a commit, an edit). The page files are
+    read from disk on every request, but the code runs as it was when the server started."""
+    return str(max((f.stat().st_mtime_ns for f in PKG.glob("*.py")), default=0))
+
+
+BOOT_CODE = _code_id()
+
+
+def code_stale():
+    """True when the river code on disk is newer than the code this server runs: it needs a restart."""
+    return _code_id() != BOOT_CODE
+
 def _applescript_str(s):
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
@@ -182,9 +196,13 @@ def update_apply(repo=REPO, restart=_restart_soon):
     if not st["behind"]:
         return {**st, "updated": False}
     if st["ahead"]:
-        raise RiverError(f"this clone has {st['ahead']} commit(s) that {st['upstream']} does not have; "
-                         f"run git pull in {repo} yourself")
-    _git(repo, "merge", "--ff-only", "@{u}")
+        raise RiverError(f"this clone has {st['ahead']} commit(s) that {st['upstream']} does not have, so it "
+                         f"cannot fast-forward; push or rebase them in {repo} yourself, then update")
+    try:
+        _git(repo, "merge", "--ff-only", "@{u}")
+    except RiverError as e:
+        raise RiverError(f"could not fast-forward {repo}: local changes are in the way; commit or stash them "
+                         f"(git status), then update.\n{e}")
     restart()
     return {**update_status(repo, fetch=False), "updated": True, "from": st["head"], "commits": st["commits"]}
 
@@ -329,6 +347,7 @@ OPS = {
     "launch_agent": lambda c, a, who: launch_agent(c, a.get("project"), agent=a.get("agent")),
     "decline_message": lambda c, a, who: core.decline_message(c, int(a["msg"]), a.get("note"), who),
     "update": lambda c, a, who: _no_update_in_app() or update_apply(),
+    "restart": lambda c, a, who: _no_update_in_app() or (_restart_soon(), {"restarting": True})[1],
 }
 
 
@@ -426,7 +445,8 @@ class Handler(BaseHTTPRequestHandler):
             if DESKTOP:  # the page hides the button when git is false
                 return self._send(200, {"git": False, "desktop": True, "boot": BOOT})
             try:
-                return self._send(200, {**update_status(fetch="fetch=0" not in self.path), "boot": BOOT})
+                return self._send(200, {**update_status(fetch="fetch=0" not in self.path), "boot": BOOT,
+                                        "stale": code_stale()})
             except RiverError as e:
                 return self._send(409, {"error": str(e)})
         if path == "/api/setup":

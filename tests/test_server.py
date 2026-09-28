@@ -283,6 +283,23 @@ class PageUpdate(unittest.TestCase):
         with self.assertRaises(RiverError):
             server.update_apply(self.clone, lambda: self.fail("restarted"))
 
+    def test_local_changes_in_the_way_say_so(self):
+        self.commit(self.up, "two")
+        with open(os.path.join(self.clone, "two"), "w") as f:
+            f.write("mine, not committed")
+        with self.assertRaises(RiverError) as e:
+            server.update_apply(self.clone, lambda: self.fail("restarted"))
+        self.assertIn("commit or stash", str(e.exception))
+
+    def test_stale_when_the_code_changes_after_start(self):
+        self.assertFalse(server.code_stale())
+        old = server.BOOT_CODE
+        try:
+            server.BOOT_CODE = "0"
+            self.assertTrue(server.code_stale())
+        finally:
+            server.BOOT_CODE = old
+
     def test_not_a_git_clone(self):
         self.assertEqual(server.update_status(self.dir.name), {"git": False})
         with self.assertRaises(RiverError):

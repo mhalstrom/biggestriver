@@ -199,6 +199,11 @@
   </div>
 </div></div>
 
-<script type="module" src="app.js"></script>
+<!-- An old river serve with a new page cannot serve app.js: say so instead of showing a dead page. -->
+<script>function riverLoadFailed() { var d = document.createElement("div"); d.id = "loadFailed";
+  d.style.cssText = "position:fixed;left:0;right:0;top:0;z-index:99;padding:14px 18px;background:#fde7e6;color:#b42318;font:14px system-ui,sans-serif";
+  d.textContent = "The page could not load its code (app.js). The river serve that runs this page is older than the page: stop it (Ctrl-C in its terminal) and start it again with river serve.";
+  document.body.prepend(d); }</script>
+<script type="module" src="app.js" onerror="riverLoadFailed()"></script>
 </body>
 </html>
