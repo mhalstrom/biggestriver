@@ -1,10 +1,13 @@
 import { $, esc, store, actor, toast, act, ago, left, clip, copyText, fillSelect, hooks } from "./lib.js";
-import { chip, statusChip, prioChip, prioNumChip, doerChip, projectChip, ownerChip, countChip } from "./components/chip.js";
+import { chip, prioNumChip, doerChip, projectChip, ownerChip, countChip } from "./components/chip.js";
 import { bar, pct, capacityBars } from "./components/bar.js";
 import { nyCard, goalCard, projCard, agentCard } from "./components/card.js";
 import { itemRow, itemOrder, doneRow } from "./components/itemRow.js";
+import { makeDrawer, itemDrawerHtml, msgLine } from "./components/drawer.js";
+import { makeDialog } from "./components/dialog.js";
 hooks.refresh = refresh;
 let S = null, openItem = null, tab = "board", graphSig = "";
+const drawer = makeDrawer($("#drawer"));
 
 let actorPicked = false;
 
@@ -321,79 +324,11 @@ async function renderGraph(force) {
 }
 window.riverOpen = (id) => openDrawer(id);
 
-function treeText(n, prefix = "", last = true, root = true) {
-  const who = n.assignee ? `, ${n.assignee}${n.lease_seconds_left != null ? ", " + Math.floor(n.lease_seconds_left / 60) + "m left" : ""}` : "";
-  const st = (n.ready ? "ready" : n.status.replace("_", " ")) + (n.blocked_reason ? ", " + clip(n.blocked_text || "blocked: " + n.blocked_reason, 60) : "");
-  let out = (root ? "" : prefix + (last ? "└─ " : "├─ ")) + `#${n.id} ${root ? n.title : clip(n.title, 60)}  (${st}${who})\n`;
-  n.children.forEach((c, i) => { out += treeText(c, prefix + (root ? "" : last ? "   " : "│  "), i === n.children.length - 1, false); });
-  return out;
-}
 
-async function openDrawer(id) {
+async function openDrawer(id, fresh = false) {
   openItem = id;
   const r = await fetch(`/api/item/${id}`); if (!r.ok) return;
-  const it = await r.json();
-  const d = $("#drawer");
-  const focused = d.contains(document.activeElement) && ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName);
-  if (focused && d.dataset.id == id) return;
-  d.dataset.id = id;
-  const closed = ["done", "dropped"].includes(it.status);
-  d.innerHTML = `
-    <div style="display:flex;align-items:center;gap:8px"><span class="muted">#${it.id} · ${esc(it.project)}</span><span class="spacer" style="flex:1"></span><button class="btn" id="dClose">Close</button></div>
-    <h3>${esc(it.title)}</h3>
-    <div class="chips" style="justify-content:flex-start">${prioChip(it)}${doerChip(it)}${statusChip(it)}</div>
-    <div class="actions" style="margin-top:6px;align-items:center"><span class="muted" style="font-size:12px">Goals:</span>
-      ${(it.goals || []).map(g => chip("c-goal", `${esc(g)} <span class="link" data-untag="${esc(g)}" title="remove this goal tag">×</span>`)).join("") || '<span class="muted" style="font-size:12px">none</span>'}
-      ${(S.goals || []).some(g => g.status === "open" && !(it.goals || []).includes(g.name)) ? `<select id="dGoal">${(S.goals || []).filter(g => g.status === "open" && !(it.goals || []).includes(g.name)).sort((a, b) => (b.project === it.project) - (a.project === it.project)).map(g => `<option value="${esc(g.name)}">${esc(g.name)}${g.project !== it.project ? " (" + esc(g.project) + ")" : ""}</option>`).join("")}</select><button class="btn" data-do="tag">Add goal</button>` : ""}</div>
-    ${(it.refs || []).length ? `<div class="actions" style="margin-top:6px;align-items:center"><span class="muted" style="font-size:12px">Tracker:</span>
-      ${it.refs.map(r => /^https?:\/\//.test(r.url || "") ? `<a class="chip c-p" href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.ref)} ↗</a>` : chip("c-p", esc(r.ref))).map((h, i) => h + (it.refs[i].synced_at ? '<span class="muted" style="font-size:12px">updated</span>' : ["done", "dropped"].includes(it.status) ? chip("c-human", "tracker not updated") : "")).join("")}</div>` : ""}
-    <div class="meta" style="margin-top:6px">${esc(it.reason)}${it.lease_expires_at ? " · lease " + left(it.lease_expires_at) + " left" : ""}</div>
-    <div class="actions">
-      ${it.status === "open" ? `<button class="btn primary" data-do="claim">Claim</button>` : ""}
-      ${["in_progress", "held"].includes(it.status) ? `<button class="btn primary" data-do="done">Done</button><button class="btn" data-do="release">Release</button>` : ""}
-      ${it.status === "open" ? `<button class="btn" data-do="done">Mark done</button>` : ""}
-      ${!closed ? `<button class="btn" data-do="drop">Drop</button>` : `<button class="btn" data-do="reopen">Reopen</button>`}
-    </div>
-    <div class="sec"><h4>Details</h4><div class="form">
-      <input id="dTitle" value="${esc(it.title)}">
-      <textarea id="dNotes" rows="3" placeholder="Notes">${esc(it.notes)}</textarea>
-      <label>Context<textarea id="dContext" rows="2" placeholder="what a new agent must know to start">${esc(it.context)}</textarea></label>
-      <label>Touches<input id="dTouches" placeholder="files it changes, comma separated" value="${esc((it.touches || []).join(", "))}"></label>
-      <label>Check<input id="dCheck" placeholder="command that shows it works" value="${esc(it.check)}"></label>
-      <label>Due${it.due ? ` <span class="muted">(${esc(it.due_text)})</span>` : it.due_from ? ` <span class="muted">(from #${it.due_from}: ${esc(it.due_text)})</span>` : ""}<input id="dDue" placeholder="2026-10-15, fri 17:00, or none" value=""></label>
-      <div class="two">
-        <label>Priority (own)<select id="dPrio">${[0,1,2,3,4].map(p => `<option ${p === it.priority ? "selected" : ""}>${p}</option>`).join("")}</select></label>
-        <label>Who can do it<select id="dDoer">${["any","ai","human"].map(x => `<option value="${x}" ${x === it.doer ? "selected" : ""}>${x === "any" ? "anyone" : x === "ai" ? "agent" : "human"}</option>`).join("")}</select></label>
-      </div>
-      <div class="two"><label>Project<select id="dProject">${S.projects.map(p => `<option ${p.name === it.project ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></label>
-        <label>Order in project<span class="actions"><button class="btn" data-do="up">Up</button><button class="btn" data-do="down">Down</button></span></label></div>
-      <button class="btn" data-do="save">Save details</button>
-    </div></div>
-    ${it.output ? `<div class="sec"><h4>Output</h4><div>${esc(it.output)}</div></div>` : ""}
-    <div class="sec"><h4>Waits on</h4>
-      ${it.waits_on_detail.map(w => `<div><span class="link" data-open="${w.id}">#${w.id} ${esc(w.title)}</span> <span class="muted">(${w.status})</span> <span class="link" data-undep="${w.id}">remove</span></div>`).join("") || '<div class="muted">nothing</div>'}
-      <div class="actions" style="margin-top:6px"><input id="dDep" placeholder="ids, e.g. 4, 9" style="width:140px"><button class="btn" data-do="dep">Add</button></div>
-    </div>
-    <div class="sec"><h4>Blocker tree</h4><div class="tree">${esc(treeText(it.tree))}</div>${offerHelpHtml(it)}</div>
-    <div class="sec"><h4>Messages</h4>
-      ${(it.messages || []).map(m => msgLine(m)).join("") || '<div class="muted">none</div>'}
-      <div class="actions" style="margin-top:6px"><select id="dMsgKind"><option value="note">note</option><option value="question">question</option><option value="alert">alert</option></select>
-        <input id="dMsgBody" placeholder="${it.assignee ? "to " + esc(it.assignee) : "to whoever takes it next"}" style="flex:1"><button class="btn" data-do="msg">Send</button></div>
-    </div>
-    <div class="sec"><h4>Unblocks</h4>${it.unblocks_detail.map(w => `<div><span class="link" data-open="${w.id}">#${w.id} ${esc(w.title)}</span> <span class="muted">(${w.status})</span></div>`).join("") || '<div class="muted">nothing</div>'}</div>
-    ${it.status === "open" ? `<div class="sec"><h4>Push to agent</h4>
-      ${it.reserved_until ? `<div>Pushed to <b>${esc(it.reserved_for)}</b> by ${esc(it.reserved_by || "?")} · ${left(it.reserved_until)} left · <span class="link" data-unpush="${it.id}">cancel</span></div>`
-        : `<div class="actions"><select id="dPushTo">${S.agents.filter(a => a.name !== actor()).map(a => `<option>${esc(a.name)}</option>`).join("")}</select>
-           <input id="dPushNote" placeholder="note (optional)" style="flex:1"><button class="btn" data-do="push">Push</button></div>
-           <div class="muted" style="font-size:12px;margin-top:4px">Or drag the item row onto an agent. It is reserved for them for a while; their river go takes it first.</div>`}
-    </div>` : ""}
-    ${it.replan ? `<div class="sec"><h4>Replan</h4><div>${it.late_prereqs} prerequisites were added while it was claimed, so it is bigger than planned. Split or re-scope it, then <span class="link" data-do="replanned">clear the mark</span>.</div></div>` : ""}
-    <div class="sec"><h4>Outside blocker</h4>
-      ${it.blocked_reason ? `<div>${esc(it.blocked_text)} <span class="link" data-do="unblock">clear</span></div>${it.blocked_at ? `<div class="muted" style="font-size:12px">since ${ago(it.blocked_at)}${it.blocked_until ? ", ready by itself in " + left(it.blocked_until) : ""}</div>` : ""}`
-        : `<div class="actions"><input id="dBlock" placeholder="waiting on …" style="flex:1"><input id="dUntil" placeholder="until (optional): 2h, mon 07:00" style="width:170px"><button class="btn" data-do="block">Set</button></div>`}
-    </div>
-    <div class="sec"><h4>History</h4>${it.events.map(e => `<div class="ev">${ago(e.at)} · <b>${esc(e.actor)}</b> ${esc(e.change)}</div>`).join("")}</div>`;
-  d.classList.add("open");
+  drawer.show(id, itemDrawerHtml(await r.json(), { S, me: actor() }), fresh);
 }
 
 async function drawerAction(what) {
@@ -423,22 +358,12 @@ async function drawerAction(what) {
       if (other) await act("move", what === "up" ? { id, before: other.id } : { id, after: other.id });
     }
     document.activeElement && document.activeElement.blur();
-    await openDrawer(id);
+    await openDrawer(id, true);
   } catch (e) { /* toast shown */ }
 }
 
 // ---- Inbox: messages for the person in "You are", with the answer each kind needs.
 let IB = [], ibSig = "";
-function msgLine(m) {
-  return `<div class="ev">${chip("c-p", esc(m.kind))} <b>${esc(m.from_agent)}</b> → ${esc(m.to_agent || "next holder")} · ${ago(m.created_at)}${m.state !== "open" && m.state !== "read" ? " · " + esc(m.state) : ""}<div class="body" style="white-space:pre-wrap">${esc(clip(m.body, 600))}</div></div>`;
-}
-function offerHelpHtml(it) {
-  const me = actor(), held = [];
-  (function walk(n, root) { if (!root && n.assignee && n.assignee !== me && ["in_progress", "held"].includes(n.status)) held.push(n); n.children.forEach(c => walk(c, false)); })(it.tree, true);
-  if (!held.length || ["done", "dropped"].includes(it.status)) return "";
-  return `<div style="margin-top:6px">${held.map(n => `<div class="actions"><span class="muted">#${n.id} held by ${esc(n.assignee)}</span>
-      <input id="offer-${n.id}" placeholder="I am blocked on this; I can take …" style="flex:1"><button class="btn" data-offer="${n.id}">Offer help</button></div>`).join("")}</div>`;
-}
 
 async function pollInbox() {
   const me = actor();
@@ -588,7 +513,7 @@ async function refresh() {
   renderSelects(); renderCapacity(); renderNext(); renderProjects(); renderWork(); renderStrip(); renderAgents(); renderEvents(); renderSettings(); renderTakeovers(); renderBlocked(); renderTargets();
   renderGraph(false); renderLog(false); pollNeedsYou().catch(() => {}); pollInbox().catch(() => {});
   $("#stamp").textContent = "updated " + new Date().toLocaleTimeString();
-  if (openItem != null && $("#drawer").classList.contains("open")) openDrawer(openItem);
+  if (openItem != null && drawer.isOpen()) openDrawer(openItem);
 }
 
 document.addEventListener("click", async (e) => {
@@ -617,11 +542,11 @@ document.addEventListener("click", async (e) => {
     return $(go === "work" ? "#colWork" : "#colNeeds").scrollIntoView({ block: "start" }); }
   if (t.dataset.addgoal) { await setTab("projects"); const d = $("#goalName").closest("details"); d.open = true; $("#goalProject").value = t.dataset.addgoal; d.scrollIntoView({ block: "center" }); $("#goalName").focus(); return; }
   if (t.dataset.goalAct) return goalAction(t.dataset.goalAct, t.dataset.g);
-  if (t.dataset.untag) { await act("item_edit", { id: openItem, untag: [t.dataset.untag] }).catch(() => {}); return openDrawer(openItem); }
+  if (t.dataset.untag) { await act("item_edit", { id: openItem, untag: [t.dataset.untag] }).catch(() => {}); return openDrawer(openItem, true); }
   const card = t.closest("[data-goal]"); if (card) { const g = card.dataset.goal; setGoal(goalSel() === g ? "" : g); return; }
   const open = t.closest("[data-open]"); if (open) return openDrawer(+open.dataset.open);
   const row = t.closest(".row"); if (row) return openDrawer(+row.dataset.id);
-  if (t.id === "dClose") { $("#drawer").classList.remove("open"); openItem = null; return; }
+  if (t.id === "dClose") { drawer.close(); openItem = null; return; }
   if (t.dataset.do) return drawerAction(t.dataset.do);
   if (t.dataset.ny) return needsYouAction(t);
   if (t.dataset.ib) return inboxAction(t);
@@ -635,7 +560,7 @@ document.addEventListener("click", async (e) => {
   if (t.dataset.undoTakeover) { await act("undo_takeover", { id: +t.dataset.undoTakeover }).then(() => toast("Back on your list")).catch(() => {}); return; }
   if (t.dataset.takeoverOk) { await act("takeover_seen", { id: +t.dataset.takeoverOk }).catch(() => {}); return; }
   if (t.dataset.unpush) { await act("push_cancel", { id: +t.dataset.unpush }).then(() => toast("Push cancelled")).catch(() => {}); return; }
-  if (t.dataset.undep) { await act("dep_remove", { id: openItem, on: [+t.dataset.undep] }).catch(() => {}); return openDrawer(openItem); }
+  if (t.dataset.undep) { await act("dep_remove", { id: openItem, on: [+t.dataset.undep] }).catch(() => {}); return openDrawer(openItem, true); }
   if (t.dataset.describe) { const p = S.projects.find(x => x.name === t.dataset.describe); const text = prompt(`What does "${p.name}" cover, and what context helps an agent work on it?`, p.notes || ""); if (text !== null) await act("project_describe", { name: p.name, text }).catch(() => {}); return; }
   if (t.dataset.rank) { const to = +t.dataset.to; if (to >= 1) await act("project_rank", { name: t.dataset.rank, rank: to }).catch(() => {}); return; }
   if (t.dataset.unset) { const sc = t.dataset.scope, [kind, name] = sc.includes(":") ? [sc.split(":")[0], sc.slice(sc.indexOf(":") + 1)] : ["global", null];
@@ -755,9 +680,10 @@ function setTab(name, push = true) {
 let setupSeen = false;
 async function openSetup() {
   const r = await fetch("/api/setup"); if (!r.ok) return;
-  renderSetup(await r.json()); $("#setup").classList.remove("hidden");
+  renderSetup(await r.json()); setupDialog.open();
 }
-function closeSetup() { $("#setup").classList.add("hidden"); }
+const setupDialog = makeDialog($("#setup"));
+function closeSetup() { setupDialog.close(); }
 function renderSetup(st) {
   const step = (ok, title, sub, fix) => `<div class="step"><div class="mark ${ok ? "ok" : "todo"}">${ok ? "✓" : "•"}</div>
     <div><b>${title}</b>${sub ? `<div class="sub">${sub}</div>` : ""}${!ok && fix ? `<div class="fix">${fix}</div>` : ""}</div></div>`;
@@ -833,7 +759,6 @@ $("#setupClose").onclick = closeSetup;
 $("#setupLater").onclick = closeSetup;
 $("#setupDone").onclick = async () => { await act("config_set", { key: "setup_done", value: "on" }).catch(() => {}); closeSetup(); };
 $("#openSetup").onclick = openSetup;
-document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#setup").classList.contains("hidden")) closeSetup(); });
 function maybeSetup() {
   if (setupSeen || !S) return;
   setupSeen = true;
