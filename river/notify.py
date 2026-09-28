@@ -182,7 +182,9 @@ def compose(conn, rows):
     """One message for a batch of outbox rows on one channel."""
     if len(rows) == 1:
         r = rows[0]
-        return "River: needs you", r["summary"], page_url(conn, r["item_id"])
+        # Open the session of the agent that asked or added the item, when it has a web link.
+        url = core.origin_session_url(conn, r["item_id"], r["message_id"]) or page_url(conn, r["item_id"])
+        return "River: needs you", r["summary"], url
     lines = [f"- {r['summary']}" for r in rows[:10]]
     if len(rows) > 10:
         lines.append(f"- and {len(rows) - 10} more")

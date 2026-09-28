@@ -1740,5 +1740,32 @@ class OfferGiveSplit(Base):
             core.offer(self.c, "x", self.goal, actor="ag")  # nobody holds it
 
 
+class SessionLinks(Base):
+    """A notification opens the session of the agent that asked or added the item, when it has a web link."""
+
+    def test_env_record_and_origin(self):
+        from river import notify
+        self.assertEqual(core.session_url_from_env({"CLAUDE_CODE_BRIDGE_SESSION_ID": "session_01Abc"}),
+                         "https://claude.ai/code/session_01Abc")
+        self.assertIsNone(core.session_url_from_env({"CLAUDE_CODE_BRIDGE_SESSION_ID": "x/../y"}))
+        self.assertIsNone(core.session_url_from_env({}))
+        core.project_add(self.c, "a")
+        core.register(self.c, "ag")
+        core.register(self.c, "old")
+        core.register(self.c, "mark", human=True)
+        core.record_session_url(self.c, "ag", "https://claude.ai/code/session_01Abc")
+        core.record_session_url(self.c, "mark", "https://claude.ai/code/session_x")  # people have no agent session
+        step = core.item_add(self.c, "a", "approve it", doer="human", actor="ag")["id"]
+        other = core.item_add(self.c, "a", "sign it", doer="human", actor="old")["id"]
+        q = core.send(self.c, "question", "which port?", "mark", None, None, "ag")
+        self.assertEqual(core.origin_session_url(self.c, item_id=step), "https://claude.ai/code/session_01Abc")
+        self.assertIsNone(core.origin_session_url(self.c, item_id=other))
+        self.assertEqual(core.origin_session_url(self.c, other, q["id"]), "https://claude.ai/code/session_01Abc")
+        row = lambda i, m=None: {"summary": "s", "item_id": i, "message_id": m}
+        self.assertEqual(notify.compose(self.c, [row(step)])[2], "https://claude.ai/code/session_01Abc")
+        self.assertTrue(notify.compose(self.c, [row(other)])[2].endswith(f"#item-{other}"))  # falls back to the page
+        self.assertTrue(notify.compose(self.c, [row(step), row(other)])[2].startswith("http://127.0.0.1:"))
+
+
 if __name__ == "__main__":
     unittest.main()

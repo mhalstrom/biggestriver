@@ -170,6 +170,7 @@ CREATE TABLE IF NOT EXISTS agents (
   role           TEXT,
   session        TEXT,
   session_ref    TEXT,
+  session_url    TEXT,                       -- web link to the agent's session (Claude Code Remote Control)
   registered_at  TEXT NOT NULL,
   last_seen      TEXT NOT NULL
 );
@@ -442,6 +443,8 @@ def _migrate(conn):
         conn.execute("ALTER TABLE agents ADD COLUMN session TEXT")
     if "session_ref" not in acols:
         conn.execute("ALTER TABLE agents ADD COLUMN session_ref TEXT")
+    if "session_url" not in acols:
+        conn.execute("ALTER TABLE agents ADD COLUMN session_url TEXT")
     if "auto" not in {r["name"] for r in conn.execute("PRAGMA table_info(deps)")}:
         conn.execute("ALTER TABLE deps ADD COLUMN auto INTEGER NOT NULL DEFAULT 0")
     icols = {r["name"] for r in conn.execute("PRAGMA table_info(items)")}
@@ -2111,6 +2114,36 @@ def activity(conn, actor):
         _touch_agent(conn, actor)
         sync_needs_you(conn)
     return expired
+
+
+def session_url_from_env(env=None):
+    """The web link of the Claude Code session this command runs in, when Remote Control gives it one."""
+    sid = (env if env is not None else os.environ).get("CLAUDE_CODE_BRIDGE_SESSION_ID", "").strip()
+    return f"https://claude.ai/code/{sid}" if re.match(r"^session_[A-Za-z0-9]+$", sid) else None
+
+
+def record_session_url(conn, name, url):
+    """Keep an agent's session link current, so a notification about its work opens that session."""
+    if not (name and url):
+        return
+    with tx(conn):
+        conn.execute("UPDATE agents SET session_url=? WHERE name=? AND kind='ai' AND session_url IS NOT ?",
+                     (url, name, url))
+
+
+def origin_session_url(conn, item_id=None, message_id=None):
+    """The session link of the agent that asked (a message) or added the item (its first event), if known."""
+    who = None
+    if message_id is not None:
+        r = conn.execute("SELECT from_agent FROM messages WHERE id=?", (message_id,)).fetchone()
+        who = r and r["from_agent"]
+    elif item_id is not None:
+        r = conn.execute("SELECT actor FROM events WHERE item_id=? ORDER BY id LIMIT 1", (item_id,)).fetchone()
+        who = r and r["actor"]
+    if not who:
+        return None
+    r = conn.execute("SELECT session_url FROM agents WHERE name=?", (who,)).fetchone()
+    return r and r["session_url"]
 
 
 # ---------------------------------------------------------------- needs you

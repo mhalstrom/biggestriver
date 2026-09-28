@@ -617,6 +617,8 @@ def _run(args, conn):
     if args.cmd not in ("go", "plan"):
         core.activity(conn, actor)
     res = dispatch(conn, args, actor)
+    me = res.get("agent") if args.cmd in ("go", "plan") and isinstance(res, dict) else actor
+    core.record_session_url(conn, me, core.session_url_from_env())
     with core.tx(conn):
         core.sync_needs_you(conn)  # the command may have made a human item ready, or sent a question to a person
     if args.json:
