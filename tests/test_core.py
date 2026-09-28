@@ -728,6 +728,24 @@ class KeepRelease(Base):
         self.assertEqual((st["status"], st["replan"]), ("open", 1))
         self.assertEqual([r for r in self.c.execute("SELECT id FROM items WHERE reserved_for IS NOT NULL")], [])
 
+    def test_replan_threshold_marks_item_with_late_prerequisites(self):
+        core.config_set(self.c, "replan_threshold", "2")
+        core.item_add(self.c, "a", "one", actor="ag", blocks=self.p, mode="keep")
+        self.assertEqual(core._item(self.c, self.p)["replan"], 0)
+        core.item_add(self.c, "a", "two", actor="ag", blocks=self.p, mode="keep")
+        st = core._item(self.c, self.p)
+        self.assertEqual((st["status"], st["replan"], st["late_prereqs"]), ("held", 1, 2))  # still kept
+        q = core.plan(self.c, self.dir.name, "bo")["questions"]
+        self.assertEqual([(x["id"], x["late_prereqs"]) for x in q["replan"]], [(self.p, 2)])
+        core.replanned(self.c, self.p, "split into two", "ag")
+        st = core._item(self.c, self.p)
+        self.assertEqual((st["replan"], st["late_prereqs"]), (0, 0))
+        # Prerequisites added to an item nobody holds are planning, not late work.
+        other = self.add("a", "unclaimed")
+        for t in ("x", "y", "z"):
+            core.item_add(self.c, "a", t, actor="bo", blocks=other)
+        self.assertEqual(core._item(self.c, other)["late_prereqs"], 0)
+
     def test_hold_expiry_releases_with_notice_and_keep_restores(self):
         n = core.item_add(self.c, "a", "fix", actor="ag", blocks=self.p, mode="keep")["id"]
         self.c.execute("UPDATE items SET hold_expires_at=? WHERE id=?", (core.iso(core.now() - timedelta(minutes=1)), self.p))

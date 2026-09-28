@@ -318,7 +318,7 @@ function rowHtml(it, why) {
   return `<div class="row" data-id="${it.id}"${it.status === "open" ? ' draggable="true"' : ""}>
     <div class="id">#${it.id}</div>
     <div class="t"><div class="title">${esc(it.title)}</div>${it.blocked_reason && it.status === "open" ? `<div class="blk">${esc(it.blocked_text)}</div>` : ""}${why ? `<div class="why">${esc(why)}</div>` : ""}</div>
-    <div class="chips">${prioChip(it)}${doerChip(it)}${statusChip(it)}</div></div>`;
+    <div class="chips">${prioChip(it)}${doerChip(it)}${it.replan && !["done", "dropped"].includes(it.status) ? `<span class="chip c-blocked" title="${it.late_prereqs} prerequisites added while claimed: plan it again">replan</span>` : ""}${statusChip(it)}</div></div>`;
 }
 
 function renderCapacity() {
@@ -546,6 +546,7 @@ async function openDrawer(id) {
            <input id="dPushNote" placeholder="note (optional)" style="flex:1"><button class="btn" data-do="push">Push</button></div>
            <div class="muted" style="font-size:12px;margin-top:4px">Or drag the item row onto an agent. It is reserved for them for a while; their river go takes it first.</div>`}
     </div>` : ""}
+    ${it.replan ? `<div class="sec"><h4>Replan</h4><div>${it.late_prereqs} prerequisites were added while it was claimed, so it is bigger than planned. Split or re-scope it, then <span class="link" data-do="replanned">clear the mark</span>.</div></div>` : ""}
     <div class="sec"><h4>Outside blocker</h4>
       ${it.blocked_reason ? `<div>${esc(it.blocked_text)} <span class="link" data-do="unblock">clear</span></div>${it.blocked_at ? `<div class="muted" style="font-size:12px">since ${ago(it.blocked_at)}${it.blocked_until ? ", ready by itself in " + left(it.blocked_until) : ""}</div>` : ""}`
         : `<div class="actions"><input id="dBlock" placeholder="waiting on …" style="flex:1"><input id="dUntil" placeholder="until (optional): 2h, mon 07:00" style="width:170px"><button class="btn" data-do="block">Set</button></div>`}
@@ -564,6 +565,7 @@ async function drawerAction(what) {
     if (what === "drop") await act("drop", { id });
     if (what === "reopen") await act("reopen", { id });
     if (what === "unblock") await act("unblock", { id });
+    if (what === "replanned") await act("replanned", { id });
     if (what === "push") { const to = $("#dPushTo").value; if (to) { await act("push", { id, to, note: $("#dPushNote").value.trim() || undefined }); toast(`Pushed #${id} to ${to}`); } }
     if (what === "block") { const r = $("#dBlock").value.trim(), u = $("#dUntil").value.trim(); if (r || u) await act("block", { id, reason: r || undefined, until: u || undefined }); }
     if (what === "dep") { const on = $("#dDep").value.split(/[\s,]+/).filter(Boolean).map(Number); if (on.length) await act("dep_add", { id, on }); }

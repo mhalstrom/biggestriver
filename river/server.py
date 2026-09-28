@@ -59,6 +59,7 @@ OPS = {
     "reopen": lambda c, a, who: core.reopen(c, a["id"], who),
     "block": lambda c, a, who: core.block(c, a["id"], a.get("reason"), who, a.get("until")),
     "unblock": lambda c, a, who: core.unblock(c, a["id"], who),
+    "replanned": lambda c, a, who: core.replanned(c, a["id"], a.get("note"), who),
     "register": lambda c, a, who: core.register(c, a["name"], bool(a.get("human")), a.get("note", "")),
     "config_set": lambda c, a, who: core.config_set(c, a["key"], str(a["value"]), a.get("project"), a.get("item"),
                                                     a.get("agent"), who),

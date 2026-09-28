@@ -79,6 +79,7 @@ river move <id> --before|--after <id>   # manual order inside a project
 river edit <id> [--title] [--notes] [--doer] [--project] [--context] [--touches ...] [--check]
 river blocked <id> --reason "..." [--until "mon 07:00 America/New_York"] / river unblock <id>
 river drop <id> / river reopen <id>
+river replanned <id> [--note "..."]   # clear the replan mark after you split or re-scope the item
 ```
 
 ## How the order works

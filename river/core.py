@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS items (
   reserved_by       TEXT,
   hold_expires_at   TEXT,
   replan            INTEGER NOT NULL DEFAULT 0,
+  late_prereqs      INTEGER NOT NULL DEFAULT 0,
   found_during      INTEGER REFERENCES items(id),
   takeover_by       TEXT,
   takeover_kind     TEXT,
@@ -366,6 +367,8 @@ def _migrate(conn):
             conn.execute(f"ALTER TABLE items ADD COLUMN {col} {typ}")
     if "found_during" not in icols:
         conn.execute("ALTER TABLE items ADD COLUMN found_during INTEGER REFERENCES items(id)")
+    if "late_prereqs" not in icols:
+        conn.execute("ALTER TABLE items ADD COLUMN late_prereqs INTEGER NOT NULL DEFAULT 0")
     for col in ("blocked_at", "blocked_until", "blocked_set_by"):
         if col not in icols:
             conn.execute(f"ALTER TABLE items ADD COLUMN {col} TEXT")
@@ -974,9 +977,34 @@ def _unhold(conn, parent, actor, why):
     _event(conn, parent, actor, why)
 
 
+def _count_late(conn, parent, n, actor):
+    """Count prerequisites added to a claimed item; at replan_threshold, mark it replan.
+
+    Work found after an agent starts means the item was bigger than planned, so
+    a planner looks at it again (river plan lists it; river replanned clears it)."""
+    conn.execute("UPDATE items SET late_prereqs=late_prereqs+? WHERE id=?", (n, parent))
+    it = _item(conn, parent)
+    limit = int(setting(conn, "replan_threshold", item_id=parent, agent=actor))
+    if it["late_prereqs"] >= limit and not it["replan"]:
+        conn.execute("UPDATE items SET replan=1 WHERE id=?", (parent,))
+        _event(conn, parent, "river", f"marked replan: {it['late_prereqs']} prerequisites added while it was "
+               f"claimed (replan_threshold {limit})")
+
+
+def replanned(conn, item_id, note=None, actor=None):
+    """Clear the replan mark after a planner looked at the item again; the count starts over."""
+    with tx(conn):
+        it = _item(conn, item_id)
+        conn.execute("UPDATE items SET replan=0, late_prereqs=0 WHERE id=?", (it["id"],))
+        _event(conn, it["id"], actor, "replanned" + (f": {note}" if note else ""))
+    return item_show(conn, item_id)
+
+
 def _prereq_mode(conn, parent, new, actor, mode):
     """After prerequisites land on a parent: keep it (hold) or release it, per design 7.3."""
     p = _item(conn, parent)
+    if p["status"] in ("in_progress", "held"):
+        _count_late(conn, parent, len(new), actor)
     if p["status"] not in ("in_progress", "held") or p["assignee"] != actor:
         if mode == "keep":
             raise RiverError(f"--keep needs you to hold #{parent}; it is {p['status']}"
@@ -2672,5 +2700,6 @@ def plan(conn, cwd, actor=None, project=None):
             "items_without_notes": [brief_item(a) for a in no_notes],
             "human_waiting": [brief_item(a) for a in focus if a["ready"] and a["doer"] == "human"],
             "stuck": stuck,
+            "replan": [dict(brief_item(a), late_prereqs=a["late_prereqs"]) for a in focus if a["replan"]],
         },
     }

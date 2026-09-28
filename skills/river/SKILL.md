@@ -72,6 +72,8 @@ first only when neither applies (`river add <project> "<title>"`).
     back to in progress. A hold lasts `hold_ttl` (2h), renewed by your
     commands. More than `keep_prereq_limit` (3) open prerequisites: river
     releases instead and marks the item `replan`.
+    After `replan_threshold` (3) prerequisites are added to a claimed item,
+    river also marks it `replan`, and `river plan` lists it for a planner.
   - `--release` (the default): it is large or better for someone else. Your
     item goes back to the queue, waiting on the new one. Run `river go` again.
   `river keep <id>` holds a released item again; `river release <id>` ends a hold.

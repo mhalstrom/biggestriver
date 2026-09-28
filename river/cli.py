@@ -401,6 +401,8 @@ def build_parser():
     x.add_argument("id", type=int); x.add_argument("--reason")
     x.add_argument("--until", help="it ends by itself then: 2h, 2026-09-28T07:00, or 'mon 07:00 America/New_York'")
     x = sub.add_parser("unblock", help="clear an outside blocker"); x.add_argument("id", type=int)
+    x = sub.add_parser("replanned", help="clear the replan mark after you planned the item again")
+    x.add_argument("id", type=int); x.add_argument("--note")
     x = sub.add_parser("blockers", help="tree of what an item waits on"); x.add_argument("id", type=int)
 
     x = sub.add_parser("send", help="send an alert, question, or note to an agent or to the holder of an item")
@@ -703,6 +705,8 @@ def dispatch(conn, a, actor):
         return core.dep_remove(conn, a.id, a.on, actor)
     if c == "blocked":
         return core.block(conn, a.id, a.reason, actor, a.until)
+    if c == "replanned":
+        return core.replanned(conn, a.id, a.note, actor)
     if c == "unblock":
         return core.unblock(conn, a.id, actor)
     if c == "blockers":
@@ -813,6 +817,9 @@ def render_plan(b):
     section("Stuck on something outside the queue", q["stuck"],
             lambda x: f"#{x['id']:<4} [{x['project']}] {_cut(x['title'], 60)}  ({x['blocked_text']})"
                       + (f" (holds up {x['holds_up']})" if x["holds_up"] else ""))
+    section("Marked replan: work grew after an agent started (split, re-scope, then river replanned <id>)",
+            q["replan"], lambda x: f"#{x['id']:<4} [{x['project']}] {_cut(x['title'], 60)}  "
+                                   f"({x['late_prereqs']} prerequisites added while claimed)")
     section("Waiting on a human", q["human_waiting"], lambda x: f"#{x['id']:<4} [{x['project']}] {_cut(x['title'])}")
     section("Items with no notes or context", q["items_without_notes"],
             lambda x: f"#{x['id']:<4} [{x['project']}] {_cut(x['title'])}")
