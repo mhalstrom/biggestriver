@@ -82,7 +82,6 @@ def launch_agent(conn, project=None, runner=None, agent=None):
     the command of the chosen launch_agents entry there (default `claude go --remote-control`), so one click starts one
     agent session. macOS only."""
     import shlex
-    import subprocess
     # A session that waits for work in that project (river wait) gets the item: no new session needed.
     top = core.launch_target(conn, project, agent)
     waiting = core.waiting_agent_for(conn, top["project"])
@@ -93,7 +92,34 @@ def launch_agent(conn, project=None, runner=None, agent=None):
         raise RiverError("starting an agent from the page works on macOS only (it opens Terminal); "
                          "start one yourself: cd <project folder> && claude go")
     t = core.launch_target(conn, project, agent)
-    shell = f"cd {shlex.quote(t['path'])} && {t['command']}"
+    _open_terminal(t, f"cd {shlex.quote(t['path'])} && {t['command']}", runner)
+    return t
+
+
+def dispatch_item(conn, item_id, runner=None, agent=None):
+    """Start work on one ready item: a session that waits for work in its project gets it (push);
+    else river names a new session, reserves the item for it (push), and opens the chosen agent in the
+    project folder with RIVER_AGENT set to that name, so its first river go takes this item."""
+    import secrets
+    import shlex
+    t = core.launch_target(conn, agent=agent, item=item_id)
+    waiting = core.waiting_agent_for(conn, t["project"])
+    if waiting:
+        core.push(conn, t["item"]["id"], waiting, "from the page: Dispatch; you were waiting for work")
+        return {**t, "pushed_to": waiting}
+    if sys.platform != "darwin" and runner is None:
+        raise RiverError("starting an agent from the page works on macOS only (it opens Terminal); start one "
+                         f"yourself: cd <project folder> && claude go, then river push {t['item']['id']} --to <its name>")
+    name = f"{t['project']}-{secrets.token_hex(2)}"
+    core.register(conn, name, note=f"started from the page for #{t['item']['id']}")
+    core.push(conn, t["item"]["id"], name, "from the page: Dispatch started this session for it")
+    _open_terminal(t, f"cd {shlex.quote(t['path'])} && RIVER_AGENT={shlex.quote(name)} {t['command']}", runner)
+    return {**t, "session_name": name}
+
+
+def _open_terminal(t, shell, runner=None):
+    """Run a shell line in a new Terminal tab (or window, per launch_in). macOS only."""
+    import subprocess
     cmd = _applescript_str(shell)
     if t["launch_in"] == "tab":
         # Terminal has no "new tab" command: press Command-T in it, then run the command in that tab.
@@ -133,7 +159,6 @@ def launch_agent(conn, project=None, runner=None, agent=None):
         why = (getattr(e, "stderr", "") or str(e)).strip()
         raise RiverError(f"could not open Terminal: {why}. macOS may ask once to let river control Terminal "
                          f"(System Settings, Privacy & Security, Automation)")
-    return t
 
 
 REPO = PKG.parent
@@ -353,6 +378,7 @@ OPS = {
     "setup_agent_add": lambda c, a, who: setup_agent_add(c, a["label"], who),
     "setup_ntfy": lambda c, a, who: setup_ntfy(c, who),
     "launch_agent": lambda c, a, who: launch_agent(c, a.get("project"), agent=a.get("agent")),
+    "dispatch_item": lambda c, a, who: dispatch_item(c, int(a["id"]), agent=a.get("agent")),
     "decline_message": lambda c, a, who: core.decline_message(c, int(a["msg"]), a.get("note"), who),
     "update": lambda c, a, who: _no_update_in_app() or update_apply(),
     "restart": lambda c, a, who: _no_update_in_app() or (_restart_soon(), {"restarting": True})[1],

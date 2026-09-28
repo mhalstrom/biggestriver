@@ -120,6 +120,26 @@ class LaunchAgent(unittest.TestCase):
         os.environ.pop("RIVER_DB", None)
         self.dir.cleanup()
 
+    def test_dispatch_starts_a_named_session_for_one_item(self):
+        core.project_add(self.c, "shop", path=self.dir.name)
+        top = core.item_add(self.c, "shop", "first", priority=0)["id"]
+        x = core.item_add(self.c, "shop", "second", priority=3)["id"]
+        sent = []
+        t = server.dispatch_item(self.c, x, runner=sent.append)
+        name = t["session_name"]
+        self.assertEqual((t["item"]["id"], core._item(self.c, x)["reserved_for"]), (x, name))
+        self.assertIn(f"RIVER_AGENT={name} claude go", sent[0])
+        b = core.go(self.c, self.dir.name, name)  # the new session's first go takes that item, not the top one
+        self.assertEqual(b["item"]["id"], x)
+        with self.assertRaises(RiverError):
+            server.dispatch_item(self.c, x, runner=sent.append)  # held now
+        core.register(self.c, "idle")
+        with core.tx(self.c):
+            self.c.execute("UPDATE agents SET role='waiting', waiting_in='shop', waiting_since=? WHERE name='idle'",
+                           (core.iso(core.now()),))
+        r = server.dispatch_item(self.c, top, runner=sent.append)
+        self.assertEqual((r["pushed_to"], len(sent)), ("idle", 1))  # a waiting session gets it; no new Terminal
+
     def test_opens_terminal_in_the_folder_of_the_top_ready_item(self):
         folder = os.path.join(self.dir.name, 'my "shop" app')
         core.project_add(self.c, "shop", path=self.dir.name)

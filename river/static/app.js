@@ -189,7 +189,7 @@ function renderStrip() {
   const LA = S.launch_agents || [], pick = LA.includes(store("river.launch.agent")) ? store("river.launch.agent") : LA[0];
   const agentPick = LA.length > 1 ? `<select id="launchAgent" title="Which agent the Start button opens">${LA.map(a => `<option ${a === pick ? "selected" : ""}>${esc(a)}</option>`).join("")}</select>` : "";
   const html = b(NY.length, "need you", "needs", "hum") + (T ? b(T, "taken off your list", "takeovers", "hum") : "")
-    + b(ready, "ready for agents", "work", "good") + b(running, "in progress", "work", "")
+    + b(ready, "ready for agents", "ready", "good") + b(running, "in progress", "work", "")
     + b(blocked, "blocked outside", "blocked", "bad") + b(slots, "open agent slots", "capacity", "good")
     + (ready ? agentPick + `<button data-launch="1" class="primary" title="Open a Terminal tab in the folder of the most important ready item and start ${esc(pick || "an agent")} there (setting launch_agents)"><b>▶</b>Start ${LA.length > 1 ? "" : "an agent"}</button>` : "");
   if ($("#strip").dataset.sig !== html) { $("#strip").innerHTML = html; $("#strip").dataset.sig = html; }
@@ -579,7 +579,7 @@ async function needsYouAction(t) {
 async function refresh() {
   const r = await fetch("/api/state"); S = await r.json();
   if (S.dev_build) { if (window._build && window._build !== S.dev_build) return location.reload(); window._build = S.dev_build; }
-  renderSelects(); renderCapacity(); renderNext(); renderProjects(); renderWork(); renderStrip(); renderAgents(); renderEvents(); renderSettings(); renderTakeovers(); renderBlocked(); renderTargets();
+  renderSelects(); renderCapacity(); renderNext(); renderProjects(); renderWork(); renderStrip(); renderReady(); renderAgents(); renderEvents(); renderSettings(); renderTakeovers(); renderBlocked(); renderTargets();
   renderGraph(false); renderLog(false); pollNeedsYou().catch(() => {}); pollInbox().catch(() => {});
   $("#stamp").textContent = "updated " + new Date().toLocaleTimeString();
   if (openItem != null && drawer.isOpen()) openDrawer(openItem);
@@ -606,6 +606,7 @@ document.addEventListener("click", async (e) => {
   const sb = t.closest("[data-strip]"); if (sb) { const go = sb.dataset.strip;
     if (go === "blocked") { await setTab("projects"); return $("#blockedPanel").scrollIntoView({ block: "start" }); }
     if (go === "capacity") return setTab("capacity");
+    if (go === "ready") return openReady();
     await setTab("board");
     if (go === "takeovers") { takeoversOpen = true; renderTakeovers(); }
     return $(go === "work" ? "#colWork" : "#colNeeds").scrollIntoView({ block: "start" }); }
@@ -747,6 +748,34 @@ function setTab(name, push = true) {
 // Links into the page: #item-4, #tab-graph, #as-alex, or several joined with & (#as-alex&item-4).
 // Setup guide: an overlay that shows until the user dismisses it for good (setting setup_done).
 let setupSeen = false;
+// Ready for agents: every ready agent item, most important first, each with Dispatch (one session for one item).
+const readyDialog = makeDialog($("#readyDlg"));
+function openReady() { readyDialog.open(); renderReady(); $("#readyClose").focus(); }
+function renderReady() {
+  if (!S || !readyDialog.isOpen()) return;
+  const rows = S.items.filter(i => i.ready && i.doer !== "human" && !["deploy", "review"].includes(i.kind)).sort(itemOrder);
+  const LA = S.launch_agents || [], pick = $("#launchAgent") ? $("#launchAgent").value : (LA.includes(store("river.launch.agent")) ? store("river.launch.agent") : LA[0]);
+  $("#readyList").innerHTML = rows.map(i => `<div class="row"><div>
+      <div class="t"><span class="link" data-open="${i.id}">#${i.id} ${esc(i.title)}</span></div>
+      <div class="sub">${projectChip(i.project)}${prioNumChip(i.effective_priority ?? i.priority, "priority")}${doerChip(i)}
+        ${i.reserved_for ? `<span>reserved for ${esc(i.reserved_for)}${i.reserved_until ? ", " + left(i.reserved_until) + " left" : ""}</span>` : ""}</div></div>
+      ${i.reserved_for ? "" : `<button class="btn" data-dispatch="${i.id}" title="Give #${i.id} to a session that waits in ${esc(i.project)}, or start ${esc(pick || "an agent")} in its folder for this item">Dispatch</button>`}
+    </div>`).join("") || `<div class="muted">Nothing is ready for an agent now.</div>`;
+}
+$("#readyClose").onclick = () => readyDialog.close();
+$("#readyDlg").addEventListener("click", async (e) => {
+  if (e.target === e.currentTarget) return readyDialog.close();
+  if (e.target.closest("[data-open]")) return readyDialog.close();  // the item opens in the drawer
+  const b = e.target.closest("[data-dispatch]"); if (!b || b.disabled) return;
+  b.disabled = true;
+  const agent = $("#launchAgent") ? $("#launchAgent").value : undefined;
+  try {
+    const r = await act("dispatch_item", { id: +b.dataset.dispatch, agent });
+    toast(r.pushed_to ? `Gave #${r.item.id} ${clip(r.item.title, 60)} to ${r.pushed_to}, which was waiting for work`
+                      : `Started ${r.agent} as ${r.session_name} in ${r.project}, for #${r.item.id} ${clip(r.item.title, 60)}`);
+  } catch (err) { b.disabled = false; /* toast shown */ }
+});
+
 async function openSetup() {
   const r = await fetch("/api/setup"); if (!r.ok) return;
   renderSetup(await r.json()); setupDialog.open();

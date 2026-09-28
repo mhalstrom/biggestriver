@@ -199,6 +199,14 @@
     <button class="btn primary" id="setupDone">Don't show again</button>
   </div>
 </div></div>
+<div id="readyDlg" class="hidden" role="dialog" aria-modal="true" aria-labelledby="readyTitle"><div class="box">
+  <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
+    <h2 id="readyTitle" style="margin:0">Ready for agents</h2>
+    <button class="iconbtn" id="readyClose" title="Close">✕</button>
+  </div>
+  <div class="muted" style="font-size:13px;margin:4px 0 8px">Most important first. Dispatch gives the item to a session that waits for work in its project; else it starts a new agent in the project folder, and that agent's first river go takes this item.</div>
+  <div id="readyList"></div>
+</div></div>
 
 <!-- An old river serve with a new page cannot serve app.js: say so instead of showing a dead page. -->
 <script>function riverLoadFailed() { var d = document.createElement("div"); d.id = "loadFailed";

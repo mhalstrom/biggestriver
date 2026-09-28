@@ -3769,18 +3769,26 @@ def waiting_agent_for(conn, project):
     return None
 
 
-def launch_target(conn, project=None, agent=None):
+def launch_target(conn, project=None, agent=None, item=None):
     """Where and how a new agent session should start: the folder of the project that holds the most
-    important ready item an agent can take (or of the project named), and the command of the chosen
-    launch_agents entry (the first when none is named). Refuses when nothing is ready there."""
+    important ready item an agent can take (or of the project named, or of the one item named), and the
+    command of the chosen launch_agents entry (the first when none is named). Refuses when nothing is ready there."""
     ann = annotate(conn)
     pool = sorted((a for a in ann.values() if a["ready"] and a["doer"] != "human" and a["kind"] not in ("deploy", "review")
                    and not a["reserved_for"] and not a["project_archived"]
                    and (project is None or a["project"] == project)), key=lambda a: a["sort_key"])
-    if not pool:
+    if item is not None:
+        top = next((a for a in pool if a["id"] == int(item)), None)
+        if top is None:
+            a = ann.get(int(item))
+            raise RiverError(f"#{item} is not ready for an agent" + (
+                "" if a is None else f" (status {a['status']}" + (f", reserved for {a['reserved_for']}" if a["reserved_for"] else "")
+                + (", for a person" if a["doer"] == "human" else "") + (", waits on open items" if not a["ready"] else "") + ")"))
+    elif not pool:
         raise RiverError("nothing is ready for an agent" + (f" in {project}" if project else "")
                          + "; a new session would have no work")
-    top = pool[0]
+    else:
+        top = pool[0]
     p = _project(conn, top["project"])
     if not p["path"]:
         raise RiverError(f"project {p['name']} has no folder, so river cannot start a session there: "
