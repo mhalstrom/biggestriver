@@ -85,7 +85,8 @@ def smtp_password():
     f = PASSWORD_FILE.expanduser()
     if not f.exists():
         return None
-    if f.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+    # Windows has no POSIX modes (chmod does nothing there); the file sits in the user's own profile folder.
+    if os.name != "nt" and f.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO):
         raise RiverError(f"refused: {f} can be read by other users; run: chmod 600 {f}")
     return f.read_text().strip()
 

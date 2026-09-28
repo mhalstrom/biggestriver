@@ -230,7 +230,7 @@ class Watched(unittest.TestCase):
                 (static / f).write_text("x")
             old, server.STATIC = server.STATIC, static
             try:
-                names = [str(f.relative_to(static)) for f in server._watched() if f.suffix == ".js"]
+                names = [f.relative_to(static).as_posix() for f in server._watched() if f.suffix == ".js"]
                 before = server._build_id()
                 os.utime(static / "components/chip.js", ns=(1, 2 ** 62))
                 self.assertNotEqual(server._build_id(), before)
