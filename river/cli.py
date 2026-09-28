@@ -511,6 +511,12 @@ def build_parser():
     x = sub.add_parser("serve", help="the web page on 127.0.0.1")
     x.add_argument("--port", type=int); x.add_argument("--open", action="store_true")
     x.add_argument("--dev", action="store_true", help="restart on code change; the page reloads itself")
+    sk = sub.add_parser("skills", help="install the agent guides as Claude Code skills")
+    sks = sk.add_subparsers(dest="scmd", required=True)
+    x = sks.add_parser("install", help="link river and river-planner into ~/.claude/skills")
+    x.add_argument("--dir", default="~/.claude/skills", help="skills folder (default ~/.claude/skills)")
+    x.add_argument("--copy", action="store_true", help="copy the files instead of linking them")
+    x.add_argument("--force", action="store_true", help="replace a folder that is not a link (your edits there are lost)")
     db = sub.add_parser("db", help="where the queue database is, and moving it to ~/.biggestriver")
     dbs = db.add_subparsers(dest="dcmd", required=True)
     dbs.add_parser("path", help="print the database file river uses")
@@ -522,6 +528,31 @@ def build_parser():
     x = sub.add_parser("setup-agent", help="print (or append) the instructions block for CLAUDE.md / AGENTS.md")
     x.add_argument("--append", metavar="FILE", help="append the block to this file if it is not there yet")
     return p
+
+
+def install_skills(dest, copy=False, force=False):
+    """Link (or copy) the packaged guides into a skills folder. Returns one line per skill."""
+    import shutil
+    dest.mkdir(parents=True, exist_ok=True)
+    out = []
+    for name in ("river", "river-planner"):
+        src, dst = GUIDES / name, dest / name
+        if not (src / "SKILL.md").is_file():
+            raise RiverError(f"no guide at {src}; reinstall river")
+        if dst.is_symlink():
+            dst.unlink()
+        elif dst.exists():
+            if not force:
+                raise RiverError(f"{dst} is a folder, not a link; it may hold your own edits. "
+                                 f"Replace it with: river skills install --force")
+            shutil.rmtree(dst)
+        if copy:
+            shutil.copytree(src, dst)
+            out.append(f"copied {dst}")
+        else:
+            dst.symlink_to(src.resolve(), target_is_directory=True)
+            out.append(f"linked {dst} -> {src.resolve()}")
+    return out
 
 
 def run(argv=None):
@@ -539,6 +570,10 @@ def run(argv=None):
         return 0
     if args.cmd == "init":
         return init_folder(args)
+    if args.cmd == "skills":
+        for line in install_skills(Path(args.dir).expanduser(), args.copy, args.force):
+            print(line)
+        return 0
     if args.cmd == "db":
         if args.dcmd == "move":
             r = core.db_move(args.force)

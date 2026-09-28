@@ -1015,6 +1015,25 @@ class DbLocation(unittest.TestCase):
             core.db_move(force=True)  # already moved
 
 
+class SkillsInstall(unittest.TestCase):
+    def test_link_copy_and_refuse_real_folder(self):
+        from pathlib import Path
+        from river import cli
+        with tempfile.TemporaryDirectory() as d:
+            dest = Path(d)
+            lines = cli.install_skills(dest)
+            self.assertTrue((dest / "river").is_symlink())
+            self.assertTrue((dest / "river-planner" / "SKILL.md").is_file())
+            cli.install_skills(dest)  # again: links are replaced
+            (dest / "river").unlink()
+            (dest / "river").mkdir()
+            with self.assertRaises(RiverError):
+                cli.install_skills(dest)  # a real folder may hold edits
+            cli.install_skills(dest, copy=True, force=True)
+            self.assertFalse((dest / "river").is_symlink())
+            self.assertEqual(len(lines), 2)
+
+
 class Sessions(Base):
     def test_session_name_recorded_and_shown(self):
         core.project_add(self.c, "a", path=self.dir.name)
