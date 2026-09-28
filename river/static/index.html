@@ -143,6 +143,24 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; padding
 #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 8px; display: none; z-index: 20; max-width: 90vw; }
 #toast.err { background: var(--warn); color: #fff; }
 #graph { overflow: auto; }
+/* Graph tab: projects on the left, each card with a small preview of its graph; the chosen graph on the right. */
+.graph-layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 16px; align-items: start; }
+.graph-side { position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; padding: 10px; }
+.graph-side h2 { margin: 2px 4px 8px; }
+.gcard { display: block; width: 100%; text-align: left; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; cursor: pointer; }
+.gcard:hover { border-color: var(--muted); }
+.gcard.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.gcard.empty { opacity: .6; }
+.gcard b { font-size: 13px; overflow-wrap: anywhere; }
+.gcard .gc-n { display: block; font-size: 11px; color: var(--muted); margin-top: 1px; font-variant-numeric: tabular-nums; }
+.gcard svg { display: block; width: 100%; height: 56px; margin-top: 6px; border-radius: 5px; background: var(--panel); }
+.gcard .gc-none { display: block; font-size: 11px; color: var(--muted); margin-top: 6px; }
+@media (max-width: 800px) {
+  .graph-layout { grid-template-columns: 1fr; }
+  .graph-side { position: static; max-height: none; display: flex; gap: 8px; overflow-x: auto; }
+  .graph-side h2 { display: none; }
+  .gcard { flex: 0 0 180px; margin-bottom: 0; }
+}
 #graph svg { height: auto; }
 table.settings { width: 100%; border-collapse: collapse; }
 table.settings td, table.settings th { text-align: left; padding: 6px; border-top: 1px solid var(--line); font-size: 13px; }
@@ -335,13 +353,15 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
   </section>
 
   <section id="tab-graph" class="hidden">
+    <div class="graph-layout">
+    <aside class="panel graph-side" id="graphSide" aria-label="Choose a project"></aside>
     <div class="panel">
-      <h2>Dependency graph <span class="spacer"></span>
-        <select id="graphProject"><option value="">All projects</option></select>
+      <h2><span id="graphTitle">Dependency graph</span> <span class="spacer"></span>
         <label class="sub"><input type="checkbox" id="graphDone"> include done</label>
       </h2>
       <div class="muted" style="font-size:12px;margin-bottom:8px">Arrows point from a prerequisite to the item that waits on it. Green: ready. Yellow: in progress. Purple border: a human does it. Click a box to open it.</div>
       <div id="graph"></div>
+    </div>
     </div>
   </section>
 
@@ -666,7 +686,7 @@ function fillSelect(sel, values, keepFirst) {
 
 function renderSelects() {
   const names = S.projects.map(p => p.name);
-  { const el = $("#area"), cur = el.value; el.innerHTML = `<option value="">All projects</option><option value="__mine">Near my earlier work</option>` + names.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join(""); if ([...el.options].some(o => o.value === cur)) el.value = cur; } fillSelect("#graphProject", names, true); fillSelect("#logProject", names, true); fillSelect("#addProject", names, false);
+  { const el = $("#area"), cur = el.value; el.innerHTML = `<option value="">All projects</option><option value="__mine">Near my earlier work</option>` + names.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join(""); if ([...el.options].some(o => o.value === cur)) el.value = cur; } fillSelect("#logProject", names, true); fillSelect("#addProject", names, false);
   const a = $("#actor"), cur = a.value || store("river.actor") || "";
   a.innerHTML = `<option value="">(nobody)</option>` + S.agents.map(x => `<option value="${esc(x.name)}">${esc(x.name)}${x.kind === "human" ? " (human)" : ""}</option>`).join("");
   if ([...a.options].some(o => o.value === cur)) a.value = cur;
@@ -719,13 +739,58 @@ async function renderLog(force) {
   }).join("") || `<div class="muted">No items.</div>`;
 }
 
-let graphDefaulted = false, elkReady = null;
+let graphDefaulted = false, elkReady = null, graphProj = "", sideSig = "", sideShown = null;
 // ELK routes edges around boxes; the default layout can run an edge behind an unrelated box, which
 // reads as a dependency that does not exist. If ELK does not load, edges are drawn above the boxes.
 function loadElk() {
   if (elkReady === null) elkReady = import("https://cdn.jsdelivr.net/npm/@mermaid-js/layout-elk@0.2.3/dist/mermaid-layout-elk.esm.min.mjs")
     .then(m => { mermaid.registerLayoutLoaders(m.default); return true; }).catch(() => false);
   return elkReady;
+}
+// A small picture of one project's graph for its sidebar card: items in columns by step
+// (1 = nothing inside the project waits first), lines for waits-on, colors as in the full graph.
+function miniGraph(items) {
+  const byId = new Map(items.map(i => [i.id, i])), depth = new Map();
+  const d = (i, seen = new Set()) => {
+    if (depth.has(i.id)) return depth.get(i.id);
+    if (seen.has(i.id)) return 0; seen.add(i.id);
+    const v = Math.max(-1, ...i.waits_on.filter(x => byId.has(x)).map(x => d(byId.get(x), seen))) + 1;
+    depth.set(i.id, v); return v;
+  };
+  items.forEach(i => d(i));
+  const cols = [];
+  for (const i of items) (cols[depth.get(i.id)] ||= []).push(i);
+  const W = 12, H = 7, GX = 10, GY = 4, pos = new Map();
+  cols.forEach((col, x) => col.forEach((i, y) => pos.set(i.id, [6 + x * (W + GX), 5 + y * (H + GY)])));
+  const w = 12 + cols.length * (W + GX) - GX, h = 10 + Math.max(...cols.map(c => c.length)) * (H + GY) - GY;
+  const fill = (i) => ["done", "dropped"].includes(i.status) ? "var(--line)" : ["in_progress", "held"].includes(i.status) ? "var(--prog)" : i.ready ? "var(--ready)" : "var(--muted)";
+  let lines = "", boxes = "";
+  for (const i of items) for (const b of i.waits_on) if (pos.has(b)) {
+    const [x1, y1] = pos.get(b), [x2, y2] = pos.get(i.id);
+    lines += `<line x1="${x1 + W}" y1="${y1 + H / 2}" x2="${x2}" y2="${y2 + H / 2}"/>`;
+  }
+  for (const i of items) {
+    const [x, y] = pos.get(i.id);
+    boxes += `<rect x="${x}" y="${y}" width="${W}" height="${H}" rx="2" fill="${fill(i)}"${i.doer === "human" ? ' stroke="var(--human)" stroke-width="1.5"' : ""}/>`;
+  }
+  return `<svg viewBox="0 0 ${Math.max(w, 150)} ${Math.max(h, 38)}" preserveAspectRatio="xMidYMid meet" aria-hidden="true"><g stroke="var(--muted)" stroke-width=".7" opacity=".6">${lines}</g>${boxes}</svg>`;
+}
+function renderGraphSide(withDone) {
+  const live = (i) => withDone || !["done", "dropped"].includes(i.status);
+  const per = S.projects.map(p => ({ p, items: S.items.filter(i => i.project === p.name && live(i) && inGoal(i)) }));
+  const sig = JSON.stringify([graphProj, withDone, per.map(x => [x.p.name, x.items.map(i => [i.id, i.status, i.ready, i.waits_on])])]);
+  if (sig === sideSig) return;
+  sideSig = sig;
+  const card = (name, label, items, extra) => {
+    const ready = items.filter(i => i.ready).length;
+    return `<button class="gcard${graphProj === name ? " on" : ""}${items.length ? "" : " empty"}" data-gproj="${esc(name)}" aria-pressed="${graphProj === name}">
+      <b>${esc(label)}</b><span class="gc-n">${items.length} ${withDone ? "items" : "open"} · ${ready} ready</span>${extra}</button>`;
+  };
+  $("#graphSide").innerHTML = `<h2>Projects</h2>` + card("", "All projects", per.flatMap(x => x.items), "")
+    + per.map(({ p, items }) => card(p.name, p.name, items, items.length ? miniGraph(items) : `<span class="gc-none">No ${withDone ? "" : "open "}items</span>`)).join("");
+  const on = $("#graphSide .gcard.on"), side = $("#graphSide");
+  if (on && sideShown !== graphProj) side.scrollTo({ left: on.offsetLeft - side.offsetLeft - 10, top: side.scrollHeight > side.clientHeight ? on.offsetTop - side.offsetTop - 40 : 0 });
+  sideShown = graphProj;
 }
 async function renderGraph(force) {
   if (tab !== "graph" || !window.mermaid) return;
@@ -734,9 +799,12 @@ async function renderGraph(force) {
     graphDefaulted = true;
     const open = S.items.filter(i => !["done", "dropped"].includes(i.status));
     const top = S.items.find(i => i.ready) || open[0];
-    if (open.length > 40 && top && !$("#graphProject").value) $("#graphProject").value = top.project;
+    if (open.length > 40 && top && !graphProj) graphProj = top.project;
   }
-  const proj = $("#graphProject").value, withDone = $("#graphDone").checked;
+  if (graphProj && !S.projects.some(p => p.name === graphProj)) graphProj = "";
+  const proj = graphProj, withDone = $("#graphDone").checked;
+  renderGraphSide(withDone);
+  $("#graphTitle").textContent = proj ? "Dependency graph: " + proj : "Dependency graph: all projects";
   const items = S.items.filter(i => (withDone || !["done", "dropped"].includes(i.status)));
   const ids = new Set(items.map(i => i.id));
   const G = goalSel();
@@ -1152,7 +1220,10 @@ $("#goalGo").addEventListener("click", async () => {
 $("#area").addEventListener("change", renderNext);
 $("#showDone").addEventListener("change", renderProjects);
 $("#showIdle").addEventListener("change", renderAgents);
-$("#graphProject").addEventListener("change", () => renderGraph(true));
+$("#graphSide").addEventListener("click", (e) => {
+  const c = e.target.closest("[data-gproj]"); if (!c) return;
+  graphProj = c.dataset.gproj; renderGraph(true);
+});
 $("#graphDone").addEventListener("change", () => renderGraph(true));
 $("#logProject").addEventListener("change", () => renderLog(true));
 $("#logSince").addEventListener("change", () => renderLog(true));
