@@ -6,16 +6,21 @@ const net = require("node:net");
 const path = require("node:path");
 const http = require("node:http");
 
-// An app started from the Dock gets a short PATH, so look in the usual places too.
-const PYTHONS = ["python3", "/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"];
+// Each candidate is a command and its first arguments. An app started from the Dock gets a short
+// PATH, so on macOS look in the usual places too. On Windows the python.org installer gives the
+// py launcher and python (python3 is often only the Microsoft Store stub).
+const PYTHONS = process.platform === "win32"
+  ? [["py", "-3"], ["python"], ["python3"]]
+  : [["python3"], ["/opt/homebrew/bin/python3"], ["/usr/local/bin/python3"], ["/usr/bin/python3"]];
 
-// The first python3 that is 3.10 or newer, or null.
+// The first Python that is 3.10 or newer, as [command, ...args], or null.
 function findPython(candidates = PYTHONS) {
-  for (const py of candidates) {
+  for (const c of candidates) {
+    const [cmd, ...args] = Array.isArray(c) ? c : [c];
     try {
-      const out = execFileSync(py, ["-c", "import sys; print(int(sys.version_info >= (3, 10)))"],
-        { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
-      if (out.trim() === "1") return py;
+      const out = execFileSync(cmd, [...args, "-c", "import sys; print(int(sys.version_info >= (3, 10)))"],
+        { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
+      if (out.trim() === "1") return [cmd, ...args];
     } catch (e) { /* not there, or too old */ }
   }
   return null;
@@ -42,12 +47,14 @@ function get(url) {
 // { url, port, child, stop } once /api/state answers; rejects with a message a person can act on.
 async function startRiver({ riverRoot, python, env = process.env, timeoutMs = 20000, find = findPython } = {}) {
   const py = python || find();
-  if (!py) throw new Error("Biggest River needs Python 3.10 or newer. Install it (for example: brew install python), then open the app again.");
+  if (!py) throw new Error("Biggest River needs Python 3.10 or newer. Install it (" + (process.platform === "win32"
+    ? "from python.org, or: winget install Python.Python.3.13" : "for example: brew install python") + "), then open the app again.");
+  const [pyCmd, ...pyArgs] = Array.isArray(py) ? py : [py];
   const bin = path.join(riverRoot, "bin", "river");
   if (!fs.existsSync(bin)) throw new Error(`river is missing from ${riverRoot}`);
   const port = await freePort();
-  const child = spawn(py, [bin, "serve", "--port", String(port)],
-    { cwd: riverRoot, env: { ...env, RIVER_DESKTOP: "1" }, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(pyCmd, [...pyArgs, bin, "serve", "--port", String(port)],
+    { cwd: riverRoot, env: { ...env, RIVER_DESKTOP: "1" }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   let log = "";
   child.stdout.on("data", (d) => { log += d; });
   child.stderr.on("data", (d) => { log += d; });

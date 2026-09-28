@@ -28,10 +28,9 @@ jobs:
           /tmp/v/bin/pip install --quiet dist/*.whl
           RIVER_DB=/tmp/q.db /tmp/v/bin/river guide | head -1
           RIVER_DB=/tmp/q.db /tmp/v/bin/river project add demo
-  # Windows: find what breaks before the Windows app (#274). Allowed to fail until then.
+  # Windows: river and the desktop app starter work there too (#273, #274).
   windows:
     runs-on: windows-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6

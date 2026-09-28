@@ -77,22 +77,28 @@ def _applescript_str(s):
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+# The page opens agent sessions in a new Terminal tab (macOS) or console window (Windows). Tests set it.
+PLATFORM = sys.platform
+
+
+def _can_open_terminal(runner, hint):
+    if PLATFORM not in ("darwin", "win32") and runner is None:
+        raise RiverError(f"starting an agent from the page works on macOS and Windows only; start one yourself: {hint}")
+
+
 def launch_agent(conn, project=None, runner=None, agent=None):
     """Open a Terminal window in the project folder of the most important ready agent item and run
     the command of the chosen launch_agents entry there (default `claude go --remote-control`), so one click starts one
-    agent session. macOS only."""
-    import shlex
+    agent session. macOS and Windows."""
     # A session that waits for work in that project (river wait) gets the item: no new session needed.
     top = core.launch_target(conn, project, agent)
     waiting = core.waiting_agent_for(conn, top["project"])
     if waiting:
         core.push(conn, top["item"]["id"], waiting, "from the Start button: you were waiting for work")
         return {**top, "pushed_to": waiting}
-    if sys.platform != "darwin" and runner is None:
-        raise RiverError("starting an agent from the page works on macOS only (it opens Terminal); "
-                         "start one yourself: cd <project folder> && claude go")
+    _can_open_terminal(runner, "cd <project folder> && claude go")
     t = core.launch_target(conn, project, agent)
-    _open_terminal(t, f"cd {shlex.quote(t['path'])} && {t['command']}", runner)
+    _open_terminal(t, {}, runner)
     return t
 
 
@@ -101,19 +107,16 @@ def dispatch_item(conn, item_id, runner=None, agent=None):
     else river names a new session, reserves the item for it (push), and opens the chosen agent in the
     project folder with RIVER_AGENT set to that name, so its first river go takes this item."""
     import secrets
-    import shlex
     t = core.launch_target(conn, agent=agent, item=item_id)
     waiting = core.waiting_agent_for(conn, t["project"])
     if waiting:
         core.push(conn, t["item"]["id"], waiting, "from the page: Dispatch; you were waiting for work")
         return {**t, "pushed_to": waiting}
-    if sys.platform != "darwin" and runner is None:
-        raise RiverError("starting an agent from the page works on macOS only (it opens Terminal); start one "
-                         f"yourself: cd <project folder> && claude go, then river push {t['item']['id']} --to <its name>")
+    _can_open_terminal(runner, f"cd <project folder> && claude go, then river push {t['item']['id']} --to <its name>")
     name = f"{t['project']}-{secrets.token_hex(2)}"
     core.register(conn, name, note=f"started from the page for #{t['item']['id']}")
     core.push(conn, t["item"]["id"], name, "from the page: Dispatch started this session for it")
-    _open_terminal(t, f"cd {shlex.quote(t['path'])} && RIVER_AGENT={shlex.quote(name)} {t['command']}", runner)
+    _open_terminal(t, {"RIVER_AGENT": name}, runner)
     return {**t, "session_name": name}
 
 
@@ -155,19 +158,30 @@ def open_needs_you(conn, runner=None, agent=None, person=None):
 
 def _open_focused(conn, p, focus, runner, agent):
     """Open the chosen agent in a project folder with RIVER_FOCUS set; its river go reads it."""
-    import shlex
-    if sys.platform != "darwin" and runner is None:
-        raise RiverError("starting an agent from the page works on macOS only (it opens Terminal); start one "
-                         f"yourself: cd {p['path']} && RIVER_FOCUS={shlex.quote(focus)} claude go")
+    _can_open_terminal(runner, f"cd {p['path']}, set RIVER_FOCUS={focus}, then claude go")
     t = {"project": p["name"], "path": p["path"], "focus": focus,
          **core._launch_agent_cmd(conn, p["id"], agent), "launch_in": core.setting(conn, "launch_in", project_id=p["id"])}
-    _open_terminal(t, f"cd {shlex.quote(p['path'])} && RIVER_FOCUS={shlex.quote(focus)} {t['command']}", runner)
+    _open_terminal(t, {"RIVER_FOCUS": focus}, runner)
     return t
 
 
-def _open_terminal(t, shell, runner=None):
-    """Run a shell line in a new Terminal tab (or window, per launch_in). macOS only."""
+def _open_terminal(t, env, runner=None):
+    """Run the agent command (t["command"]) in the project folder (t["path"]) with env set: in a new
+    Terminal tab or window on macOS (launch_in), in a new console window on Windows. runner (tests) gets
+    the AppleScript on macOS, and {"args", "cwd", "env"} on Windows."""
+    import os
+    import shlex
     import subprocess
+    if PLATFORM == "win32":
+        # cmd /k keeps the window open when the agent ends; the command line goes to cmd as written.
+        spec = {"args": f"cmd /k {t['command']}", "cwd": t["path"], "env": dict(env)}
+        try:
+            (runner or (lambda s: subprocess.Popen(s["args"], cwd=s["cwd"], env={**os.environ, **s["env"]},
+                                                   creationflags=subprocess.CREATE_NEW_CONSOLE)))(spec)
+        except OSError as e:
+            raise RiverError(f"could not open a console window in {t['path']}: {e}")
+        return
+    shell = f"cd {shlex.quote(t['path'])} && " + "".join(f"{k}={shlex.quote(v)} " for k, v in env.items()) + t["command"]
     cmd = _applescript_str(shell)
     if t["launch_in"] == "tab":
         # Terminal has no "new tab" command: press Command-T in it, then run the command in that tab.

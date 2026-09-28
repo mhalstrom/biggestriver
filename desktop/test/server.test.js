@@ -13,8 +13,9 @@ const fetchJson = (url) => new Promise((resolve, reject) => {
 });
 
 test("finds a Python 3.10+", () => {
-  assert.ok(findPython(), "python3 3.10 or newer is on this machine");
-  assert.strictEqual(findPython(["/no/such/python"]), null);
+  const py = findPython();
+  assert.ok(Array.isArray(py) && py.length >= 1, "Python 3.10 or newer is on this machine");
+  assert.strictEqual(findPython(["/no/such/python", ["/no/such/py", "-3"]]), null);
 });
 
 test("starts river serve on a free port, in desktop mode, and stops it", async () => {

@@ -169,6 +169,23 @@ class LaunchAgent(unittest.TestCase):
         with self.assertRaises(RiverError):
             server.open_agent_on(self.c, blocker, runner=sent.append)  # held now: message the holder
 
+    def test_windows_opens_a_console_window_with_the_env_set(self):
+        core.project_add(self.c, "shop", path=self.dir.name)
+        x = core.item_add(self.c, "shop", "work")["id"]
+        old = server.PLATFORM
+        try:
+            server.PLATFORM = "win32"
+            sent = []
+            t = server.dispatch_item(self.c, x, runner=sent.append)
+            self.assertEqual(sent[0], {"args": "cmd /k claude go --remote-control", "cwd": t["path"],
+                                       "env": {"RIVER_AGENT": t["session_name"]}})
+            server.PLATFORM = "linux"
+            core.item_add(self.c, "shop", "more work")
+            with self.assertRaisesRegex(RiverError, "macOS and Windows"):
+                server.launch_agent(self.c)
+        finally:
+            server.PLATFORM = old
+
     def test_opens_terminal_in_the_folder_of_the_top_ready_item(self):
         folder = os.path.join(self.dir.name, 'my "shop" app')
         core.project_add(self.c, "shop", path=self.dir.name)

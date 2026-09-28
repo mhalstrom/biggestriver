@@ -22,7 +22,7 @@ function renderCapacity() {
   const layers = capacityBars(c.layers);
   $("#capacity").innerHTML = `<h2>Parallel work</h2>
     <div class="stats">
-      <div class="stat ${c.spare_slots ? "good" : ""}"${c.spare_slots ? ` data-launch="1" style="cursor:pointer" title="Click to start an agent session in Terminal"` : ""}><div class="n">${c.spare_slots}</div><div class="l">open slots: more agent sessions you can start now${c.spare_slots ? " (click to start one)" : ""}</div></div>
+      <div class="stat ${c.spare_slots ? "good" : ""}"${c.spare_slots ? ` data-launch="1" style="cursor:pointer" title="Click to start an agent session in a new terminal window"` : ""}><div class="n">${c.spare_slots}</div><div class="l">open slots: more agent sessions you can start now${c.spare_slots ? " (click to start one)" : ""}</div></div>
       <div class="stat ${c.excess_sessions ? "bad" : ""}"><div class="n">${c.excess_sessions}</div><div class="l">sessions with nothing ready for them</div></div>
       <div class="stat"><div class="n">${c.agents_active}</div><div class="l">active agent sessions (${c.agents_busy} busy)</div></div>
       <div class="stat"><div class="n">${c.in_progress.length}</div><div class="l">items in progress</div></div>
@@ -191,7 +191,7 @@ function renderStrip() {
   const html = b(NY.length, "need you", "needs", "hum") + (T ? b(T, "taken off your list", "takeovers", "hum") : "")
     + b(ready, "ready for agents", "ready", "good") + b(running, "in progress", "work", "")
     + b(blocked, "blocked outside", "blocked", "bad") + b(slots, "open agent slots", "capacity", "good")
-    + (ready ? agentPick + `<button data-launch="1" class="primary" title="Open a Terminal tab in the folder of the most important ready item and start ${esc(pick || "an agent")} there (setting launch_agents)"><b>▶</b>Start ${LA.length > 1 ? "" : "an agent"}</button>` : "");
+    + (ready ? agentPick + `<button data-launch="1" class="primary" title="Open a new terminal tab (a console window on Windows) in the folder of the most important ready item and start ${esc(pick || "an agent")} there (setting launch_agents)"><b>▶</b>Start ${LA.length > 1 ? "" : "an agent"}</button>` : "");
   if ($("#strip").dataset.sig !== html) { $("#strip").innerHTML = html; $("#strip").dataset.sig = html; }
 }
 
