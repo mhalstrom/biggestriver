@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import core
+from . import __version__, core
 from .core import RiverError
 
 # Agent guides: inside the package when installed (the wheel copies skills/ there), else the repository's skills/.
@@ -299,6 +299,7 @@ def _fmt_msg(m, indent=""):
 
 def build_parser():
     p = argparse.ArgumentParser(prog="river", description="Biggest River: a dependency-ordered work queue for agents and people.")
+    p.add_argument("--version", action="version", version=f"river {__version__}")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     p.add_argument("--as", dest="actor", default=os.environ.get("RIVER_AGENT"), help="agent name (default $RIVER_AGENT)")
     p.add_argument("--quiet", "-q", action="store_true", default=bool(os.environ.get("RIVER_QUIET")),
@@ -1068,6 +1069,7 @@ def render_plan(b):
         if t:
             out += ["", f"TRACKER: project {n} uses {t}.",
                     "  Import its open issues with that tool before you plan new work:",
+                    "  - Link form <tracker>:<key>: github:owner/repo#12, jira:PROJ-123, linear:ENG-42",
                     "  - Skip an issue river has already: river list --ref <tracker>:<key>",
                     f"  - Add the others: {r} add {n} \"<issue title>\" --ref <tracker>:<key> --ref-url <issue link> "
                     "--context \"<what the issue says>\"",

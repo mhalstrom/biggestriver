@@ -1974,3 +1974,14 @@ class TrackerWriteBack(Base):
         self.c.close()
         self.c = core.connect(self.path)
         self.assertIn("synced_at", {r["name"] for r in self.c.execute("PRAGMA table_info(item_refs)")})
+
+
+class Version(unittest.TestCase):
+    def test_version_flag(self):
+        import contextlib
+        import io
+        from river import __version__, cli
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as e:
+            cli.build_parser().parse_args(["--version"])
+        self.assertEqual((e.exception.code, out.getvalue().strip()), (0, f"river {__version__}"))
