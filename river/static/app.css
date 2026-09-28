@@ -22,6 +22,21 @@
     --shadow: none;
   }
 }
+/* The header's theme switch: Dark sets data-theme="dark" (the same colors), Light sets "light". */
+:root[data-theme="dark"] {
+  --bg: #0f1216; --panel: #171b21; --ink: #e6e9ee; --muted: #9aa5b1; --line: #2a3139;
+  --accent: #4c8dff; --accent-ink: #0b0d10;
+  --ready: #4ac26b; --ready-bg: #12301c;
+  --prog: #e3b341; --prog-bg: #3a2e0a;
+  --wait: #9aa5b1; --wait-bg: #232a32;
+  --done: #7d8590; --done-bg: #1c2128;
+  --warn: #ff7b72; --warn-bg: #3d1614;
+  --human: #b38cff; --human-bg: #2a1f45;
+  --shadow: none;
+}
+:root { color-scheme: light dark; }
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
 header { position: sticky; top: 0; z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 16px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }

@@ -795,7 +795,21 @@ $("#setGo").addEventListener("click", async () => {
   await act("config_set", args).then(() => toast("Saved")).catch(() => {});
 });
 
-if (window.mermaid) mermaid.initialize({ startOnLoad: false, securityLevel: "loose", theme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "default", flowchart: { useMaxWidth: true } });
+// Theme: System follows the computer's setting (also when it changes); Light and Dark set data-theme on
+// <html>, saved in this browser. Mermaid draws the graph in the chosen theme.
+const darkQuery = matchMedia("(prefers-color-scheme: dark)");
+function themeChoice() { const t = store("river.theme"); return t === "light" || t === "dark" ? t : "system"; }
+function applyTheme() {
+  const t = themeChoice(), root = document.documentElement;
+  if (t === "system") delete root.dataset.theme; else root.dataset.theme = t;
+  const dark = t === "dark" || (t === "system" && darkQuery.matches);
+  if (window.mermaid) mermaid.initialize({ startOnLoad: false, securityLevel: "loose", theme: dark ? "dark" : "default", flowchart: { useMaxWidth: true } });
+  if (S) renderGraph(true);
+}
+$("#theme").value = themeChoice();
+$("#theme").addEventListener("change", (e) => { store("river.theme", e.target.value === "system" ? "" : e.target.value); applyTheme(); });
+darkQuery.addEventListener("change", () => { if (themeChoice() === "system") applyTheme(); });
+applyTheme();
 // Drag an item row onto an agent to push it there.
 document.addEventListener("dragstart", (e) => { const r = e.target.closest && e.target.closest(".row[draggable]"); if (r) e.dataTransfer.setData("text/river-item", r.dataset.id); });
 document.addEventListener("dragover", (e) => { const a = e.target.closest && e.target.closest("[data-agent]"); if (a && e.dataTransfer.types.includes("text/river-item")) { e.preventDefault(); a.classList.add("drop"); } });
