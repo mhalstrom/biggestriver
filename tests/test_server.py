@@ -58,5 +58,54 @@ class PageMessages(unittest.TestCase):
         self.assertEqual(self.get("/api/inbox")[0], 400)  # no agent named
 
 
+class PageGoals(unittest.TestCase):
+    """Goals on the page: the state carries goals with progress; the goal ops and item tags work."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        os.environ["RIVER_DB"] = os.path.join(self.dir.name, "t.db")
+        self.c = core.connect()
+        core.project_add(self.c, "a")
+        core.register(self.c, "ag")
+
+    def tearDown(self):
+        self.c.close()
+        os.environ.pop("RIVER_DB", None)
+        self.dir.cleanup()
+
+    def op(self, _op, who, **args):
+        return server.OPS[_op](self.c, args, who)
+
+    def get(self, path):
+        h = server.Handler.__new__(server.Handler)
+        h.path, out = path, {}
+        h._send = lambda code, body, ctype=None: out.update(code=code, body=body)
+        h.do_GET()
+        return out["code"], out["body"]
+
+    def test_goal_ops_tags_and_state(self):
+        self.op("goal_add", None, project="a", name="ship", outcome="it ships", done_when="users can install it")
+        self.op("goal_add", None, project="a", name="docs")
+        one = self.op("item_add", None, project="a", title="build", goals=["ship"])["id"]
+        two = self.op("item_add", None, project="a", title="loose")["id"]
+        self.op("item_edit", None, id=two, goals=["docs"])
+        self.op("item_edit", None, id=two, untag=["docs"])
+        self.op("goal_rank", None, name="docs", rank=1)
+        self.op("goal_own", "ag", name="ship")
+        code, st = self.get("/api/state")
+        goals = {g["name"]: g for g in st["goals"]}
+        self.assertEqual([g["name"] for g in st["goals"]], ["docs", "ship"])
+        self.assertEqual((goals["ship"]["owner"], goals["ship"]["items_open"]), ("ag", [one]))
+        self.assertEqual({i["id"]: i["goals"] for i in st["items"]}, {one: ["ship"], two: []})
+        self.op("goal_done", "ag", name="ship", result="shipped", drop_open=True)
+        self.op("goal_edit", None, name="docs", outcome="readers find answers", done_when="guide exists")
+        code, st = self.get("/api/state")
+        goals = {g["name"]: g for g in st["goals"]}
+        self.assertEqual((goals["ship"]["status"], goals["ship"]["result"]), ("complete", "shipped"))
+        self.assertEqual(goals["docs"]["outcome"], "readers find answers")
+        self.op("goal_reopen", None, name="ship")
+        self.assertEqual(core.goal_show(self.c, "ship")["status"], "open")
+
+
 if __name__ == "__main__":
     unittest.main()

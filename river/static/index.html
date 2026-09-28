@@ -147,6 +147,17 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
 .ny:first-child { border-top: none; }
 .ny-h { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .ny-c { color: var(--muted); font-size: 12px; margin: 4px 0 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.goals { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px 22px; }
+.goal { border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; cursor: pointer; width: 230px; font-size: 12px; background: var(--panel); }
+.goal:hover { border-color: var(--accent); }
+.goal.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.goal.complete { opacity: .7; }
+.goal .gh { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.goal .gh b { font-size: 13px; overflow-wrap: anywhere; }
+.goal .bar { height: 5px; margin: 4px 0 2px; }
+.goal .go { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.goal .ga { margin-top: 3px; display: flex; gap: 8px; }
+.c-goal { border-color: var(--accent); color: var(--accent); }
 .hidden { display: none !important; }
 </style>
 </head>
@@ -204,7 +215,7 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
           <div id="next"></div>
         </div>
         <div class="panel">
-          <h2>Projects <span class="spacer"></span><label class="sub"><input type="checkbox" id="showDone"> show done</label></h2>
+          <h2>Projects <span class="spacer"></span><select id="goalFilter" title="Show only the items of one goal"><option value="">All goals</option><option value="__none">No goal</option></select><label class="sub"><input type="checkbox" id="showDone"> show done</label></h2>
           <div id="projects"></div>
         </div>
       </div>
@@ -230,9 +241,18 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
               <label>Waits on (ids)<input id="addAfter" placeholder="e.g. 3, 7"></label>
             </div>
             <label>Reads the output of (ids; it also waits on them)<input id="addFeeds" placeholder="e.g. 4"></label>
+            <label>Goal (optional)<select id="addGoal"><option value="">no goal</option></select></label>
             <textarea id="addNotes" rows="2" placeholder="Notes"></textarea>
             <button class="btn primary" id="addGo">Add</button>
           </div>
+          <details style="margin-top:8px"><summary>Add a goal</summary>
+            <div class="form" style="margin-top:8px">
+              <div class="two"><label>Project<select id="goalProject"></select></label><label>Name<input id="goalName" placeholder="lower-case, e.g. launch-legal"></label></div>
+              <label>Outcome<textarea id="goalOutcome" rows="2" placeholder="What is true when this goal is reached"></textarea></label>
+              <label>Done when<input id="goalDoneWhen" placeholder="The test the owner checks before declaring it done"></label>
+              <button class="btn" id="goalGo">Add goal</button>
+            </div>
+          </details>
           <details style="margin-top:8px"><summary>Add a project</summary>
             <div class="form" style="margin-top:8px"><input id="projName" placeholder="name (lower-case)"><button class="btn" id="projGo">Add project</button></div>
           </details>
@@ -335,13 +355,35 @@ function dueChip(it) {
   const word = it.due_state === "overdue" ? "overdue" : "due " + left(it.effective_due);
   return `<span class="chip ${cls}" title="due ${esc(it.due_text)}${it.due_from ? " (from #" + it.due_from + ")" : ""}">${word}</span>`;
 }
+// Goal filter: "" all items, "__none" items without a goal, else one goal's items.
+function goalSel() { return $("#goalFilter").value; }
+function inGoal(it) { const g = goalSel(); return !g || (g === "__none" ? !(it.goals || []).length : (it.goals || []).includes(g)); }
+function goalChips(it) { return (it.goals || []).map(g => `<span class="chip c-goal" title="goal">${esc(g)}</span>`).join(""); }
+function goalCard(g) {
+  const total = g.items_open.length + g.items_done.length, pct = total ? Math.round(100 * g.items_done.length / total) : 0;
+  const me = actor(), open = g.status === "open";
+  const tip = (g.outcome ? g.outcome : "No outcome written.") + (g.done_when ? "\nDone when: " + g.done_when : "") + (g.result ? "\nResult: " + g.result : "");
+  const acts = [
+    `<span class="link" data-goal-act="up" data-g="${esc(g.name)}" title="more important">↑</span>`,
+    `<span class="link" data-goal-act="down" data-g="${esc(g.name)}" title="less important">↓</span>`,
+    open && me && g.owner !== me ? `<span class="link" data-goal-act="own" data-g="${esc(g.name)}">own</span>` : "",
+    open && me && g.owner === me ? `<span class="link" data-goal-act="release" data-g="${esc(g.name)}">release</span>` : "",
+    `<span class="link" data-goal-act="edit" data-g="${esc(g.name)}">edit</span>`,
+    open ? `<span class="link" data-goal-act="done" data-g="${esc(g.name)}">complete</span>` : `<span class="link" data-goal-act="reopen" data-g="${esc(g.name)}">reopen</span>`,
+  ].filter(Boolean).join("");
+  return `<div class="goal${goalSel() === g.name ? " on" : ""}${open ? "" : " complete"}" data-goal="${esc(g.name)}" title="${esc(tip)}">
+    <div class="gh"><b>${esc(g.name)}</b>${open ? (g.owner ? `<span class="chip c-ai">owner · ${esc(g.owner)}</span>` : `<span class="chip c-waiting">no owner</span>`) : `<span class="chip c-done" style="text-decoration:none">complete</span>`}</div>
+    <div class="bar"><div style="width:${pct}%"></div></div>
+    <div class="go">${g.items_done.length}/${total} done${g.items_open.length ? " · " + g.items_open.length + " open" : ""} · ${esc(open ? (g.outcome || "no outcome") : (g.result || g.outcome))}</div>
+    <div class="ga">${acts}</div></div>`;
+}
 function doerChip(it) { return it.doer === "any" ? "" : `<span class="chip c-${it.doer}">${it.doer === "human" ? "human" : "agent"}</span>`; }
 
 function rowHtml(it, why) {
   return `<div class="row" data-id="${it.id}"${it.status === "open" ? ' draggable="true"' : ""}>
     <div class="id">#${it.id}</div>
     <div class="t"><div class="title">${esc(it.title)}</div>${it.blocked_reason && it.status === "open" ? `<div class="blk">${esc(it.blocked_text)}</div>` : ""}${why ? `<div class="why">${esc(why)}</div>` : ""}</div>
-    <div class="chips">${prioChip(it)}${dueChip(it)}${doerChip(it)}${it.replan && !["done", "dropped"].includes(it.status) ? `<span class="chip c-blocked" title="${it.late_prereqs} prerequisites added while claimed: plan it again">replan</span>` : ""}${statusChip(it)}</div></div>`;
+    <div class="chips">${goalChips(it)}${prioChip(it)}${dueChip(it)}${doerChip(it)}${it.replan && !["done", "dropped"].includes(it.status) ? `<span class="chip c-blocked" title="${it.late_prereqs} prerequisites added while claimed: plan it again">replan</span>` : ""}${statusChip(it)}</div></div>`;
 }
 
 function renderCapacity() {
@@ -365,14 +407,17 @@ function renderCapacity() {
 function renderNext() {
   const area = $("#area").value;
   if (area === "__mine") { $("#next").innerHTML = `<div class="muted">Use <b>Claim next</b>: the server picks the ready item closest to what "${esc(actor() || "(choose Acting as)")}" claimed or finished before.</div>`; return; }
-  const ready = S.items.filter(i => i.ready && (!area || i.project === area));
+  const ready = S.items.filter(i => i.ready && (!area || i.project === area) && inGoal(i));
   $("#next").innerHTML = ready.slice(0, 10).map(i => rowHtml(i, i.reason)).join("") || `<div class="muted">Nothing is ready${area ? " in " + esc(area) : ""}.</div>`;
 }
 
 function renderProjects() {
   const showDone = $("#showDone").checked;
+  const G = goalSel(), goals = S.goals || [];
   const html = S.projects.map(p => {
-    const all = S.items.filter(i => i.project === p.name);
+    const pg = goals.filter(g => g.project === p.name && (g.status === "open" || showDone || g.name === G));
+    const all = S.items.filter(i => i.project === p.name && inGoal(i));
+    if (G && G !== "__none" && !all.length && !pg.some(g => g.name === G)) return "";
     const open = all.filter(i => !["done", "dropped"].includes(i.status));
     const closed = all.filter(i => ["done", "dropped"].includes(i.status));
     const ready = open.filter(i => i.ready).length, prog = open.filter(i => ["in_progress", "held"].includes(i.status)).length;
@@ -383,6 +428,7 @@ function renderProjects() {
         <button class="iconbtn" data-rank="${esc(p.name)}" data-to="${p.rank + 1}" title="less important">↓</button>
         <span class="counts">${open.length} open · ${ready} ready · ${prog} in progress · ${closed.length} done</span></div>
       <div class="pdesc">${p.notes ? esc(p.notes) : '<span class="muted">No description.</span>'} <span class="link" data-describe="${esc(p.name)}">edit</span></div>
+      ${pg.length ? `<div class="goals">${pg.map(goalCard).join("")}</div>` : ""}
       ${open.sort(order).map(i => rowHtml(i, i.notes)).join("")}
       ${showDone && closed.length ? closed.map(i => rowHtml(i, i.output)).join("") : ""}
     </div>`;
@@ -401,6 +447,7 @@ function renderAgents() {
   $("#agents").innerHTML = S.agents.map(a => `<div class="agent" data-agent="${esc(a.name)}">
       <div><span class="dot ${a.state}"></span><span class="nm">${esc(a.name)}</span> <span class="chip ${a.kind === "human" ? "c-human" : "c-ai"}">${a.kind === "human" ? "human" : "agent"}</span>${a.session ? ` <span class="muted" style="font-size:12px" title="Claude Code session">session ${esc(a.session)}${a.session_ref ? " [" + esc(a.session_ref) + "]" : ""}</span>` : ""}</div>
       <div class="st">${a.state}, seen ${ago(a.last_seen)}${a.note ? " · " + esc(a.note) : ""}</div>
+      ${(S.goals || []).filter(g => g.owner === a.name && g.status === "open").map(g => `<div class="st">owns goal <span class="link" data-goal="${esc(g.name)}">${esc(g.name)}</span>${g.owner_expires_at ? " · " + left(g.owner_expires_at) + " left" : ""}</div>`).join("")}
       ${a.holds.map(h => `<div class="st">holds <span class="link" data-open="${h.id}">#${h.id} ${esc(h.title)}</span>${h.lease_expires_at ? " · " + left(h.lease_expires_at) + " left" : ""}</div>`).join("") || '<div class="st">holds nothing</div>'}
       ${S.items.filter(i => i.status === "open" && i.reserved_until && i.reserved_for === a.name).map(i => `<div class="st">pushed <span class="link" data-open="${i.id}">#${i.id} ${esc(i.title)}</span> · ${left(i.reserved_until)} left · <span class="link" data-unpush="${i.id}">cancel</span></div>`).join("")}
     </div>`).join("") || `<div class="muted">No agents registered.</div>`;
@@ -457,6 +504,16 @@ function renderSelects() {
   a.innerHTML = `<option value="">(nobody)</option>` + S.agents.map(x => `<option value="${esc(x.name)}">${esc(x.name)}${x.kind === "human" ? " (human)" : ""}</option>`).join("");
   if ([...a.options].some(o => o.value === cur)) a.value = cur;
   fillSelect("#setKey", Object.keys(S.settings.defaults), false);
+  fillSelect("#goalProject", names, false);
+  const openGoals = (S.goals || []).filter(g => g.status === "open");
+  { const el = $("#goalFilter"), cur = el.value || store("river.goal") || "";
+    const extra = cur && cur !== "__none" && !openGoals.some(g => g.name === cur) && (S.goals || []).some(g => g.name === cur) ? [cur] : [];
+    el.innerHTML = `<option value="">All goals</option><option value="__none">No goal</option>` + openGoals.map(g => g.name).concat(extra).map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join("");
+    el.value = [...el.options].some(o => o.value === cur) ? cur : ""; }
+  { const el = $("#addGoal"), cur = el.value, proj = $("#addProject").value;
+    const list = openGoals.filter(g => g.project === proj).concat(openGoals.filter(g => g.project !== proj));
+    el.innerHTML = `<option value="">no goal</option>` + list.map(g => `<option value="${esc(g.name)}">${esc(g.name)}${g.project !== proj ? " (" + esc(g.project) + ")" : ""}</option>`).join("");
+    if ([...el.options].some(o => o.value === cur)) el.value = cur; }
 }
 
 function renderSettings() {
@@ -515,8 +572,10 @@ async function renderGraph(force) {
   const proj = $("#graphProject").value, withDone = $("#graphDone").checked;
   const items = S.items.filter(i => (withDone || !["done", "dropped"].includes(i.status)));
   const ids = new Set(items.map(i => i.id));
-  const show = proj ? new Set(items.filter(i => i.project === proj).flatMap(i => [i.id, ...i.waits_on, ...i.unblocks]).filter(x => ids.has(x))) : ids;
-  const sig = JSON.stringify([proj, withDone, items.filter(i => show.has(i.id)).map(i => [i.id, i.status, i.ready, i.waits_on])]);
+  const G = goalSel();
+  const base = items.filter(i => (!proj || i.project === proj) && inGoal(i));
+  const show = proj || G ? new Set(base.flatMap(i => [i.id, ...i.waits_on, ...i.unblocks]).filter(x => ids.has(x))) : ids;
+  const sig = JSON.stringify([proj, G, withDone, items.filter(i => show.has(i.id)).map(i => [i.id, i.status, i.ready, i.waits_on])]);
   if (!force && sig === graphSig) return;
   graphSig = sig;
   const lab = (s) => { const t = s.replace(/["<>#|{}\[\]]/g, " "); if (t.length <= 60) return t; const cut = t.slice(0, 60); return cut.slice(0, cut.lastIndexOf(" ") > 30 ? cut.lastIndexOf(" ") : 60) + "…"; };
@@ -566,6 +625,9 @@ async function openDrawer(id) {
     <div style="display:flex;align-items:center;gap:8px"><span class="muted">#${it.id} · ${esc(it.project)}</span><span class="spacer" style="flex:1"></span><button class="btn" id="dClose">Close</button></div>
     <h3>${esc(it.title)}</h3>
     <div class="chips" style="justify-content:flex-start">${prioChip(it)}${doerChip(it)}${statusChip(it)}</div>
+    <div class="actions" style="margin-top:6px;align-items:center"><span class="muted" style="font-size:12px">Goals:</span>
+      ${(it.goals || []).map(g => `<span class="chip c-goal">${esc(g)} <span class="link" data-untag="${esc(g)}" title="remove this goal tag">×</span></span>`).join("") || '<span class="muted" style="font-size:12px">none</span>'}
+      ${(S.goals || []).some(g => g.status === "open" && !(it.goals || []).includes(g.name)) ? `<select id="dGoal">${(S.goals || []).filter(g => g.status === "open" && !(it.goals || []).includes(g.name)).sort((a, b) => (b.project === it.project) - (a.project === it.project)).map(g => `<option value="${esc(g.name)}">${esc(g.name)}${g.project !== it.project ? " (" + esc(g.project) + ")" : ""}</option>`).join("")}</select><button class="btn" data-do="tag">Add goal</button>` : ""}</div>
     <div class="meta" style="margin-top:6px">${esc(it.reason)}${it.lease_expires_at ? " · lease " + left(it.lease_expires_at) + " left" : ""}</div>
     <div class="actions">
       ${it.status === "open" ? `<button class="btn primary" data-do="claim">Claim</button>` : ""}
@@ -629,6 +691,7 @@ async function drawerAction(what) {
     if (what === "msg") { const body = $("#dMsgBody").value.trim(); if (!body) return; if (!actor()) return toast("Choose who you are in 'Acting as' first", true); await act("send", { kind: $("#dMsgKind").value, body, item: id }); toast("Sent"); }
     if (what === "push") { const to = $("#dPushTo").value; if (to) { await act("push", { id, to, note: $("#dPushNote").value.trim() || undefined }); toast(`Pushed #${id} to ${to}`); } }
     if (what === "block") { const r = $("#dBlock").value.trim(), u = $("#dUntil").value.trim(); if (r || u) await act("block", { id, reason: r || undefined, until: u || undefined }); }
+    if (what === "tag") { const g = $("#dGoal").value; if (g) await act("item_edit", { id, goals: [g] }); }
     if (what === "dep") { const on = $("#dDep").value.split(/[\s,]+/).filter(Boolean).map(Number); if (on.length) await act("dep_add", { id, on }); }
     if (what === "save") {
       await act("item_edit", { id, title: $("#dTitle").value, notes: $("#dNotes").value, context: $("#dContext").value, touches: $("#dTouches").value, check: $("#dCheck").value, due: $("#dDue").value.trim() || undefined, doer: $("#dDoer").value, project: $("#dProject").value !== it.project ? $("#dProject").value : undefined });
@@ -817,6 +880,9 @@ async function refresh() {
 
 document.addEventListener("click", async (e) => {
   const t = e.target;
+  if (t.dataset.goalAct) return goalAction(t.dataset.goalAct, t.dataset.g);
+  if (t.dataset.untag) { await act("item_edit", { id: openItem, untag: [t.dataset.untag] }).catch(() => {}); return openDrawer(openItem); }
+  const card = t.closest("[data-goal]"); if (card) { const g = card.dataset.goal; setGoal(goalSel() === g ? "" : g); return; }
   const open = t.closest("[data-open]"); if (open) return openDrawer(+open.dataset.open);
   const row = t.closest(".row"); if (row) return openDrawer(+row.dataset.id);
   if (t.id === "dClose") { $("#drawer").classList.remove("open"); openItem = null; return; }
@@ -852,6 +918,39 @@ async function sendForm() {
   if (item) args.item = +item; else args.to = $("#sendTo").value;
   try { await act("send", args); $("#sendBody").value = ""; $("#sendItem").value = ""; toast("Sent"); } catch (e) { /* toast shown */ }
 }
+function setGoal(g) { $("#goalFilter").value = g; store("river.goal", g); renderNext(); renderProjects(); renderGraph(true); }
+async function goalAction(what, name) {
+  const g = (S.goals || []).find(x => x.name === name); if (!g) return;
+  try {
+    if (what === "up" || what === "down") {
+      const sib = S.goals.filter(x => x.project === g.project).sort((a, b) => a.rank - b.rank);
+      const to = sib.findIndex(x => x.name === name) + 1 + (what === "up" ? -1 : 1);
+      if (to >= 1 && to <= sib.length) await act("goal_rank", { name, rank: to });
+    }
+    if (what === "own" || what === "release") {
+      if (!actor()) return toast("Choose who you are in 'Acting as' first", true);
+      await act("goal_" + what, { name }); toast(what === "own" ? `You own ${name}` : `Released ${name}`);
+    }
+    if (what === "edit") {
+      const outcome = prompt(`Outcome of "${name}": what is true when it is reached?`, g.outcome || ""); if (outcome === null) return;
+      const done_when = prompt("Done when: the test the owner checks", g.done_when || ""); if (done_when === null) return;
+      await act("goal_edit", { name, outcome, done_when });
+    }
+    if (what === "done") {
+      const result = prompt(`What did "${name}" achieve? (one line)` + (g.items_open.length ? `\n${g.items_open.length} tagged items are still open; they will be dropped.` : "")); if (!result) return;
+      if (g.items_open.length && !confirm(`Drop ${g.items_open.length} open items (${g.items_open.map(i => "#" + i).join(", ")}) and complete the goal?`)) return;
+      await act("goal_done", { name, result, drop_open: g.items_open.length > 0 }); toast(`${name} complete`);
+    }
+    if (what === "reopen") await act("goal_reopen", { name });
+  } catch (e) { /* toast shown */ }
+}
+$("#goalFilter").addEventListener("change", () => setGoal($("#goalFilter").value));
+$("#addProject").addEventListener("change", renderSelects);
+$("#goalGo").addEventListener("click", async () => {
+  const name = $("#goalName").value.trim(); if (!name) return toast("Give the goal a name", true);
+  const res = await act("goal_add", { project: $("#goalProject").value, name, outcome: $("#goalOutcome").value.trim(), done_when: $("#goalDoneWhen").value.trim() }).catch(() => null);
+  if (res) { $("#goalName").value = ""; $("#goalOutcome").value = ""; $("#goalDoneWhen").value = ""; toast(`Added goal ${res.name}`); }
+});
 $("#area").addEventListener("change", renderNext);
 $("#showDone").addEventListener("change", renderProjects);
 $("#graphProject").addEventListener("change", () => renderGraph(true));
@@ -867,7 +966,7 @@ $("#claimNext").addEventListener("click", async () => {
 $("#addGo").addEventListener("click", async () => {
   const title = $("#addTitle").value.trim(); if (!title) return toast("Title is empty", true);
   const ids = (el) => $(el).value.split(/[\s,]+/).filter(Boolean).map(Number);
-  const res = await act("item_add", { project: $("#addProject").value, title, priority: +$("#addPrio").value, doer: $("#addDoer").value, after: ids("#addAfter"), feeds: ids("#addFeeds"), notes: $("#addNotes").value }).catch(() => null);
+  const res = await act("item_add", { project: $("#addProject").value, title, priority: +$("#addPrio").value, doer: $("#addDoer").value, after: ids("#addAfter"), feeds: ids("#addFeeds"), notes: $("#addNotes").value, goals: $("#addGoal").value ? [$("#addGoal").value] : undefined }).catch(() => null);
   if (res) { $("#addTitle").value = ""; $("#addAfter").value = ""; $("#addFeeds").value = ""; $("#addNotes").value = ""; toast(`Added #${res.id}`); }
 });
 $("#projGo").addEventListener("click", async () => { const n = $("#projName").value.trim(); if (n) { await act("project_add", { name: n }).catch(() => {}); $("#projName").value = ""; } });

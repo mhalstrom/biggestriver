@@ -37,10 +37,20 @@ OPS = {
                                                 [int(x) for x in a.get("after", [])], who,
                                                 a.get("context", ""), a.get("touches"), a.get("check", ""),
                                                 a.get("blocks"), a.get("mode"), a.get("found_during"),
-                                                [int(x) for x in a.get("feeds", [])], a.get("due")),
+                                                [int(x) for x in a.get("feeds", [])], a.get("due"),
+                                                goals=a.get("goals")),
     "item_edit": lambda c, a, who: core.item_edit(c, a["id"], a.get("title"), a.get("notes"), a.get("doer"),
                                                   a.get("project"), who, a.get("context"), a.get("touches"),
-                                                  a.get("check"), a.get("due")),
+                                                  a.get("check"), a.get("due"), goals=a.get("goals"),
+                                                  untag=a.get("untag")),
+    "goal_add": lambda c, a, who: core.goal_add(c, a["project"], a["name"], a.get("outcome", ""), a.get("done_when", ""),
+                                                who),
+    "goal_edit": lambda c, a, who: core.goal_edit(c, a["name"], a.get("outcome"), a.get("done_when"), a.get("new_name"), who),
+    "goal_rank": lambda c, a, who: core.goal_rank(c, a["name"], a["rank"], who),
+    "goal_own": lambda c, a, who: core.goal_own(c, a["name"], who),
+    "goal_release": lambda c, a, who: core.goal_release(c, a["name"], who),
+    "goal_done": lambda c, a, who: core.goal_done(c, a["name"], a.get("result", ""), who, bool(a.get("drop_open"))),
+    "goal_reopen": lambda c, a, who: core.goal_reopen(c, a["name"], who),
     "prio": lambda c, a, who: core.item_prio(c, a["id"], a["priority"], who),
     "move": lambda c, a, who: core.item_move(c, a["id"], a.get("before"), a.get("after"), who),
     "dep_add": lambda c, a, who: core.dep_add(c, a["id"], [int(x) for x in a["on"]], who, a.get("kind", "blocks")),
@@ -116,6 +126,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 core.activity(conn, None)
                 st = core.state(conn)
+                st["goals"] = core.goal_list(conn, include_complete=True)
                 if DEV["on"]:
                     st["dev_build"] = _build_id()
                 return self._send(200, st)
