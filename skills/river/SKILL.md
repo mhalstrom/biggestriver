@@ -176,6 +176,10 @@ river add "Approve the refund policy draft" --doer human --blocks <your-id> \
 - A short question that needs no item: `river send question --to <person> "..." --item <id>`.
   The go briefing lists the people by name.
 - Then tell the user in chat too, with the item id.
+- With `--keep` you hold your item while you wait for the answer, but at most
+  `human_wait_max` (30m). Then river releases your item (it still waits on the
+  person's item), reminds the person, and tells you to take other work:
+  run `river go`. When the person finishes, the item is ready for whoever runs go.
 
 When you put a decision to the user in chat, use one form, one decision at a
 time (`river guide decisions` prints it):

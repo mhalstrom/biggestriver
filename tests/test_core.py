@@ -1187,6 +1187,34 @@ class KeepRelease(Base):
         with self.assertRaises(RiverError):
             core.keep(self.c, self.p, "ag")  # bo holds the prerequisite now
 
+    def test_wait_on_a_person_ends_after_human_wait_max(self):
+        core.register(self.c, "mark", human=True)
+        other = self.add("a", "other work")
+        h = core.item_add(self.c, "a", "decide", doer="human", actor="ag", blocks=self.p, mode="keep")
+        left = core.parse_iso(h["holder_wait"]["until"]) - core.now()
+        self.assertTrue(timedelta(minutes=29) < left <= timedelta(minutes=30))  # human_wait_max, not hold_ttl
+        b = core.go(self.c, self.dir.name, "ag")
+        self.assertEqual((b["item"]["id"], [x["id"] for x in b["human_wait"]["on"]]), (self.p, [h["id"]]))
+        # Commands renew a hold, but never past human_wait_max after the wait began.
+        self.c.execute("UPDATE items SET held_at=? WHERE id=?", (core.iso(core.now() - timedelta(minutes=29)), self.p))
+        self.c.execute("UPDATE items SET created_at=? WHERE id=?", (core.iso(core.now() - timedelta(minutes=29)), h["id"]))
+        core.activity(self.c, "ag")
+        left = core.parse_iso(core._item(self.c, self.p)["hold_expires_at"]) - core.now()
+        self.assertTrue(left <= timedelta(minutes=1))
+        self.c.execute("UPDATE items SET hold_expires_at=? WHERE id=?", (core.iso(core.now() - timedelta(seconds=1)), self.p))
+        core.activity(self.c, "bo")
+        st = core._item(self.c, self.p)
+        self.assertEqual((st["status"], st["assignee"]), ("open", None))
+        self.assertEqual(core._open_prereqs(self.c, self.p), [h["id"]])  # still waits on the person
+        self.assertIn("river go", core.inbox(self.c, "ag")[0]["body"])
+        self.assertTrue(any(m["kind"] == "alert" and f"#{self.p}" in m["body"] for m in core.inbox(self.c, "mark")))
+        self.assertEqual(core.go(self.c, self.dir.name, "ag")["item"]["id"], other)
+
+    def test_hold_without_a_person_keeps_hold_ttl(self):
+        core.item_add(self.c, "a", "fix", actor="ag", blocks=self.p, mode="keep")
+        left = core.parse_iso(core._item(self.c, self.p)["hold_expires_at"]) - core.now()
+        self.assertTrue(left > timedelta(hours=1))
+
     def test_dep_with_mode_and_without(self):
         other = self.add("a", "existing")
         core.dep_add(self.c, self.p, [other], "ag")  # no mode: the parent stays as it was

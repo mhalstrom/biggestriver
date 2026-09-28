@@ -34,6 +34,9 @@ MESSAGE_STATES = ("open", "accepted", "declined", "answered", "read")
 DEFAULT_SETTINGS = {
     "lease_ttl": "30m",
     "hold_ttl": "2h",
+    # How long an agent may hold an item that waits on a person's item (added with --keep). Then river
+    # releases the item (it still waits on the person), the agent takes other work, and the person is reminded.
+    "human_wait_max": "30m",
     "owner_ttl": "8h",
     "reserve_ttl": "2h",
     "keep_prereq_limit": "3",
@@ -135,6 +138,7 @@ CREATE TABLE IF NOT EXISTS items (
   reserved_until    TEXT,
   reserved_by       TEXT,
   hold_expires_at   TEXT,
+  held_at           TEXT,
   replan            INTEGER NOT NULL DEFAULT 0,
   late_prereqs      INTEGER NOT NULL DEFAULT 0,
   due               TEXT,
@@ -533,6 +537,8 @@ def _migrate(conn):
         conn.execute("ALTER TABLE items ADD COLUMN reserved_for TEXT")
         conn.execute("ALTER TABLE items ADD COLUMN hold_expires_at TEXT")
         conn.execute("ALTER TABLE items ADD COLUMN replan INTEGER NOT NULL DEFAULT 0")
+    if "held_at" not in {r["name"] for r in conn.execute("PRAGMA table_info(items)")}:
+        conn.execute("ALTER TABLE items ADD COLUMN held_at TEXT")
 
 
 class tx:
@@ -600,7 +606,7 @@ def _scope(conn, project=None, item=None, agent=None) -> str:
 def config_set(conn, key, value, project=None, item=None, agent=None, actor=None):
     if key not in DEFAULT_SETTINGS:
         raise RiverError(f"unknown setting {key!r}; known: {', '.join(sorted(DEFAULT_SETTINGS))}")
-    if key.endswith(("_ttl", "_after", "_before", "_interval", "_window")) or key in ("wait_max", "wait_step"):
+    if key.endswith(("_ttl", "_after", "_before", "_interval", "_window")) or key in ("wait_max", "wait_step", "human_wait_max"):
         parse_duration(value)
     elif key in ("keep_prereq_limit", "replan_threshold", "max_leases", "serve_port", "smtp_port"):
         if not value.isdigit():
@@ -1195,7 +1201,13 @@ def item_add(conn, project, title, priority=2, notes="", doer="any", after=(), a
         if blocks is not None:
             _dep_add(conn, int(blocks), iid, actor)
             _prereq_mode(conn, int(blocks), [iid], actor, mode)
-    return item_show(conn, iid)
+    a = item_show(conn, iid)
+    if blocks is not None and doer == "human":
+        parent = _item(conn, blocks)
+        if parent["status"] == "held" and parent["assignee"] == actor:
+            a["holder_wait"] = {"item": parent["id"], "until": parent["hold_expires_at"],
+                                "max": setting(conn, "human_wait_max", item_id=parent["id"], agent=actor)}
+    return a
 
 
 REF_RE = re.compile(r"^[a-z][a-z0-9_.-]*:\S+$")
@@ -1525,10 +1537,34 @@ def _open_prereqs(conn, item_id):
         f"WHERE d.item_id=? AND d.kind<>'conflicts' AND i.status IN {OPEN_STATES}", (item_id,))]
 
 
+def _human_prereqs(conn, item_id):
+    """Open items for a person that this item waits on."""
+    return [r["id"] for r in conn.execute(
+        "SELECT i.id FROM deps d JOIN items i ON i.id=d.blocked_by "
+        f"WHERE d.item_id=? AND d.kind<>'conflicts' AND i.doer='human' AND i.status IN {OPEN_STATES} ORDER BY i.id",
+        (item_id,))]
+
+
+def _hold_until(conn, item_id, actor, t):
+    """When a hold ends: hold_ttl from t, but while a person's item is open before the held item, at most
+    human_wait_max after the agent began to wait on it (the later of the hold and that item)."""
+    until = t + parse_duration(setting(conn, "hold_ttl", item_id=item_id, agent=actor))
+    human = _human_prereqs(conn, item_id)
+    if human:
+        held_at = conn.execute("SELECT held_at FROM items WHERE id=?", (item_id,)).fetchone()["held_at"]
+        made = min(conn.execute(f"SELECT created_at FROM items WHERE id IN ({','.join('?' * len(human))})",
+                                human).fetchall(), key=lambda r: r["created_at"])["created_at"]
+        start = max(parse_iso(held_at) if held_at else t, parse_iso(made))
+        until = min(until, start + parse_duration(setting(conn, "human_wait_max", item_id=item_id, agent=actor)))
+    return until
+
+
 def _hold(conn, parent, actor, reserve):
-    ttl = parse_duration(setting(conn, "hold_ttl", item_id=parent, agent=actor))
-    conn.execute("UPDATE items SET status='held', assignee=?, lease_expires_at=NULL, hold_expires_at=? WHERE id=?",
-                 (actor, iso(now() + ttl), parent))
+    t = now()
+    conn.execute("UPDATE items SET held_at=CASE WHEN status='held' AND assignee=? AND held_at IS NOT NULL "
+                 "THEN held_at ELSE ? END, status='held', assignee=?, lease_expires_at=NULL WHERE id=?",
+                 (actor, iso(t), actor, parent))
+    conn.execute("UPDATE items SET hold_expires_at=? WHERE id=?", (iso(_hold_until(conn, parent, actor, t)), parent))
     for r in reserve:
         conn.execute("UPDATE items SET reserved_for=? WHERE id=? AND status='open' AND reserved_for IS NULL", (actor, r))
     _event(conn, parent, actor, f"held by {actor} while it does " + ", ".join(f"#{r}" for r in reserve) if reserve
@@ -1721,8 +1757,8 @@ def give(conn, item_id, to, actor=None):
                 conn.execute("UPDATE items SET assignee=?, claimed_at=?, lease_expires_at=? WHERE id=?",
                              (to, iso(t), iso(t + ttl), it["id"]))
             else:
-                hold = parse_duration(setting(conn, "hold_ttl", item_id=it["id"], agent=to))
-                conn.execute("UPDATE items SET assignee=?, hold_expires_at=? WHERE id=?", (to, iso(t + hold), it["id"]))
+                conn.execute("UPDATE items SET assignee=?, hold_expires_at=? WHERE id=?",
+                             (to, iso(_hold_until(conn, it["id"], to, t)), it["id"]))
                 for r in _open_prereqs(conn, it["id"]):
                     conn.execute("UPDATE items SET reserved_for=? WHERE id=? AND reserved_for=?", (to, r, actor))
         elif it["reserved_for"] == actor and it["status"] == "open":
@@ -2140,8 +2176,7 @@ def _touch_agent(conn, actor):
     t = now()
     conn.execute("UPDATE agents SET last_seen=? WHERE name=?", (iso(t), actor))
     for r in conn.execute("SELECT id FROM items WHERE assignee=? AND status='held'", (actor,)).fetchall():
-        ttl = parse_duration(setting(conn, "hold_ttl", item_id=r["id"], agent=actor))
-        conn.execute("UPDATE items SET hold_expires_at=? WHERE id=?", (iso(t + ttl), r["id"]))
+        conn.execute("UPDATE items SET hold_expires_at=? WHERE id=?", (iso(_hold_until(conn, r["id"], actor, t)), r["id"]))
     owner_ttl = parse_duration(setting(conn, "owner_ttl", agent=actor))
     conn.execute("UPDATE targets SET owner_expires_at=? WHERE owner=?", (iso(t + owner_ttl), actor))
     # A goal owner keeps the goal while it is active; it frees when the owner is away (away_after).
@@ -2188,7 +2223,12 @@ def _sweep(conn):
         _send(conn, "notice", "river", f"your ownership of goal {r['name']} expired; nobody owns it now. "
               f"Take it again if you still work on it: river goal own {r['name']}", to=r["owner"])
     _question_nudges(conn)
-    for r in conn.execute("SELECT id, assignee FROM items WHERE status='held' AND hold_expires_at < ?", (t,)).fetchall():
+    for r in conn.execute("SELECT id, title, assignee FROM items WHERE status='held' AND hold_expires_at < ?",
+                          (t,)).fetchall():
+        human = _human_prereqs(conn, r["id"])
+        if human:
+            _human_wait_ended(conn, r, human)
+            continue
         _unhold(conn, r["id"], "river", f"hold expired (was {r['assignee']}); released")
         _send(conn, "notice", "river", f"your hold on #{r['id']} expired, so it is open to every agent now, and its "
               f"prerequisites are no longer reserved for you. Hold it again: river keep {r['id']}",
@@ -2200,6 +2240,20 @@ def _sweep(conn):
         _send(conn, "notice", "river", f"your ownership of target {r['name']} expired; nobody owns it now. "
               f"Take it again if you still deploy there: river target own {r['name']}", to=r["owner"])
     return [r["id"] for r in expired]
+
+
+def _human_wait_ended(conn, r, human):
+    """An agent waited human_wait_max on a person's item: release its item (it still waits on the person),
+    send the agent to other work, and remind every person of the answer it waits for."""
+    wait = setting(conn, "human_wait_max", item_id=r["id"], agent=r["assignee"])
+    names = ", ".join(f"#{h} {_item(conn, h)['title']}" for h in human)
+    _unhold(conn, r["id"], "river", f"waited {wait} (human_wait_max) on {names}; released (was {r['assignee']})")
+    _send(conn, "notice", "river", f"you waited {wait} (human_wait_max) for a person on {names}, so #{r['id']} "
+          f"{r['title']} is open again and still waits on it. Take other work now: river go. When the person "
+          f"finishes, #{r['id']} is ready for whoever runs go.", to=r["assignee"], item_id=r["id"])
+    for h in (x["name"] for x in conn.execute("SELECT name FROM agents WHERE kind='human' ORDER BY name").fetchall()):
+        _send(conn, "alert", "river", f"#{r['id']} {r['title']} waits on you: {names}. {r['assignee']} waited "
+              f"{wait} and took other work; the item continues when you finish.", to=h, item_id=human[0])
 
 
 def _due_warnings(conn, t):
@@ -3857,6 +3911,7 @@ def go(conn, cwd, actor=None, project=None, role=None, session=None):
              "has_history": bool(history(conn, actor, limit=1)),
              "auto_continue": setting(conn, "auto_continue", agent=actor) == "on",
              "session": _agent(conn, actor)["session"],
+             "human_wait_max": setting(conn, "human_wait_max", agent=actor),
              "messages": unread(conn, actor),
              "humans": [r["name"] for r in conn.execute("SELECT name FROM agents WHERE kind='human' ORDER BY name")]}
 
@@ -3885,6 +3940,10 @@ def go(conn, cwd, actor=None, project=None, role=None, session=None):
                     _set_role_note(conn, actor, "worker", item["id"])
                     return brief
         item = item_show(conn, held[0]["id"])
+        if parent["status"] == "held" and _human_prereqs(conn, parent["id"]):
+            brief["human_wait"] = {"on": [{"id": h, "title": _item(conn, h)["title"]}
+                                          for h in _human_prereqs(conn, parent["id"])],
+                                   "until": _item(conn, parent["id"])["hold_expires_at"]}
         r = {"deploy": "deployer", "review": "reviewer"}.get(item["kind"], "worker")
         if r == "deployer":
             brief.update(_deploy_brief(conn, item))

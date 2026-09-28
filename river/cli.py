@@ -216,6 +216,11 @@ def _print_show(a):
         print("  lease until:", a["lease_expires_at"])
     if a.get("hold_expires_at"):
         print("  held until:", a["hold_expires_at"], "(renewed by your commands; river release ends it)")
+    if a.get("holder_wait"):
+        w = a["holder_wait"]
+        left = core._short(core.parse_iso(w["until"]) - core.now())
+        print(f"  you wait for this person at most {w['max']} (human_wait_max; {left} left). Then river releases "
+              f"#{w['item']}, which still waits on this item, and you take other work: river go")
     if a.get("output"):
         print("  output:", a["output"])
     if a.get("found_during"):
@@ -1214,13 +1219,19 @@ def render_go(b):
         if it["notes"]:
             out.append(f"  notes: {it['notes']}")
         out += _context_lines(it)
+        if b.get("human_wait"):
+            w = b["human_wait"]
+            left = core._short(core.parse_iso(w["until"]) - core.now())
+            out.append("  WAITING ON A PERSON: " + ", ".join(f"#{h['id']} {h['title']}" for h in w["on"])
+                       + f". You wait {left} more (human_wait_max {b.get('human_wait_max')}); then river releases"
+                       + f" #{it['id']} and you take other work. Work on what does not need the answer meanwhile.")
         if it.get("refs"):
             out.append("  It comes from the tracker issue(s) above: mark them in progress there, if the tracker has that state.")
         if it.get("needs_check"):
             out += [f"  CHECK FIRST: a session held this item before and its lease ran out without done. Look at",
                     f"  {r} show {it['id']} (history), git log --grep '#{it['id']}', and the files it touches.",
                     f"  Already done: {r} check {it['id']} done --note \"<commits>\"   Partly: work on, and say so in --output."]
-        if it["waits_on_detail"] and b["role"] != "reviewer":
+        if it["waits_on_detail"] and b["role"] != "reviewer" and not b.get("human_wait"):
             out.append("  waited on (all done): " + ", ".join(f"#{d['id']} {d['title']}" for d in it["waits_on_detail"]))
         if it["unblocks_detail"]:
             out.append("  unblocks: " + ", ".join(f"#{d['id']} {d['title']}" for d in it["unblocks_detail"]))
@@ -1288,6 +1299,8 @@ def render_go(b):
                 f"  - Waiting on something outside the queue: {r} blocked {it['id']} --reason \"<what>\", release, run go again.",
                 f"  - You need the user (a decision, an approval, an account or payment step): put it in the queue, not only in chat:",
                 f"    {r} add \"<what to decide or do>\" --doer human --context \"<exactly what, where the material is>\" --blocks {it['id']}",
+                f"    With --keep you wait for the answer at most {b.get('human_wait_max', '30m')} (human_wait_max); then river "
+                f"releases #{it['id']} and you take other work.",
                 f"    When you ask the user in chat, one decision at a time in this form: river guide decisions",
                 f"    That is what notifies them. A quick question instead: {r} send question --to "
                 + ("|".join(b.get("humans") or []) or "<person>") + " \"...\" --item " + str(it["id"]),

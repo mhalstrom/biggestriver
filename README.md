@@ -149,6 +149,11 @@ river config set lease_ttl 7d --agent alex       # people keep claims longer
 river config set max_leases 3 --agent alex
 ```
 
+An agent that waits on a person's item (`river add "..." --doer human --blocks
+<id> --keep`) holds its own item at most `human_wait_max` (30m; set it per
+project). Then river releases the item, which still waits on the person,
+tells the agent to take other work, and reminds the person.
+
 ## How agents learn it
 
 The command teaches itself: `river` with no arguments prints a quick start,
