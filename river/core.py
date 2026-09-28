@@ -1133,7 +1133,52 @@ def targets_view(conn, ann=None):
             pending=[{"id": a["id"], "title": a["title"], "status": a["status"], "assignee": a["assignee"],
                       "ready": a["ready"], "ships": ships(a)} for a in pending],
             last_deploy=({"id": last["id"], "title": last["title"], "closed_at": last["closed_at"],
-                          "output": last["output"], "ships": ships(last)} if last else None)))
+                          "output": last["output"], "ships": ships(last)} if last else None),
+            history=[{"id": a["id"], "title": a["title"], "closed_at": a["closed_at"], "output": a["output"],
+                      "ships": ships(a), "done_by": _done_by(conn, a["id"])} for a in reversed(done[-10:])]))
+    return out
+
+
+def _done_by(conn, item_id):
+    r = conn.execute("SELECT actor FROM events WHERE item_id=? AND change LIKE 'done%' ORDER BY id DESC LIMIT 1",
+                     (item_id,)).fetchone()
+    return r["actor"] if r else None
+
+
+def deploy_now(conn, target, review=False, actor=None):
+    """Deploy now (the page's Targets tab): the target's open deploy item should go out now.
+
+    Refuses when it collects nothing. With review, the release first waits on one review of everything
+    it ships, also when the review setting is off. Returns what to start (the review or the deploy item),
+    whether it is ready, and what it still waits on; a ready deploy item alerts the target owner."""
+    with tx(conn):
+        _sweep(conn)
+        tg = _target(conn, target)
+        dep = conn.execute(f"SELECT * FROM items WHERE kind='deploy' AND target=? AND status IN {OPEN_STATES} "
+                           "ORDER BY id LIMIT 1", (tg["name"],)).fetchone()
+        if dep is not None and dep["status"] != "open":
+            raise RiverError(f"deploy #{dep['id']} for {tg['name']} is already {dep['status'].replace('_', ' ')}"
+                             + (f" by {dep['assignee']}" if dep["assignee"] else ""))
+        shipped = [r["blocked_by"] for r in conn.execute(
+            "SELECT d.blocked_by FROM deps d JOIN items i ON i.id=d.blocked_by WHERE d.item_id=? AND i.kind<>'review'",
+            (dep["id"],))] if dep is not None else []
+        if not shipped:
+            raise RiverError(f"nothing is collected for {tg['name']}: ask for items to go out first "
+                             f"(river ship <id>, or done --ship)")
+        rv = _release_review(conn, dep, tg, actor, force=True) if review else None
+        _event(conn, dep["id"], actor, "deploy now" + (" after a review" if review else ""))
+    ann = annotate(conn)
+    start = ann[rv["id"] if rv is not None else dep["id"]]
+    out = {"target": tg["name"], "owner": tg["owner"], "deploy": {"id": dep["id"], "title": dep["title"]},
+           "review": {"id": rv["id"], "title": rv["title"]} if rv is not None else None,
+           "start": {"id": start["id"], "title": start["title"], "kind": start["kind"]}, "ready": start["ready"],
+           "waits_on": [{"id": b, "title": ann[b]["title"], "status": ann[b]["status"]}
+                        for b in start["waits_on"] if ann[b]["status"] in OPEN_STATES]}
+    if start["ready"] and start["kind"] == "deploy" and tg["owner"]:
+        with tx(conn):
+            _send(conn, "alert", actor or "river", f"deploy now: #{dep['id']} {dep['title']} is ready; "
+                  f"river go gives it to you", to=tg["owner"], item_id=dep["id"])
+        out["alerted"] = tg["owner"]
     return out
 
 
@@ -2845,12 +2890,12 @@ def ship(conn, item_id, actor=None):
     return item_show(conn, dep["id"])
 
 
-def _release_review(conn, dep, tg, actor):
+def _release_review(conn, dep, tg, actor, force=False):
     """With review on, the open review item the deploy item waits on; started when there is none.
 
     A new review also waits on the release's items that are still open, so it covers what a
     finished review did not see."""
-    if setting(conn, "review", item_id=dep["id"]) != "on":
+    if not force and setting(conn, "review", item_id=dep["id"]) != "on":
         return None
     rv = conn.execute("SELECT i.* FROM items i JOIN deps d ON d.blocked_by=i.id WHERE d.item_id=? AND i.kind='review' "
                       f"AND i.status IN {OPEN_STATES} ORDER BY i.id LIMIT 1", (dep["id"],)).fetchone()
@@ -3986,6 +4031,9 @@ def go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None)
 
     kind, _, fid = (focus or "").partition(":")
     fid, _, person = fid.partition("@")
+    # Deploy now on the Targets tab: the session deploys (owning the free target) or reviews the release.
+    if role is None and kind in ("deploy", "review"):
+        role = "deployer" if kind == "deploy" else "reviewer"
     if role is None and kind == "needs":
         person = _person(conn, person or None)
         brief.update(role="helper", item=None, help_prompt=prompt_for_all(conn, person),

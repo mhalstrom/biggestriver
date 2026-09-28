@@ -171,6 +171,19 @@ class LaunchAgent(unittest.TestCase):
         with self.assertRaises(RiverError):
             server.open_agent_on(self.c, blocker, runner=sent.append)  # held now: message the holder
 
+    def test_deploy_now_without_an_owner_opens_a_deployer(self):
+        core.target_add(self.c, "web")
+        core.project_add(self.c, "site", target="web", path=self.dir.name)
+        core.register(self.c, "dev")
+        x = core.item_add(self.c, "site", "page")["id"]
+        core.claim(self.c, x, "dev")
+        core.done(self.c, x, "commit", "dev", ship_it=True)
+        sent = []
+        r = server.deploy_now(self.c, "web", runner=sent.append)
+        self.assertIn("RIVER_FOCUS=deploy:web claude go", sent[-1])
+        b = core.go(self.c, self.dir.name, None, focus=r["focus"])
+        self.assertEqual((b["role"], b["item"]["id"]), ("deployer", r["deploy"]["id"]))
+
     def test_windows_opens_a_console_window_with_the_env_set(self):
         core.project_add(self.c, "shop", path=self.dir.name)
         x = core.item_add(self.c, "shop", "work")["id"]

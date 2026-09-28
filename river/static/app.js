@@ -157,7 +157,12 @@ function renderTargets() {
         ${ownerChip(t.owner)}${t.owner ? `<span class="muted" style="font-size:12px">${t.owner_expires_at ? left(t.owner_expires_at) + " left" : ""}</span>` : ""}
         <span class="muted" style="font-size:12px">${t.project_names.length ? "projects: " + t.project_names.map(esc).join(", ") : "no projects"}</span>`, `${t.description ? `<div class="ny-c">${esc(clip(t.description, 300))}</div>` : ""}
       ${t.pending.map(d => `<div class="st" style="margin-top:4px"><span class="link" data-open="${d.id}">#${d.id}</span> ${d.ready ? "ready to deploy" : d.status === "open" ? "collecting" : esc(d.status.replace("_", " ")) + (d.assignee ? " · " + esc(d.assignee) : "")}: ${shipList(d.ships)}</div>`).join("") || '<div class="st muted">No pending ship requests.</div>'}
-      ${t.last_deploy ? `<div class="st" style="margin-top:4px">Last deploy <span class="link" data-open="${t.last_deploy.id}">#${t.last_deploy.id}</span> ${ago(t.last_deploy.closed_at)}${t.last_deploy.output ? ": " + esc(clip(t.last_deploy.output, 200)) : ""}<div class="muted" style="font-size:12px">shipped ${shipList(t.last_deploy.ships)}</div></div>` : '<div class="st muted">Never deployed.</div>'}`)).join("") || `<div class="muted">No deploy targets. Add one: river target add &lt;name&gt; --description "how it deploys"</div>`;
+      <div class="actions" style="margin-top:6px">${t.pending.some(d => d.status === "open" && d.ships.length)
+        ? `<button class="btn primary" data-deploy="${esc(t.name)}" title="Start the deploy now: the owner gets an alert, or an agent opens to take it">Deploy now</button>
+           <button class="btn" data-deploy="${esc(t.name)}" data-review="1" title="First one review of everything it ships (review steps per project), then the deploy">Review and deploy</button>`
+        : '<span class="muted" style="font-size:12px">Nothing to deploy: ship items first (river ship &lt;id&gt;, or done --ship).</span>'}</div>
+      <div class="st" style="margin-top:6px"><b>Deploys</b></div>
+      ${(t.history || []).map(h => `<div class="st" style="margin-top:4px"><span class="link" data-open="${h.id}">#${h.id}</span> ${ago(h.closed_at)}${h.done_by ? " by " + esc(h.done_by) : ""}${h.output ? ": " + esc(clip(h.output, 200)) : ""}<div class="muted" style="font-size:12px">shipped ${shipList(h.ships)}</div></div>`).join("") || '<div class="st muted">Never deployed.</div>'}`)).join("") || `<div class="muted">No deploy targets. Add one: river target add &lt;name&gt; --description "how it deploys"</div>`;
 }
 
 function renderBlocked() {
@@ -667,6 +672,17 @@ document.addEventListener("click", async (e) => {
     return act("offer", { item: n, body }).then(() => toast(`Offer sent to the holder of #${n}`)).catch(() => {}); }
   if (t.dataset.copyPrompt) return copyPrompt(`/api/item/${t.dataset.copyPrompt}/prompt`);
   if (t.id === "copyAll") return copyPrompt("/api/prompt-all");
+  if (t.dataset.deploy) {
+    if (t.dataset.busy) return; t.dataset.busy = "1"; setTimeout(() => delete t.dataset.busy, 4000);
+    try {
+      const r = await act("deploy_now", { target: t.dataset.deploy, review: !!t.dataset.review, agent: $("#launchAgent") ? $("#launchAgent").value : undefined });
+      const what = `#${r.start.id} ${clip(r.start.title, 50)}`;
+      toast(!r.ready ? `${what} waits on ${r.waits_on.map(w => "#" + w.id).join(", ")}; it starts when they are done`
+        : r.alerted ? `${what} is ready; alerted the owner ${r.alerted}`
+        : `Started ${r.agent} in ${r.project} to ${r.start.kind === "review" ? "review" : "deploy"} ${r.target}`);
+    } catch (e) { /* toast shown */ }
+    return;
+  }
   if (t.id === "agentAll" || t.dataset.agentHelp) {
     if (t.dataset.busy) return; t.dataset.busy = "1"; setTimeout(() => delete t.dataset.busy, 4000);
     const opts = { person: actor() || undefined, agent: $("#launchAgent") ? $("#launchAgent").value : undefined };

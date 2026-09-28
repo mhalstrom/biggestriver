@@ -1916,6 +1916,46 @@ class AgentBlock(unittest.TestCase):
             self.assertEqual((c.read_text().count("## Work queue"), a.read_text()), (1, cli.AGENT_SNIPPET))
 
 
+class DeployNow(Base):
+    """The Targets tab's Deploy now and Review and deploy (review setting off)."""
+
+    def setUp(self):
+        super().setUp()
+        core.target_add(self.c, "web", "push, then smoke test")
+        core.project_add(self.c, "site", target="web", path=self.dir.name)
+        core.register(self.c, "dev")
+
+    def test_refuses_with_nothing_collected_then_waits_then_alerts_the_owner(self):
+        with self.assertRaisesRegex(RiverError, "nothing is collected"):
+            core.deploy_now(self.c, "web")
+        a = self.add("site", "page")
+        core.ship(self.c, a, "dev")
+        r = core.deploy_now(self.c, "web")
+        self.assertEqual((r["ready"], [w["id"] for w in r["waits_on"]], r["start"]["kind"]), (False, [a], "deploy"))
+        core.claim(self.c, a, "dev")
+        core.done(self.c, a, "commit", "dev")
+        core.target_own(self.c, "web", "dev")
+        r = core.deploy_now(self.c, "web")
+        self.assertEqual((r["ready"], r["alerted"]), (True, "dev"))
+        self.assertTrue(any(m["kind"] == "alert" and "deploy now" in m["body"] for m in core.inbox(self.c, "dev")))
+        d = r["deploy"]["id"]
+        core.claim(self.c, d, "dev")
+        core.done(self.c, d, "release v1", "dev")
+        h = core.targets_view(self.c)[0]["history"]
+        self.assertEqual([(x["id"], x["output"], x["done_by"], [s["id"] for s in x["ships"]]) for x in h],
+                         [(d, "release v1", "dev", [a])])
+
+    def test_review_and_deploy_adds_a_review_even_with_review_off(self):
+        a = self.add("site", "page")
+        core.claim(self.c, a, "dev")
+        core.done(self.c, a, "commit", "dev", ship_it=True)
+        r = core.deploy_now(self.c, "web", review=True)
+        self.assertEqual((r["start"]["kind"], r["ready"]), ("review", True))
+        self.assertIn(r["review"]["id"], core.item_show(self.c, r["deploy"]["id"])["waits_on"])
+        b = core.go(self.c, self.dir.name, None, focus="review:web")  # the session the page opens
+        self.assertEqual((b["role"], b["item"]["id"]), ("reviewer", r["review"]["id"]))
+
+
 class ReleaseReview(Base):
     """With review on, a release waits on one review of everything it ships, not on a review per item."""
 

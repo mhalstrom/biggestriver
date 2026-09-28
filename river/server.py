@@ -156,6 +156,20 @@ def open_needs_you(conn, runner=None, agent=None, person=None):
     return _open_focused(conn, p, "needs:" + (f"@{person}" if person else ""), runner, agent)
 
 
+def deploy_now(conn, target, review=False, runner=None, agent=None, actor=None):
+    """Targets tab, Deploy now (or Review and deploy): when the deploy item (or its review) is ready and
+    the target has no owner to alert, open an agent in a folder of the target's projects that takes it."""
+    r = core.deploy_now(conn, target, review, actor)
+    if not r["ready"] or r.get("alerted"):
+        return r
+    p = next((core._project(conn, x["name"]) for x in core.target_show(conn, target)["projects"]
+              if core._project(conn, x["name"])["path"]), None)
+    if p is None:
+        raise RiverError(f"no project of target {target} has a folder, so river cannot start a session there: "
+                         f"river project path <name> <folder>")
+    return {**r, **_open_focused(conn, p, f"{'review' if review else 'deploy'}:{target}", runner, agent)}
+
+
 def _open_focused(conn, p, focus, runner, agent):
     """Open the chosen agent in a project folder with RIVER_FOCUS set; its river go reads it."""
     _can_open_terminal(runner, f"cd {p['path']}, set RIVER_FOCUS={focus}, then claude go")
@@ -443,6 +457,7 @@ OPS = {
     "dispatch_item": lambda c, a, who: dispatch_item(c, int(a["id"]), agent=a.get("agent")),
     "open_agent_on": lambda c, a, who: open_agent_on(c, int(a["id"]), agent=a.get("agent"), person=a.get("person")),
     "open_needs_you": lambda c, a, who: open_needs_you(c, agent=a.get("agent"), person=a.get("person")),
+    "deploy_now": lambda c, a, who: deploy_now(c, a["target"], bool(a.get("review")), agent=a.get("agent"), actor=who),
     "decline_message": lambda c, a, who: core.decline_message(c, int(a["msg"]), a.get("note"), who),
     "update": lambda c, a, who: _no_update_in_app() or update_apply(),
     "restart": lambda c, a, who: _no_update_in_app() or (_restart_soon(), {"restarting": True})[1],
