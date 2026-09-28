@@ -52,17 +52,21 @@ export function makeTable(el, { key, columns, index = "id", sort = [], onRow, pl
   }).observe(el);
   if (onRow) t.on("rowClick", (e, row) => { if (!e.target.closest("a, button, input, select, textarea, .link")) onRow(row.getData()); });
 
-  let last = null, loaded = false;
+  let last = null, loaded = false, seen = new Map();
   async function set(rows) {
     const sig = JSON.stringify(rows);
     if (sig === last) return;
     last = sig;
     await built;
+    const now = new Map(rows.map((r) => [r[index], JSON.stringify(r)]));
+    const before = seen; seen = now;
     if (!loaded) { loaded = true; return t.setData(rows); }
-    const ids = new Set(rows.map((r) => r[index]));
-    const gone = t.getData().map((r) => r[index]).filter((id) => !ids.has(id));
+    const gone = [...before.keys()].filter((id) => !now.has(id));
     if (gone.length) t.deleteRow(gone);
-    await t.updateOrAddData(rows);
+    const changed = rows.filter((r) => before.get(r[index]) !== now.get(r[index]));
+    await t.updateOrAddData(changed);
+    // A cell's formatter may read fields that have no column (the item behind a chip): redraw the whole row.
+    for (const r of changed) { const row = t.getRow(r[index]); if (row) row.reformat(); }
     // Changed and new rows take their place in the current sort and filters.
     t.setSort(t.getSorters().map((s) => ({ column: s.field, dir: s.dir })));
     t.refreshFilter();

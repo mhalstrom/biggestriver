@@ -432,7 +432,8 @@ async function drawerAction(what) {
 }
 
 // ---- Inbox: messages for the person in "You are", with the answer each kind needs.
-let IB = [], ibSig = "";
+// inboxGen goes up after an action or a change of person, so every inbox row redraws (clears sent text).
+let IB = [], inboxGen = 0;
 
 async function pollInbox() {
   const me = actor();
@@ -443,39 +444,62 @@ async function pollInbox() {
   renderInbox();
 }
 
+// The inbox as a table. The Message column holds the whole message with its answer, reply and decline
+// controls; on a narrow panel From, Kind, Item, To, Sent and State fold into a detail row.
+let inboxTable = null;
+function inboxDone(m) { return !(m.unread || (m.state === "open" && ["question", "offer"].includes(m.kind))); }
+function inboxCell(m) {
+  const me = actor();
+  const open = m.state === "open", it = m.item_id ? S.items.find(i => i.id === m.item_id) : null;
+  let acts = "";
+  if (m.kind === "question" && open)
+    acts = `<input id="ans-${m.id}" placeholder="your answer"><button class="btn primary" data-ib="answer" data-msg="${m.id}">Answer</button>`;
+  else if (m.kind === "offer" && open) {
+    const mine = it && it.assignee === me;
+    acts = (mine ? `<button class="btn primary" data-ib="give" data-msg="${m.id}" data-id="${m.item_id}" data-to="${esc(m.from_agent)}">Give #${m.item_id} to ${esc(m.from_agent)}</button>
+        <input id="split-${m.id}" placeholder="smaller pieces, separated by ;"><button class="btn" data-ib="split" data-msg="${m.id}" data-id="${m.item_id}">Split</button>` : "")
+      + `<input id="dec-${m.id}" placeholder="why not (optional)"><button class="btn" data-ib="decline" data-msg="${m.id}">Decline</button>`;
+  } else {
+    const pushed = m.kind === "alert" && it && it.status === "open" && it.reserved_for === me && it.reserved_until;
+    if (pushed) acts += `<button class="btn primary" data-ib="accept" data-id="${it.id}">Accept #${it.id}</button><button class="btn" data-ib="decline-push" data-id="${it.id}">Decline #${it.id}</button>`;
+    else if (m.kind === "alert" && open) acts += `<input id="dec-${m.id}" placeholder="why not (optional)"><button class="btn" data-ib="decline" data-msg="${m.id}">Decline</button>`;
+    acts += `<input id="rep-${m.id}" placeholder="reply"><button class="btn" data-ib="reply" data-msg="${m.id}">Reply</button>`;
+    if (m.unread) acts += `<button class="btn" data-ib="read" data-msg="${m.id}">Mark read</button>`;
+  }
+  return `<div class="ny-h">${chip(m.kind === "alert" ? "c-p0" : "c-p", esc(m.kind))}<b>${esc(m.from_agent)}</b>
+      ${m.item_id ? `<span class="link" data-open="${m.item_id}">#${m.item_id} ${esc(clip(m.item_title || "", 60))}</span>` : ""}
+      <span class="muted" style="font-size:12px">${ago(m.created_at)} · #${m.id}${m.state !== "open" && m.state !== "read" ? " · " + esc(m.state) : ""}</span>
+      <span class="link" data-thread="${m.id}">thread</span></div>
+    <div class="body">${esc(m.body)}</div>
+    <div class="actions">${acts}</div>
+    <div class="thread hidden" id="thr-${m.id}"></div>`;
+}
 function renderInbox() {
   const me = actor();
   $("#inboxTitle").textContent = `Inbox for ${me}` + (IB.length ? ` (${IB.filter(m => m.unread || (["question", "offer"].includes(m.kind) && m.state === "open")).length})` : "");
   fillSelect("#sendTo", S.agents.map(a => a.name).filter(n => n !== me), false);
   const ib = $("#inbox");
   if (ib.contains(document.activeElement) && document.activeElement.tagName === "INPUT") return;  // do not wipe what they type
-  const sig = JSON.stringify([me, IB.map(m => [m.id, m.state, m.unread])]);
-  if (sig === ibSig) return;
-  ibSig = sig;
-  ib.innerHTML = IB.map(m => {
-    const open = m.state === "open", it = m.item_id ? S.items.find(i => i.id === m.item_id) : null;
-    let acts = "";
-    if (m.kind === "question" && open)
-      acts = `<input id="ans-${m.id}" placeholder="your answer"><button class="btn primary" data-ib="answer" data-msg="${m.id}">Answer</button>`;
-    else if (m.kind === "offer" && open) {
-      const mine = it && it.assignee === me;
-      acts = (mine ? `<button class="btn primary" data-ib="give" data-msg="${m.id}" data-id="${m.item_id}" data-to="${esc(m.from_agent)}">Give #${m.item_id} to ${esc(m.from_agent)}</button>
-          <input id="split-${m.id}" placeholder="smaller pieces, separated by ;"><button class="btn" data-ib="split" data-msg="${m.id}" data-id="${m.item_id}">Split</button>` : "")
-        + `<input id="dec-${m.id}" placeholder="why not (optional)"><button class="btn" data-ib="decline" data-msg="${m.id}">Decline</button>`;
-    } else {
-      const pushed = m.kind === "alert" && it && it.status === "open" && it.reserved_for === me && it.reserved_until;
-      if (pushed) acts += `<button class="btn primary" data-ib="accept" data-id="${it.id}">Accept #${it.id}</button><button class="btn" data-ib="decline-push" data-id="${it.id}">Decline #${it.id}</button>`;
-      else if (m.kind === "alert" && open) acts += `<input id="dec-${m.id}" placeholder="why not (optional)"><button class="btn" data-ib="decline" data-msg="${m.id}">Decline</button>`;
-      acts += `<input id="rep-${m.id}" placeholder="reply"><button class="btn" data-ib="reply" data-msg="${m.id}">Reply</button>`;
-      if (m.unread) acts += `<button class="btn" data-ib="read" data-msg="${m.id}">Mark read</button>`;
-    }
-    return nyCard(`${chip(m.kind === "alert" ? "c-p0" : "c-p", esc(m.kind))}<b>${esc(m.from_agent)}</b>
-        ${m.item_id ? `<span class="link" data-open="${m.item_id}">#${m.item_id} ${esc(clip(m.item_title || "", 60))}</span>` : ""}
-        <span class="muted" style="font-size:12px">${ago(m.created_at)} · #${m.id}${m.state !== "open" && m.state !== "read" ? " · " + esc(m.state) : ""}</span>
-        <span class="link" data-thread="${m.id}">thread</span>`, `<div class="body">${esc(m.body)}</div>
-      <div class="actions">${acts}</div>
-      <div class="thread hidden" id="thr-${m.id}"></div>`, "msg" + (m.unread || (open && ["question", "offer"].includes(m.kind)) ? "" : " read"));
-  }).join("") || `<div class="muted">No messages${$("#inboxAll").checked ? "" : " waiting"}.</div>`;
+  inboxTable ||= makeTable(ib, { key: "inbox", sort: [{ column: "created_at", dir: "desc" }],
+    placeholder: "No messages.", responsiveLayout: "collapse", responsiveLayoutCollapseStartOpen: false,
+    rowFormatter: (row) => { row.getElement().classList.add("msg"); row.getElement().classList.toggle("read", inboxDone(row.getData().m)); },
+    columns: [
+      { formatter: "responsiveCollapse", width: 28, minWidth: 28, headerSort: false, filter: false, resizable: false },
+      { title: "Message", field: "body", minWidth: 320, responsive: 0, cssClass: "wrap", html: (r) => inboxCell(r.m) },
+      { title: "From", field: "from", width: 120, filter: "select", responsive: 1 },
+      { title: "Kind", field: "kind", width: 90, filter: "select", responsive: 1 },
+      { title: "Item", field: "item", width: 70, responsive: 2, html: (r) => r.m.item_id ? `<span class="link" data-open="${r.m.item_id}">#${r.m.item_id}</span>` : "" },
+      { title: "To", field: "to", width: 110, filter: "select", responsive: 3 },
+      { title: "Sent", field: "created_at", width: 84, filter: false, responsive: 2, html: (r) => ago(r.created_at) },
+      { title: "State", field: "state", width: 90, filter: "select", responsive: 2 },
+    ] });
+  // A row changes only when its message, or the pushed item it offers, changes.
+  inboxTable.set(IB.map(m => {
+    const it = m.item_id ? S.items.find(i => i.id === m.item_id) : null;
+    return { id: m.id, body: m.body, from: m.from_agent, kind: m.kind, item: m.item_id ? "#" + m.item_id : "", to: m.to_agent || "next holder",
+      created_at: m.created_at, state: m.unread ? "unread" : m.state, m, gen: inboxGen,
+      it: it && [it.status, it.assignee, it.reserved_for, it.reserved_until] };
+  }));
 }
 
 async function inboxAction(t) {
@@ -490,7 +514,7 @@ async function inboxAction(t) {
     if (what === "reply") { const body = val("rep"); if (!body) return toast("Write the reply first", true); await act("send", { kind: "note", body, reply: msg }); toast("Sent"); }
     if (what === "read") await act("message_read", { msg });
   } catch (e) { /* toast shown */ }
-  ibSig = ""; document.activeElement && document.activeElement.blur(); await pollInbox();
+  inboxGen++; document.activeElement && document.activeElement.blur(); await pollInbox();
 }
 
 async function toggleThread(msg) {
@@ -499,6 +523,7 @@ async function toggleThread(msg) {
   const r = await fetch(`/api/thread/${msg}`); if (!r.ok) return;
   box.innerHTML = (await r.json()).messages.map(msgLine).join("");
   box.classList.remove("hidden");
+  const row = inboxTable && inboxTable.tabulator.getRow(msg); if (row) row.normalizeHeight();
 }
 
 // ---- Needs you: decisions and steps waiting for a person, with browser notifications.
@@ -640,9 +665,9 @@ document.addEventListener("click", async (e) => {
   if (t.dataset.fold) { const c = projClosed(), n = t.dataset.fold; store("river.projClosed", JSON.stringify(c.includes(n) ? c.filter(x => x !== n) : c.concat(n))); return renderProjects(); }
 });
 
-$("#actor").addEventListener("change", () => { store("river.actor", $("#actor").value); ibSig = ""; pollInbox().catch(() => {}); });
+$("#actor").addEventListener("change", () => { store("river.actor", $("#actor").value); inboxGen++; pollInbox().catch(() => {}); });
 document.addEventListener("change", (e) => { if (e.target.id === "launchAgent") store("river.launch.agent", e.target.value); });
-$("#inboxAll").addEventListener("change", () => { ibSig = ""; pollInbox().catch(() => {}); });
+$("#inboxAll").addEventListener("change", () => { inboxGen++; pollInbox().catch(() => {}); });
 async function sendForm() {
   if (!actor()) return toast("Choose your name in 'You are' first", true);
   const body = $("#sendBody").value.trim(), item = $("#sendItem").value.replace("#", "").trim();
@@ -869,7 +894,7 @@ async function openFromHash() {
   for (const part of location.hash.slice(1).split("&")) {
     const m = part.match(/^(item|tab|as)-(.+)$/); if (!m) continue;
     const v = decodeURIComponent(m[2]);
-    if (m[1] === "as" && [...$("#actor").options].some(o => o.value === v)) { $("#actor").value = v; store("river.actor", v); ibSig = ""; await pollInbox().catch(() => {}); }
+    if (m[1] === "as" && [...$("#actor").options].some(o => o.value === v)) { $("#actor").value = v; store("river.actor", v); inboxGen++; await pollInbox().catch(() => {}); }
     if (m[1] === "tab" && TABS.includes(v)) tabIn = v;
     if (m[1] === "item") { itemIn = true; await openDrawer(+v); }
   }
