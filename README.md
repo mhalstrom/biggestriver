@@ -17,6 +17,9 @@ A small work queue for people and AI agent sessions that work on several
 projects at the same time.
 
 - Items belong to projects and can wait on other items, also across projects.
+- Goals (optional) name an outcome in a project with a "done when" test. One
+  agent owns a goal, plans and takes its items, and declares it complete;
+  `river go --role owner` then takes the next free goal.
 - Importance comes from the dependency graph: an item inherits the priority of
   the most important open item that waits on it.
 - An agent picks the area where it already has context (a project, the items
@@ -91,6 +94,10 @@ river next --project website --claim             # take one from a project
 river next --near 12 --claim                     # take one linked to item 12
 river next --unblocks 12 --claim                 # take one that clears item 12's blockers
 river done 12 --output "merged in abc123"
+river goal add website checkout --outcome "customers can pay" --done-when "a test order succeeds"
+river add "Payment form" --goal checkout         # tag an item with a goal (repeatable)
+river goal own checkout                          # own it: plan, take, and unblock its items
+river goal done checkout --result "live since 2026-10-02"
 river blockers 12                                # tree of what item 12 waits on
 river plan                                       # planner session: overview, open questions; plans, takes no work
 river status                                     # every project's counts, recent completions, who works on what
@@ -140,7 +147,7 @@ stderr, never into `--json` output; `-q` or `RIVER_QUIET=1` turns them off.
 
 An agent that cannot run shell commands can use river through MCP:
 `river mcp` is a stdio MCP server with the tools `go`, `done`, `show`,
-`inbox`, and `river` (any command, as a list of words). Each tool returns the
+`goal`, `inbox`, and `river` (any command, as a list of words). Each tool returns the
 same text as the command, and the server keeps the agent name that `go` gives.
 For Claude Code: `claude mcp add river -- river mcp`.
 
@@ -157,7 +164,13 @@ priority, areas for `next`, atomic claims with expiring leases, outside
 blockers (with `--until`, so an item comes back by itself at that time),
 blocker trees, the agent registry, capacity, settings, and the web page.
 
-- `river go` roles: worker, unblocker, planner, deployer, idle. After
+- Goals: outcomes with a done-when test and one owner; items carry goal
+  tags (none, one, or several). `river go` gives an owner its goal's items,
+  then what blocks them, then asks whether the goal is done; it gives an
+  agent a free goal only when the best ready work serves it, and
+  `river go --role owner` takes the next free goal. The page shows goal cards
+  with owner and progress, and filters by goal.
+- `river go` roles: owner, worker, unblocker, planner, deployer, idle. After
   `done`, an agent takes the next item at once (`auto_continue`).
 - Per-item context fields (context, files it touches, check command), so a
   new agent can start without searching.

@@ -907,6 +907,14 @@ class Goals(Base):
         core.goal_reopen(self.c, "checkout")
         self.assertEqual(core.goal_show(self.c, "checkout")["status"], "open")
 
+    def test_owner_adds_an_item_with_no_goal(self):
+        core.goal_add(self.c, "shop", "g1", actor="t")
+        core.goal_own(self.c, "g1", "ag")
+        a = core.item_add(self.c, "shop", "typo fix", actor="ag", goals=[])["id"]  # river add --no-goal
+        b = core.item_add(self.c, "shop", "goal work", actor="ag")["id"]
+        ann = core.annotate(self.c)
+        self.assertEqual((ann[a]["goals"], ann[b]["goals"]), ([], ["g1"]))
+
     def test_owner_lease_expires_with_notice(self):
         core.goal_add(self.c, "shop", "g1", actor="t")
         core.goal_own(self.c, "g1", "ag")
@@ -941,7 +949,7 @@ class GoalOwners(Base):
         b = self.go("ag")
         self.assertEqual((b["role"], b["item"], b["goal_action"]), ("owner", None, "judge"))
         core.goal_done(self.c, "checkout", "orders work", "ag")
-        b = self.go("ag")
+        b = core.go(self.c, self.dir.name, actor="ag", role="owner")  # the owner continues with the next free goal
         self.assertEqual((b["goal"]["name"], b.get("took_goal")), ("speed", True))
         self.assertEqual(b["goal_action"], "judge")  # a goal with no items is not complete until its owner says so
         b = self.go("bo")  # no free goal left: today's worker behavior
@@ -955,13 +963,26 @@ class GoalOwners(Base):
         mine = core.item_add(self.c, "shop", "feature", after=[blocker], goals=["g1"])["id"]
         other = core.item_add(self.c, "shop", "unrelated")["id"]
         core.claim(self.c, blocker, "bo")
-        b = self.go("ag")  # owns g1 now; its item waits on bo's work, so it takes other ready work
+        core.goal_own(self.c, "g1", "ag")
+        b = self.go("ag")  # owns g1; its item waits on bo's work, so it takes other ready work
         self.assertEqual((b["goal"]["name"], b["role"], b["item"]["id"]), ("g1", "worker", other))
         held = b["goal"]["blockers_held"]
         self.assertEqual([(x["id"], x["assignee"], x["goal"], x["goal_owner"]) for x in held], [(blocker, "bo", "g2", "bo")])
         m = core.message(self.c, "question", "when is the lib ready?", goal="g2", actor="ag")[0]
         self.assertEqual(m["to_agent"], "bo")
         self.assertEqual(core.goal_show(self.c, "g1")["items_open"], [mine])
+
+    def test_plain_go_never_forces_a_goal(self):
+        core.goal_add(self.c, "shop", "legal", "pages live", actor="t")
+        core.item_add(self.c, "shop", "sign the contract", doer="human", goals=["legal"])
+        loose = core.item_add(self.c, "shop", "fix typo", priority=1)["id"]
+        b = self.go("ag")  # the goal has only a human item: ag works the untagged item, owns nothing
+        self.assertEqual((b["role"], b["item"]["id"], b.get("took_goal")), ("worker", loose, None))
+        self.assertIsNone(core.goal_show(self.c, "legal")["owner"])
+        core.goal_add(self.c, "shop", "speed", "fast", actor="t")
+        idx = core.item_add(self.c, "shop", "add index", priority=0, goals=["speed"])["id"]
+        b = self.go("bo")  # the best ready work is a goal item: bo owns that goal
+        self.assertEqual((b["role"], b["item"]["id"], b["goal"]["name"]), ("owner", idx, "speed"))
 
     def test_owner_hears_when_others_add_claim_or_finish_its_items(self):
         core.goal_add(self.c, "shop", "g1", actor="t")

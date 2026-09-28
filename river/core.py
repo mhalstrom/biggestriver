@@ -1083,8 +1083,8 @@ def item_add(conn, project, title, priority=2, notes="", doer="any", after=(), a
              check or "", iso(now())))
         iid = cur.lastrowid
         _event(conn, iid, actor, f"added to {project} at P{priority}")
-        # Goal tags: the ones named, else the goal the actor owns (if any).
-        names = list(goals) if goals else [r["name"] for r in conn.execute(
+        # Goal tags: the ones named, else the goal the actor owns (if any). goals=[] means no goal.
+        names = list(goals) if goals is not None else [r["name"] for r in conn.execute(
             "SELECT name FROM goals WHERE owner=? AND status='open' ORDER BY rank, id LIMIT 1", (actor,))] if actor else []
         for g in names:
             _tag(conn, iid, g, actor)
@@ -3299,10 +3299,27 @@ def go(conn, cwd, actor=None, project=None, role=None, session=None):
     if role in (None, "owner", "worker"):
         g = _owned_goal(conn, actor, names)
         if g is None and role in (None, "owner"):
-            # Agents own outcomes: take the highest-ranked open goal nobody owns.
-            for f in conn.execute(f"SELECT g.name FROM goals g JOIN projects p ON p.id=g.project_id WHERE g.status='open' "
-                                  f"AND g.owner IS NULL AND p.archived=0 AND p.name IN ({','.join('?' * len(names))}) "
-                                  f"ORDER BY p.rank, g.rank, g.id", names).fetchall():
+            # Agents own outcomes: take an open goal nobody owns. --role owner takes the highest-ranked one.
+            # Plain go never forces a goal: it takes one only when the best ready work in the area serves it
+            # (the item is tagged with the goal, or an open item of the goal waits on it); otherwise the
+            # agent works as a worker below. After goal done, the owner continues with go --role owner.
+            free = conn.execute(f"SELECT g.name FROM goals g JOIN projects p ON p.id=g.project_id WHERE g.status='open' "
+                                f"AND g.owner IS NULL AND p.archived=0 AND p.name IN ({','.join('?' * len(names))}) "
+                                f"ORDER BY p.rank, g.rank, g.id", names).fetchall()
+            if role is None:
+                try:
+                    best = next_item(conn, area, None, False, actor, 1)
+                except RiverError:
+                    best = []
+                serves = set()
+                if best:
+                    ann = annotate(conn)
+                    serves = set(best[0].get("goals") or [])
+                    for a in ann.values():
+                        if a["goals"] and a["status"] in OPEN_STATES and best[0]["id"] in _prereq_closure(ann, a["id"]):
+                            serves.update(a["goals"])
+                free = [f for f in free if f["name"] in serves]
+            for f in free:
                 try:
                     goal_own(conn, f["name"], actor)
                 except RiverError as e:

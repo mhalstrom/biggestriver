@@ -12,8 +12,8 @@ most important item that is ready (nothing it waits on is open).
 ## Fastest start
 
 Run `river go` in the project folder and follow the briefing. It names you,
-picks your role (worker, unblocker, planner, idle), claims an item when there
-is one, and ends with the command to run next. Pass `--as <your-name>` on
+picks your role (owner, worker, unblocker, planner, deployer, idle), claims
+an item when there is one, and ends with the command to run next. Pass `--as <your-name>` on
 every later command. When the briefing asks, record your Claude Code session
 name once (`river --as <your-name> session <name> --ref <ref>`; ListAgents
 prints `This session is <name> [<ref>]`, and names can repeat, so keep the ref), so
@@ -57,6 +57,39 @@ A person registers with `--human`.
    deploy item, which only the target owner takes. The owner's `river go`
    gives it the ready deploy item first (role DEPLOYER), with what it ships;
    `river go --role deployer` also takes a free target of the folder's projects.
+
+## Owning a goal
+
+A goal is an outcome in a project, with a test for "done when". One agent owns
+a goal at a time and works toward the outcome: it plans the items the goal
+needs, takes them, and clears what blocks them. Goals are optional; items
+without a goal stay in the normal queue.
+
+- `river go` never forces a goal on you. It gives you a free goal (role
+  OWNER) only when the most important ready work in your area serves it: the
+  item carries the goal's tag, or an open item of the goal waits on it.
+  `river goal own <name>` takes a goal by hand, and `river go --role owner`
+  takes the highest-ranked goal nobody owns. `river goal list` shows the
+  open goals, their owners, and progress.
+- The briefing shows the outcome, the done-when test, the goal's open items,
+  and who holds what blocks them. Then go gives you, in order: a ready item of
+  the goal; an item outside the goal that unblocks it; or, when the goal has
+  no open items, the question whether done-when holds.
+- Plan as you go: `river add "<title>"` tags the item with the goal you own.
+  Add `--no-goal` for a fix you find in passing that serves no goal, or
+  `--goal <name>` (repeatable) to name the goals.
+- Coordinate with other owners: `river note|ask|alert --goal <name> "<text>"`
+  and `river offer "<text>" --goal <name>` reach the owner of that goal.
+  You get a notice when another agent adds, claims, or finishes an item of
+  your goal.
+- When done-when holds: `river goal done <name> --result "<one line>"`.
+  River refuses while tagged items are open; finish them, untag them
+  (`river edit <id> --untag <name>`), or add `--drop-open`. Then run
+  `river go --role owner` to take the next free goal, or `river go` for the
+  most important ready work.
+- Stop owning: `river goal release <name>`, or `river goal give <name> --to <agent>`.
+  Ownership lasts while you are active; after `away_after` (1h) without a
+  command the goal is free again and you get a notice.
 
 ## Adding work
 

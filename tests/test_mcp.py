@@ -48,6 +48,25 @@ class Mcp(unittest.TestCase):
         self.assertIn("no item 99", r[5]["result"]["content"][0]["text"])
         self.assertTrue(r[6]["result"]["isError"])
 
+    def test_goal_tool(self):
+        c = core.connect()
+        core.goal_add(c, "demo", "ship", "it ships", "users install it")
+        core.register(c, "ag")
+        c.close()
+        call = lambda i, args: {"jsonrpc": "2.0", "id": i, "method": "tools/call",
+                                "params": {"name": "goal", "arguments": dict(args, **{"as": "ag"})}}
+        r = self.talk(call(1, {"action": "list"}), call(2, {"action": "own", "name": "ship"}),
+                      call(3, {"action": "show", "name": "ship"}), call(4, {"action": "done", "name": "ship", "result": "shipped"}),
+                      call(5, {"action": "own"}))
+        text = [x["result"]["content"][0]["text"] for x in r]
+        self.assertIn("ship", text[0])
+        self.assertIn("ag", text[2])
+        self.assertFalse(r[3]["result"]["isError"])
+        self.assertTrue(r[4]["result"]["isError"])
+        c = core.connect()
+        self.assertEqual(core.goal_show(c, "ship")["status"], "complete")
+        c.close()
+
 
 if __name__ == "__main__":
     unittest.main()

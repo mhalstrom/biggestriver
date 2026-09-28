@@ -41,6 +41,16 @@ TOOLS = [
     {"name": "show",
      "description": "One item with its notes, links, and history.",
      "inputSchema": {"type": "object", "required": ["id"], "properties": {"id": {"type": "integer"}, "as": _AS}}},
+    {"name": "goal",
+     "description": "Goals: outcomes in a project that one agent owns. list (open goals with owner and progress), "
+                    "show (a goal and its items), own (you plan and take the items that reach it), release, "
+                    "or done (declare it complete with a one-line result; refused while its items are open).",
+     "inputSchema": {"type": "object", "required": ["action"], "properties": {
+         "action": {"type": "string", "enum": ["list", "show", "own", "release", "done"]},
+         "name": {"type": "string", "description": "the goal (all actions except list)"},
+         "project": {"type": "string", "description": "list: only this project's goals"},
+         "result": {"type": "string", "description": "done: what the goal achieved, one line"},
+         "as": _AS}}},
     {"name": "inbox",
      "description": "Your unread messages and the questions that wait for your answer.",
      "inputSchema": {"type": "object", "properties": {"as": _AS}}},
@@ -60,6 +70,19 @@ class Server:
             words = ["done", str(a["id"]), "--output", a["output"]]
         elif name == "show":
             words = ["show", str(a["id"])]
+        elif name == "goal":
+            act = a["action"]
+            if act not in ("list", "show", "own", "release", "done"):
+                raise RiverError("goal action is one of list, show, own, release, done")
+            words = ["goal", act]
+            if act == "list":
+                words += ["--project", a["project"]] if a.get("project") else []
+            else:
+                if not a.get("name"):
+                    raise RiverError(f"goal {act} needs the goal name")
+                words.append(a["name"])
+            if act == "done":
+                words += ["--result", a.get("result") or ""]
         elif name == "inbox":
             words = ["inbox"]
         else:

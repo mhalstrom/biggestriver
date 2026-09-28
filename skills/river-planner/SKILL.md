@@ -22,24 +22,28 @@ anything:
    (agents or the user), what already exists, and what must not change. Take
    the open questions from the briefing that bear on this outcome; skip the
    rest.
-3. **Split the outcome into items you can check.** Each item is one result that
+3. **Make each outcome a goal when an agent should own it.** A goal is an
+   outcome with a done-when test (`river goal add`, below). Its owner plans
+   and adjusts the items, so the items you add under it are first steps, not
+   a full plan. Small or one-off work needs no goal.
+4. **Split the outcome into items you can check.** Each item is one result that
    one agent or person finishes, with a `--check` command or a plain test ("the
    page loads at /pricing"). A step only the user can do (accounts, payments,
    legal, a decision) is its own `--doer human` item. For a person who is not
    in river (a client, a colleague), still use `--doer human`, and say in
    `--context` who does it and that the user records the result with `river done`.
-4. **Show the plan before you write it.** A short numbered list with the
+5. **Show the plan before you write it.** A short numbered list with the
    waits-on links. Change it until the user agrees, then add it.
-5. **Set priority on the outcome only** (`river prio <id> 0`). Its prerequisites
+6. **Set priority on the outcome only** (`river prio <id> 0`). Its prerequisites
    inherit it. A new project gets the lowest rank, so equal priorities in older
    projects go first. When the new outcome must go before them, ask the user,
    then run `river project rank <name> 1`.
-6. **Make a new project** only for a separate area with its own folder or
+7. **Make a new project** only for a separate area with its own folder or
    goal (`river project add <name> --path <dir> --description "..."`).
    Otherwise add to the existing project. When `river plan` says the folder
    has no project, the projects it lists are other work: leave them alone
    unless the user names them.
-7. **Report progress** from the queue, not from memory: `river status`,
+8. **Report progress** from the queue, not from memory: `river status`,
    `river log --since 7d`, `river blockers <id>`.
 
 End by saying what is ready now, what waits on the user, and that `river go`
@@ -79,6 +83,13 @@ helps. Agents read `river project list` to pick an area.
 
 A goal is an outcome in a project with a test for "done". One agent owns a
 goal at a time; it creates and takes the items that reach it and tags them.
+Goals are optional: an item can have no goal, one, or several. Goal progress
+counts only the items tagged with it.
+
+Write the outcome as what is true at the end, and done-when as a test someone
+can check ("a real card payment succeeds"). Rank a project's goals so free
+owners take the most important first. A business goal and the technical goals
+under it can share items: tag an item with both.
 
 ```
 river goal add <project> <name> --outcome "..." --done-when "..." [--rank N]
@@ -86,10 +97,11 @@ river goal list [--project P] [--all]    # open goals in order, with owner and p
 river goal show <name>                    # the goal and its items
 river goal rank <name> <N>                # 1 = first among the project's goals
 river goal edit <name> [--outcome] [--done-when] [--rename]
-river goal own <name> / river goal release <name>
+river goal own <name> / river goal release <name> / river goal give <name> --to <agent>
 river goal done <name> --result "<one line>" [--drop-open]   # refused while its items are open
 river goal reopen <name>
 river add "<title>" --goal <name>         # repeatable; default: the goal you own
+river add "<title>" --no-goal             # no tag, even when you own a goal
 river edit <id> --goal <name> / --untag <name>
 river list --goal <name>
 ```

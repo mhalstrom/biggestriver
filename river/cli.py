@@ -333,6 +333,7 @@ def build_parser():
                    help="add every line of a plan file (an outline) as an item; a line waits on the lines indented under it")
     x.add_argument("--dry-run", action="store_true", help="with --from: show what would be added")
     x.add_argument("--goal", action="append", help="goal this item works toward (repeatable; default: the goal you own)")
+    x.add_argument("--no-goal", action="store_true", help="no goal tag, even when you own a goal (a fix found in passing)")
     x.add_argument("--priority", "-p", type=int, default=2, help="0 highest .. 4 lowest (default 2)")
     x.add_argument("--after", type=int, nargs="*", default=[], help="items this one waits on")
     x.add_argument("--feeds", type=int, nargs="*", default=[], help="items this one waits on and whose output it reads")
@@ -639,6 +640,8 @@ def _hint(a, res, actor):
         return f"next: river --as {actor} go   (now: keep going while go gives you items, unless auto_continue is off)"
     if actor and c == "release":
         return f"next: river --as {actor} go"
+    if actor and c == "goal" and a.gcmd == "done":
+        return f"next: river --as {actor} go --role owner   (takes the highest-ranked goal nobody owns)"
     if c == "register":
         return HINTS["register"].format(name=res["name"])
     if c == "next":
@@ -782,7 +785,8 @@ def dispatch(conn, a, actor):
             title = a.words[0]
             project = core.project_for_add(conn, os.getcwd(), a.blocks if a.blocks is not None else a.found_during)
         return core.item_add(conn, project, title, a.priority, a.notes, a.doer, a.after, actor,
-                             a.context, a.touches, a.check, a.blocks, a.mode, a.found_during, a.feeds, a.due, a.goal)
+                             a.context, a.touches, a.check, a.blocks, a.mode, a.found_during, a.feeds, a.due,
+                             [] if a.no_goal else a.goal)
     if c == "edit":
         return core.item_edit(conn, a.id, a.title, a.notes, a.doer, a.project, actor, a.context, a.touches, a.check,
                               a.due, a.goal, a.untag)
