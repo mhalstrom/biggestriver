@@ -1056,8 +1056,13 @@ def render_plan(b):
     for n, t in (b.get("trackers") or {}).items():
         if t:
             out += ["", f"TRACKER: project {n} uses {t}.",
-                    "  Fetch its open issues with that tool, and add the ones that are not in river yet with --ref "
-                    f"(river list --ref <tracker>:<key> shows if one is)."]
+                    "  Import its open issues with that tool before you plan new work:",
+                    "  - Skip an issue river has already: river list --ref <tracker>:<key>",
+                    f"  - Add the others: {r} add {n} \"<issue title>\" --ref <tracker>:<key> --ref-url <issue link> "
+                    "--context \"<what the issue says>\"",
+                    "  - Keep the tracker's priority (-p 0..4) and order, and link what must come first: "
+                    f"{r} dep <id> --on <id>",
+                    "  Ask the user before you import a large backlog, or issues that belong to other people."]
         else:
             out += ["", f"No tracker is recorded for {n}. If the user uses one (Jira, GitHub Issues, Linear...),",
                     f"  record it once, in words an agent can act on: {r} project tracker {n} \"<tracker> <where> via <tool>\""]

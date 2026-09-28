@@ -89,12 +89,22 @@ river project tracker <name> "github owner/repo via gh"
 river project tracker <name> "jira PROJ via the Jira MCP server"
 ```
 
-`river plan` then names the tracker. Fetch its open issues with that tool, and
-add each one that river does not have yet with a link:
-`river add "<title>" --ref github:owner/repo#12` (or `--ref jira:PROJ-123
---ref-url <link>`). `river list --ref <ref>` shows if an issue is in river
-already, and river refuses a second open item with the same link in a project.
-River has no tracker code: you read and write the tracker with your own tools.
+`river plan` then names the tracker. Import its open issues before you plan
+new work:
+
+1. Read the open issues with the tool the tracker line names (gh, a Jira or
+   Linear MCP server, a command the user set up).
+2. Skip each issue river has already: `river list --ref <tracker>:<key>`.
+   River also refuses a second open item with the same link in a project.
+3. Add the others with the link and what the issue says:
+   `river add "<title>" --ref github:owner/repo#12 --context "..."`, or
+   `--ref jira:PROJ-123 --ref-url <link>` (GitHub links get a URL by themselves).
+4. Keep the tracker's priority (`-p 0..4`) and order, and record what must
+   come first (`river dep <id> --on <id>`).
+
+Ask the user before you import a large backlog or issues assigned to other
+people. River has no tracker code: you read and write the tracker with your
+own tools.
 
 ## Goals
 
