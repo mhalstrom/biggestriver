@@ -122,6 +122,20 @@ class LaunchAgent(unittest.TestCase):
         os.environ.pop("RIVER_DB", None)
         self.dir.cleanup()
 
+    def test_a_page_on_a_riverdb_queue_starts_agents_on_it(self):
+        core.project_add(self.c, "shop", path=self.dir.name)
+        core.item_add(self.c, "shop", "first")
+        sent, old = [], os.environ.get("RIVER_DB")
+        os.environ["RIVER_DB"] = os.path.join(self.dir.name, "q.db")
+        try:
+            server.launch_agent(self.c, runner=sent.append)
+        finally:
+            if old is None:
+                del os.environ["RIVER_DB"]
+            else:
+                os.environ["RIVER_DB"] = old
+        self.assertRegex(sent[0], r"RIVER_DB=\S*q\.db claude go")
+
     def test_dispatch_starts_a_named_session_for_one_item(self):
         core.project_add(self.c, "shop", path=self.dir.name)
         top = core.item_add(self.c, "shop", "first", priority=0)["id"]
@@ -205,7 +219,7 @@ class LaunchAgent(unittest.TestCase):
         sent = []
         t = server.dispatch_item(self.c, x, runner=sent.append)
         self.assertEqual(sent[0], {"args": "cmd /k claude go --remote-control", "cwd": t["path"],
-                                   "env": {"RIVER_AGENT": t["session_name"]}})
+                                   "env": {"RIVER_DB": str(core.db_path()), "RIVER_AGENT": t["session_name"]}})
         server.PLATFORM = "linux"
         core.item_add(self.c, "shop", "more work")
         with self.assertRaisesRegex(RiverError, "macOS and Windows"):
@@ -214,7 +228,7 @@ class LaunchAgent(unittest.TestCase):
     def test_opens_terminal_in_the_folder_of_the_top_ready_item(self):
         folder = os.path.join(self.dir.name, 'my "shop" app')
         core.project_add(self.c, "shop", path=self.dir.name)
-        core.project_path(self.c, "shop", folder)
+        core.project_path(self.c, "shop", folder, move=True)
         core.project_add(self.c, "nofolder")
         core.item_add(self.c, "shop", "person step", doer="human")
         x = core.item_add(self.c, "shop", "agent step", priority=1)["id"]

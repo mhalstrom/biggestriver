@@ -440,6 +440,14 @@ def db_path() -> Path:
     return LEGACY_DB if not home.exists() and LEGACY_DB.exists() else home
 
 
+def queue_note():
+    """When RIVER_DB points away from the main queue: one line that says which queue this is; else ""."""
+    if not os.environ.get("RIVER_DB"):
+        return ""
+    p, home = db_path().resolve(), HOME_DB.expanduser().resolve()
+    return "" if p == home else f"QUEUE: {p} (set by RIVER_DB), not the main queue {home}"
+
+
 def db_move(force=False):
     """Copy the clone's data/river.db to ~/.biggestriver/river.db (SQLite backup, safe while it is open),
     then rename the old file to river.db.moved so every later command uses the new one."""
@@ -731,11 +739,16 @@ def project_archive(conn, name, actor=None):
     return project_list(conn)
 
 
-def project_path(conn, name, path, actor=None):
-    """Link a project to a folder, so `river go` run inside that folder finds it."""
+def project_path(conn, name, path, actor=None, move=False):
+    """Link a project to a folder, so `river go` run inside that folder finds it. A project linked to another
+    folder that still exists moves only with move=True: agents in the old folder would stop finding it."""
     full = str(Path(path).expanduser().resolve()) if path else None
     with tx(conn):
-        _project(conn, name)
+        old = _project(conn, name)["path"]
+        if old and full and old != full and Path(old).is_dir() and not move:
+            raise RiverError(f"project {name} is linked to {old}; linking it to {full} moves it, and agents in "
+                             f"{old} stop finding it. Only the user decides that: river project path {name} "
+                             f"{full} --move. A new project for this folder instead: river init")
         conn.execute("UPDATE projects SET path=? WHERE name=?", (full, name))
         _event(conn, None, actor, f"project {name} path {full or 'cleared'}")
     return dict(_project(conn, name))
@@ -4029,10 +4042,14 @@ def go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None)
         names = projects_for_dir(conn, cwd)
         if not names:
             listing = "; ".join(f"{p['name']}" + (f" ({p['path']})" if p.get("path") else "") for p in project_list(conn))
+            q = queue_note()
             raise RiverError(
-                f"no project is linked to {Path(cwd).resolve()}. Either run: river go --project <name>, "
-                f"or link this folder: river project path <name> . "
-                f"Projects: {listing or '(none; river project add <name> --path .)'}")
+                (f"{q}. If this folder's work is in another queue, that is why: start the agent without RIVER_DB. "
+                 if q else "")
+                + f"no project is linked to {Path(cwd).resolve()} in this queue. Ask the user which project this "
+                f"folder is, then: river go --project <name>. A project without a folder: river project path <name> . "
+                f"A new project for this folder: river init. Do not move a project that is linked to another "
+                f"folder. Projects: {listing or '(none)'}")
     area = ",".join(names)
 
     # Identity: reuse a registered name, else make one and register it.

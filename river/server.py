@@ -187,6 +187,9 @@ def _open_terminal(t, env, runner=None):
     import os
     import shlex
     import subprocess
+    # The agent uses the same queue as this page: a page on a RIVER_DB queue starts agents on it too.
+    if os.environ.get("RIVER_DB"):
+        env = {"RIVER_DB": str(core.db_path()), **env}
     if PLATFORM == "win32":
         # cmd /k keeps the window open when the agent ends; the command line goes to cmd as written.
         spec = {"args": f"cmd /k {t['command']}", "cwd": t["path"], "env": dict(env)}

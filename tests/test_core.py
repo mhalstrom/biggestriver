@@ -245,6 +245,34 @@ class Go(Base):
         core.project_add(self.c, "web", path=self.web)
         core.project_add(self.c, "api", path=self.api)
 
+    def test_a_project_linked_to_another_folder_moves_only_with_move(self):
+        other = os.path.join(self.dir.name, "other")
+        os.makedirs(other)
+        with self.assertRaises(RiverError) as e:
+            core.project_path(self.c, "web", other)
+        self.assertIn("--move", str(e.exception))
+        self.assertEqual(core._project(self.c, "web")["path"], os.path.realpath(self.web))
+        core.project_path(self.c, "web", other, move=True)
+        self.assertEqual(core._project(self.c, "web")["path"], os.path.realpath(other))
+        core.project_path(self.c, "api", self.api)  # the same folder again is fine
+
+    def test_go_in_an_unlinked_folder_names_a_test_queue(self):
+        lone = os.path.join(self.dir.name, "lone")
+        os.makedirs(lone)
+        old = os.environ.get("RIVER_DB")
+        os.environ["RIVER_DB"] = self.path
+        try:
+            self.assertIn("QUEUE: ", core.queue_note())
+            with self.assertRaises(RiverError) as e:
+                core.go(self.c, lone)
+            self.assertIn("RIVER_DB", str(e.exception))
+            self.assertIn("Ask the user", str(e.exception))
+        finally:
+            if old is None:
+                del os.environ["RIVER_DB"]
+            else:
+                os.environ["RIVER_DB"] = old
+
     def test_worker_from_folder_and_resume(self):
         x = self.add("web", "x", doer="ai")
         b = core.go(self.c, os.path.join(self.web, "src"))

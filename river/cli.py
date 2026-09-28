@@ -351,6 +351,7 @@ def build_parser():
     x.add_argument("--target", help="deploy target this project ships to (river target list)")
     x = prs.add_parser("describe", help="set a project's description"); x.add_argument("name"); x.add_argument("text")
     x = prs.add_parser("path", help="link a project to a folder (river go uses it)"); x.add_argument("name"); x.add_argument("path", nargs="?")
+    x.add_argument("--move", action="store_true", help="move a project that is linked to another folder (the user decides)")
     x = prs.add_parser("show", help="a project's description, who works on it, and its ready items"); x.add_argument("name")
     x = prs.add_parser("target", help="put a project in a deploy target (no target clears it)")
     x.add_argument("name"); x.add_argument("target", nargs="?")
@@ -895,7 +896,7 @@ def init_folder(args):
     if name:
         exists = conn.execute("SELECT 1 FROM projects WHERE name=?", (name,)).fetchone()
         if exists:
-            core.project_path(conn, name, str(here), args.actor)
+            core.project_path(conn, name, str(here), args.actor, move=bool(args.project))
             lines.append(f"project {name}: linked to {here}")
         else:
             core.project_add(conn, name, notes=args.description, actor=args.actor, path=str(here))
@@ -934,7 +935,7 @@ def dispatch(conn, a, actor):
         if a.pcmd == "rank":
             return core.project_rank(conn, a.name, a.rank, actor)
         if a.pcmd == "path":
-            return core.project_path(conn, a.name, a.path, actor)
+            return core.project_path(conn, a.name, a.path, actor, move=a.move)
         if a.pcmd == "describe":
             return core.project_describe(conn, a.name, a.text, actor)
         if a.pcmd == "show":
@@ -1232,6 +1233,8 @@ def render_plan(b):
     r = f"river --as {me}"
     out = [f"You are river agent {me}. Role: PLANNER."
            + (f" Focus: {', '.join(b['projects'])}." if b["projects"] else " Focus: every project.")]
+    if core.queue_note():
+        out.append(core.queue_note() + ". Tell the user if that is not what they meant.")
     if not b.get("folder_has_project", True):
         out += ["",
                 f"THIS FOLDER HAS NO PROJECT: {b['cwd']}",
@@ -1293,6 +1296,8 @@ def render_go(b):
     r = f"river --as {me}"
     out = []
     out.append(f"You are river agent {me}. Role: {b['role'].upper()}. ({b['why']})")
+    if core.queue_note():
+        out.append(core.queue_note() + ". Tell the user if that is not what they meant.")
     if b.get("old_blocks"):
         out.append(f"This folder's agent block is old ({', '.join(b['old_blocks'])}): run river init there to update "
                    "it. This briefing is current; follow it.")
