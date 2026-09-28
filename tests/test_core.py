@@ -343,15 +343,30 @@ class Messages(Base):
         self.assertEqual(len(notes), 1)
         self.assertIn(f"#{pre} pre is done (output: made the table); your #{big} waits on it", notes[0])
 
+    def test_unanswered_question_nudges(self):
+        q = core.send(self.c, "question", "why?", to="alice", actor="bob")
+        self.assertEqual(core.unread(self.c, "alice")["questions_waiting"], 0)
+        old = core.iso(core.now() - timedelta(hours=2))
+        self.c.execute("UPDATE messages SET created_at=? WHERE id=?", (old, q["id"]))
+        self.assertEqual(core.unread(self.c, "alice")["questions_waiting"], 1)
+        core.activity(self.c, "bob")  # alice is active: no notice
+        self.assertEqual([m for m in core.inbox(self.c, "bob") if m["kind"] == "notice"], [])
+        self.c.execute("UPDATE agents SET last_seen=? WHERE name='alice'", (old,))
+        core.activity(self.c, "bob")
+        core.activity(self.c, "bob")
+        notes = [m["body"] for m in core.inbox(self.c, "bob") if m["kind"] == "notice"]
+        self.assertEqual(len(notes), 1)
+        self.assertTrue(notes[0].startswith("alice is away"))
+
     def test_question_to_item_reaches_next_holder_and_answer_closes_it(self):
         q = core.send(self.c, "question", "why?", item=self.x, actor="bob")
         self.assertIsNone(q["to_agent"])
         self.assertEqual(core.unread(self.c, "alice")["unread"], 0)
         core.claim(self.c, self.x, "alice")
-        self.assertEqual(core.unread(self.c, "alice"), {"unread": 1, "alerts": 0, "questions": 1})
+        self.assertEqual({k: v for k, v in core.unread(self.c, "alice").items() if k in ("unread", "alerts", "questions")}, {"unread": 1, "alerts": 0, "questions": 1})
         self.assertEqual([m["id"] for m in core.inbox(self.c, "alice")], [q["id"]])
         # Read, but still waiting for an answer, so it stays in the inbox.
-        self.assertEqual(core.unread(self.c, "alice"), {"unread": 0, "alerts": 0, "questions": 1})
+        self.assertEqual({k: v for k, v in core.unread(self.c, "alice").items() if k in ("unread", "alerts", "questions")}, {"unread": 0, "alerts": 0, "questions": 1})
         self.assertEqual(len(core.inbox(self.c, "alice")), 1)
         a = core.answer(self.c, q["id"], "because", actor="alice")
         self.assertEqual(a["to_agent"], "bob")

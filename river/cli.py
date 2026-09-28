@@ -207,7 +207,8 @@ def _unread_text(u, actor):
     if u["alerts"]:
         parts.append(f"{u['alerts']} alert{'s' if u['alerts'] > 1 else ''}")
     if u["questions"]:
-        parts.append(f"{u['questions']} question{'s' if u['questions'] > 1 else ''} to answer")
+        parts.append(f"{u['questions']} question{'s' if u['questions'] > 1 else ''} to answer"
+                     + (f", {u['questions_waiting']} waiting over {u['nudge_after']}" if u.get("questions_waiting") else ""))
     return f"inbox: {', '.join(parts)} (river --as {actor} inbox)"
 
 

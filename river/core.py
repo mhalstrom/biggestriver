@@ -169,7 +169,8 @@ CREATE TABLE IF NOT EXISTS messages (
               CHECK (state IN ('open','accepted','declined','answered','read')),
   created_at  TEXT NOT NULL,
   read_at     TEXT,
-  closed_at   TEXT
+  closed_at   TEXT,
+  nudged_at   TEXT
 );
 
 -- Something needs a person: a human item became ready, or a question or alert went to a human.
@@ -362,6 +363,8 @@ def _migrate(conn):
         conn.execute("ALTER TABLE projects ADD COLUMN path TEXT")
     if "target" not in cols:
         conn.execute("ALTER TABLE projects ADD COLUMN target TEXT")
+    if "nudged_at" not in {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}:
+        conn.execute("ALTER TABLE messages ADD COLUMN nudged_at TEXT")
     acols = {r["name"] for r in conn.execute("PRAGMA table_info(agents)")}
     if "role" not in acols:
         conn.execute("ALTER TABLE agents ADD COLUMN role TEXT")
@@ -1679,6 +1682,7 @@ def _sweep(conn):
             _send(conn, "notice", "river", f"the wait on #{r['id']} {r['title']} ended "
                   f"({r['blocked_reason']}); it can start now", to=r["blocked_set_by"], item_id=r["id"])
     _due_warnings(conn, t)
+    _question_nudges(conn)
     for r in conn.execute("SELECT id, assignee FROM items WHERE status='held' AND hold_expires_at < ?", (t,)).fetchall():
         _unhold(conn, r["id"], "river", f"hold expired (was {r['assignee']}); released")
         _send(conn, "notice", "river", f"your hold on #{r['id']} expired, so it is open to every agent now, and its "
@@ -1712,6 +1716,25 @@ def _due_warnings(conn, t):
         _event(conn, r["id"], "river", "overdue" if stage == 2 else "due soon")
         for h in humans:
             _send(conn, "alert", "river", text, to=h)
+
+
+def _question_nudges(conn):
+    """A question unanswered after question_nudge_after whose receiver is away or gone: tell the asker
+    once, so it can ask someone else (design 7.4). The receiver's own count says how long it waits."""
+    for r in conn.execute("SELECT m.id, m.from_agent, m.to_agent, m.item_id, m.created_at, a.last_seen "
+                          "FROM messages m JOIN agents a ON a.name=m.to_agent WHERE m.kind='question' "
+                          "AND m.state='open' AND m.nudged_at IS NULL").fetchall():
+        wait = parse_duration(setting(conn, "question_nudge_after", agent=r["to_agent"]))
+        if parse_iso(r["created_at"]) + wait > now():
+            continue
+        state = _agent_state(conn, {"name": r["to_agent"], "last_seen": r["last_seen"]})
+        if state == "active":
+            continue
+        conn.execute("UPDATE messages SET nudged_at=? WHERE id=?", (iso(now()), r["id"]))
+        _send(conn, "notice", "river", f"{r['to_agent']} is {state} (last seen {r['last_seen'][:16].replace('T', ' ')} UTC) "
+              f"and has not answered your question #{r['id']}. Ask someone else"
+              + (f": river ask --holder-of {r['item_id']} \"...\", or river who" if r["item_id"] else ": river who"),
+              to=r["from_agent"], item_id=r["item_id"], reply_to=r["id"])
 
 
 def activity(conn, actor):
@@ -2458,12 +2481,17 @@ def inbox(conn, actor, include_read=False, mark_read=True):
 def unread(conn, actor):
     """Counts for the line every command prints: unread messages and open questions to the actor."""
     if not actor:
-        return {"unread": 0, "alerts": 0, "questions": 0}
+        return {"unread": 0, "alerts": 0, "questions": 0, "questions_waiting": 0, "nudge_after": ""}
+    nudge = setting(conn, "question_nudge_after", agent=actor)
+    old = iso(now() - parse_duration(nudge))
     r = conn.execute(
         f"SELECT SUM(m.read_at IS NULL) unread, SUM(m.read_at IS NULL AND m.kind='alert') alerts, "
-        f"SUM(m.kind='question' AND m.state='open') questions FROM messages m WHERE {_TO_ME} AND m.from_agent<>?",
-        (actor, actor, actor)).fetchone()
-    return {"unread": r["unread"] or 0, "alerts": r["alerts"] or 0, "questions": r["questions"] or 0}
+        f"SUM(m.kind='question' AND m.state='open') questions, "
+        f"SUM(m.kind='question' AND m.state='open' AND m.created_at <= ?) waiting "
+        f"FROM messages m WHERE {_TO_ME} AND m.from_agent<>?",
+        (old, actor, actor, actor)).fetchone()
+    return {"unread": r["unread"] or 0, "alerts": r["alerts"] or 0, "questions": r["questions"] or 0,
+            "questions_waiting": r["waiting"] or 0, "nudge_after": nudge}
 
 
 def message_show(conn, msg_id):
