@@ -208,12 +208,21 @@ function renderSelects() {
     if ([...el.options].some(o => o.value === cur)) el.value = cur; }
 }
 
+// Settings: one row per key; an override chip's × removes that override.
+let settingsTable = null;
 function renderSettings() {
   const d = S.settings.defaults, o = S.settings.overrides;
-  $("#settingsTable").innerHTML = `<tr><th>Key</th><th>Default</th><th>Overrides</th></tr>` + Object.keys(d).map(k => {
-    const ov = o.filter(x => x.key === k).map(x => chip("c-p", `${esc(x.scope)} = ${esc(x.value)} <span class="link" data-unset="${esc(k)}" data-scope="${esc(x.scope)}">×</span>`)).join(" ");
-    return `<tr><td>${esc(k)}</td><td class="muted">${esc(d[k])}</td><td>${ov}</td></tr>`;
-  }).join("");
+  settingsTable ||= makeTable($("#settingsTable"), { key: "settings", index: "key", sort: [{ column: "key", dir: "asc" }],
+    placeholder: "No settings.",
+    columns: [
+      { title: "Key", field: "key", width: 200 },
+      { title: "Default", field: "default", width: 240, cssClass: "muted wrap" },
+      { title: "Overrides", field: "overrides", cssClass: "wrap", html: (r) => r.ov.map(x => chip("c-p", `${esc(x.scope)} = ${esc(x.value)} <span class="link" data-unset="${esc(r.key)}" data-scope="${esc(x.scope)}">×</span>`)).join(" ") },
+    ] });
+  settingsTable.set(Object.keys(d).map(k => {
+    const ov = o.filter(x => x.key === k);
+    return { key: k, default: String(d[k]), overrides: ov.map(x => `${x.scope}=${x.value}`).join(" "), ov };
+  }));
 }
 
 let logSig = "", logTable = null;

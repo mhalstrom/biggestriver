@@ -155,8 +155,6 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; padding
   .gcard { flex: 0 0 180px; margin-bottom: 0; }
 }
 #graph svg { height: auto; }
-table.settings { width: 100%; border-collapse: collapse; }
-table.settings td, table.settings th { text-align: left; padding: 6px; border-top: 1px solid var(--line); font-size: 13px; }
 .muted { color: var(--muted); }
 .prog { margin-bottom: 10px; }
 .prog-h { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
