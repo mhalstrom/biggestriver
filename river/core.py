@@ -3058,9 +3058,25 @@ def _item_prompt_section(conn, a, ann, person, n=None):
     return "\n".join(lines)
 
 
+# How an agent puts a decision to a person in chat (river item #168: compressed tables and one-line
+# recommendations made the person ask for details on every decision).
+DECISION_FORMAT = """Put each decision to the person in this form, one decision at a time:
+
+  Decision <n> of <total>: <short name>  (item #<id>)
+  What you decide: one sentence, as a question, with the kind of answer (yes or no, pick A, B, or C, a number).
+  Why it matters: what it changes, and what waits on it.
+  Options: one line or more for each option: what happens if they pick it, what it costs, the risk,
+    and whether they can change it later. Use the real names, amounts, and dates; no shorthand.
+  My recommendation: the option, and why, in one or two sentences.
+  Your answer: the exact words to reply, for example "A", "yes", or "$200 a month".
+
+Then stop and wait for the answer before you show the next decision. Do not squeeze several decisions
+into one table. If they ask what something means, explain it, then ask the same decision again."""
+
 PROMPT_STEPS = """How to help:
 1. Run the "read it first" command. Read the files or links it names.
-2. Explain to {person} in plain words what is needed, why, what the options are, and what you recommend.
+2. Explain to {person} in plain words what is needed and why.
+""" + "\n".join("   " + line if line else "" for line in DECISION_FORMAT.split("\n")) + """
 3. Answer their questions. Help them do it: draft the text, check the setting, walk through the steps.
    Ask before anything that uses their accounts, money, or sends something in their name.
 4. When it is decided or done, record it with the "record the result" command, in their words.

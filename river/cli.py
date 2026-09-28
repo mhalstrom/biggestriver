@@ -524,7 +524,7 @@ def build_parser():
     x.add_argument("--force", action="store_true", help="even when agents were active in the last 10 minutes")
     sub.add_parser("mcp", help="an MCP server on stdin/stdout, for agents that cannot run shell commands")
     x = sub.add_parser("guide", help="how to use river: worker loop, planner, or agent setup")
-    x.add_argument("which", nargs="?", default="river", choices=["river", "planner", "river-planner", "setup"])
+    x.add_argument("which", nargs="?", default="river", choices=["river", "planner", "river-planner", "setup", "decisions"])
     x = sub.add_parser("setup-agent", help="print (or append) the instructions block for CLAUDE.md / AGENTS.md")
     x.add_argument("--append", metavar="FILE", help="append the block to this file if it is not there yet")
     return p
@@ -563,6 +563,8 @@ def run(argv=None):
     if args.cmd == "guide":
         if args.which == "setup":
             print(SETUP)
+        elif args.which == "decisions":
+            print(core.DECISION_FORMAT)
         else:
             name = "river-planner" if args.which in ("planner", "river-planner") else "river"
             text = (GUIDES / name / "SKILL.md").read_text()
@@ -1105,6 +1107,7 @@ def render_go(b):
                 f"  - Waiting on something outside the queue: {r} blocked {it['id']} --reason \"<what>\", release, run go again.",
                 f"  - You need the user (a decision, an approval, an account or payment step): put it in the queue, not only in chat:",
                 f"    {r} add \"<what to decide or do>\" --doer human --context \"<exactly what, where the material is>\" --blocks {it['id']}",
+                f"    When you ask the user in chat, one decision at a time in this form: river guide decisions",
                 f"    That is what notifies them. A quick question instead: {r} send question --to "
                 + ("|".join(b.get("humans") or []) or "<person>") + " \"...\" --item " + str(it["id"]),
                 "",

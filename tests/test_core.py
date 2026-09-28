@@ -1034,6 +1034,17 @@ class SkillsInstall(unittest.TestCase):
             self.assertEqual(len(lines), 2)
 
 
+class DecisionFormat(Base):
+    def test_prompt_carries_the_decision_form(self):
+        core.project_add(self.c, "a")
+        core.register(self.c, "mark", human=True)
+        x = core.item_add(self.c, "a", "Pick a plan", doer="human", context="Two plans in docs/plans.md")["id"]
+        p = core.prompt_for(self.c, x, "mark")
+        for part in ("Decision <n> of <total>", "Why it matters", "My recommendation", "Your answer",
+                     "one decision at a time"):
+            self.assertIn(part, p)
+
+
 class Sessions(Base):
     def test_session_name_recorded_and_shown(self):
         core.project_add(self.c, "a", path=self.dir.name)

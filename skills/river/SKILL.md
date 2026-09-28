@@ -110,6 +110,21 @@ river add "Approve the refund policy draft" --doer human --blocks <your-id> \
   The go briefing lists the people by name.
 - Then tell the user in chat too, with the item id.
 
+When you put a decision to the user in chat, use one form, one decision at a
+time (`river guide decisions` prints it):
+
+```
+Decision <n> of <total>: <short name>  (item #<id>)
+What you decide: one sentence, as a question, with the kind of answer.
+Why it matters: what it changes, and what waits on it.
+Options: for each, what happens, what it costs, the risk, and whether it can change later.
+My recommendation: the option, and why, in one or two sentences.
+Your answer: the exact words to reply, for example "A", "yes", or "$200 a month".
+```
+
+Then stop and wait for the answer. Do not squeeze several decisions into one
+table, and use the real names, amounts, and dates instead of shorthand.
+
 The other way round: you can do a person's item yourself, or work around it.
 Take it off their list, with the reason; they get one notice and can undo it:
 
