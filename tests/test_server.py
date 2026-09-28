@@ -111,11 +111,13 @@ class PageGoals(unittest.TestCase):
 
 class LaunchAgent(unittest.TestCase):
     def setUp(self):
+        self.platform, server.PLATFORM = server.PLATFORM, "darwin"  # the Terminal tests; Windows has its own
         self.dir = tempfile.TemporaryDirectory()
         os.environ["RIVER_DB"] = os.path.join(self.dir.name, "t.db")
         self.c = core.connect()
 
     def tearDown(self):
+        server.PLATFORM = self.platform
         self.c.close()
         os.environ.pop("RIVER_DB", None)
         self.dir.cleanup()
@@ -172,19 +174,15 @@ class LaunchAgent(unittest.TestCase):
     def test_windows_opens_a_console_window_with_the_env_set(self):
         core.project_add(self.c, "shop", path=self.dir.name)
         x = core.item_add(self.c, "shop", "work")["id"]
-        old = server.PLATFORM
-        try:
-            server.PLATFORM = "win32"
-            sent = []
-            t = server.dispatch_item(self.c, x, runner=sent.append)
-            self.assertEqual(sent[0], {"args": "cmd /k claude go --remote-control", "cwd": t["path"],
-                                       "env": {"RIVER_AGENT": t["session_name"]}})
-            server.PLATFORM = "linux"
-            core.item_add(self.c, "shop", "more work")
-            with self.assertRaisesRegex(RiverError, "macOS and Windows"):
-                server.launch_agent(self.c)
-        finally:
-            server.PLATFORM = old
+        server.PLATFORM = "win32"  # tearDown restores it
+        sent = []
+        t = server.dispatch_item(self.c, x, runner=sent.append)
+        self.assertEqual(sent[0], {"args": "cmd /k claude go --remote-control", "cwd": t["path"],
+                                   "env": {"RIVER_AGENT": t["session_name"]}})
+        server.PLATFORM = "linux"
+        core.item_add(self.c, "shop", "more work")
+        with self.assertRaisesRegex(RiverError, "macOS and Windows"):
+            server.launch_agent(self.c)
 
     def test_opens_terminal_in_the_folder_of_the_top_ready_item(self):
         folder = os.path.join(self.dir.name, 'my "shop" app')
