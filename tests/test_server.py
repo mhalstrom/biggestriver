@@ -394,12 +394,12 @@ class SetupGuide(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.dir.name, "CLAUDE.md")))
 
     def test_an_added_agent_becomes_the_default_when_the_first_is_not_installed(self):
-        old = server._login_shell_which
-        server._login_shell_which = lambda names: {n: None for n in names}
+        old = server._login_shell_which, server.PLATFORM
+        server._login_shell_which, server.PLATFORM = (lambda names: {n: None for n in names}), "darwin"
         try:
             self.assertEqual(server.setup_agent_add(self.c, "Codex"), ["Codex", "Claude Code"])
         finally:
-            server._login_shell_which = old
+            server._login_shell_which, server.PLATFORM = old
 
     def test_add_agent_appends_to_launch_agents_once(self):
         old = server._login_shell_which

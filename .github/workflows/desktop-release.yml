@@ -32,6 +32,15 @@ jobs:
       - name: Install
         working-directory: desktop
         run: npm ci
+      - name: river serve answers (its own output, for a failing smoke test)
+        run: |
+          python3 --version
+          RIVER_DB="$RUNNER_TEMP/d.db" RIVER_DESKTOP=1 python3 -X faulthandler bin/river serve --port 8917 > "$RUNNER_TEMP/serve.log" 2>&1 &
+          pid=$!
+          for i in $(seq 1 30); do curl -s -m 2 -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8917/api/state | grep -q 200 && { echo "answered after ${i}x0.5s"; break; }; sleep 0.5; done
+          kill -USR1 $pid 2>/dev/null; sleep 1
+          echo "--- serve output"; cat "$RUNNER_TEMP/serve.log"
+          kill $pid 2>/dev/null || true
       - name: Smoke test (river serve starts and stops)
         working-directory: desktop
         run: npm test
