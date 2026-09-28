@@ -1,0 +1,16 @@
+{
+  "name": "biggest-river",
+  "productName": "Biggest River",
+  "version": "0.1.0",
+  "description": "Biggest River dashboard in its own window: runs river serve and shows the page.",
+  "main": "main.js",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0"
+  }
+}

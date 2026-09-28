@@ -17,6 +17,9 @@ from .core import RiverError
 STATIC = Path(__file__).resolve().parent / "static"
 PKG = Path(__file__).resolve().parent
 DEV = {"on": False}
+# The desktop app (desktop/) starts the server with RIVER_DESKTOP=1: the app updates itself, so the
+# page's git Update button does not apply there.
+DESKTOP = os.environ.get("RIVER_DESKTOP") == "1"
 BOOT = str(time.time())  # changes when the server restarts; the page waits for a new one after an update
 
 
@@ -128,6 +131,11 @@ def _git(repo, *args, timeout=60):
     if r.returncode:
         raise RiverError(f"git {args[0]}: {(r.stderr or r.stdout).strip()}")
     return r.stdout.strip()
+
+
+def _no_update_in_app():
+    if DESKTOP:
+        raise RiverError("the desktop app updates itself; the git Update does not apply here")
 
 
 def update_status(repo=REPO, fetch=True):
@@ -320,7 +328,7 @@ OPS = {
     "setup_ntfy": lambda c, a, who: setup_ntfy(c, who),
     "launch_agent": lambda c, a, who: launch_agent(c, a.get("project"), agent=a.get("agent")),
     "decline_message": lambda c, a, who: core.decline_message(c, int(a["msg"]), a.get("note"), who),
-    "update": lambda c, a, who: update_apply(),
+    "update": lambda c, a, who: _no_update_in_app() or update_apply(),
 }
 
 
@@ -368,6 +376,7 @@ class Handler(BaseHTTPRequestHandler):
                 st["goals"] = core.goal_list(conn, include_complete=True)
                 if DEV["on"]:
                     st["dev_build"] = _build_id()
+                st["desktop"] = DESKTOP
                 return self._send(200, st)
             finally:
                 conn.close()
@@ -414,6 +423,8 @@ class Handler(BaseHTTPRequestHandler):
             finally:
                 conn.close()
         if path == "/api/update":
+            if DESKTOP:  # the page hides the button when git is false
+                return self._send(200, {"git": False, "desktop": True, "boot": BOOT})
             try:
                 return self._send(200, {**update_status(fetch="fetch=0" not in self.path), "boot": BOOT})
             except RiverError as e:

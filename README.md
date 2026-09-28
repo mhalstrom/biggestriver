@@ -62,6 +62,13 @@ folder (stop agent sessions and `river serve` first). `river db path` shows
 the file in use. If your agents run in a sandbox, allow them to write to
 `~/.biggestriver` before you move it.
 
+
+## Desktop app
+
+`desktop/` holds an Electron app that shows the page in its own window: it
+runs `river serve` on a free local port and stops it on quit. It needs Python
+3.10+. See `desktop/README.md`.
+
 ## Set up a project
 
 In each project folder:

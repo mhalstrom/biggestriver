@@ -5,3 +5,5 @@ private/
 dist/
 build/
 *.egg-info/
+desktop/node_modules/
+desktop/out/
