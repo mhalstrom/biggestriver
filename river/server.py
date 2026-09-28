@@ -370,6 +370,7 @@ def setup_status(conn):
                        for label, exe, cmd in KNOWN_AGENTS],
         "notify_channels": core._channels(core.setting(conn, "notify_channels")),
         "ntfy_ready": bool(core.setting(conn, "ntfy_topic")),
+        "river_cmd": river_command_status(),
     }
 
 
@@ -409,6 +410,88 @@ def folder_add(conn, path, name=None, description="", move=None, actor=None):
     lines += setup_instructions(folder, move)
     return {"project": name or linked_here[0], "path": str(folder), "lines": lines,
             "layout": instructions_layout(folder), "default_name": folder_project_name(folder)}
+
+
+# The river command for agents: a small launcher in ~/.local/bin that runs this river with this Python, so an
+# agent started from the app (or any terminal) can run `river go` on a Mac that has only the app.
+LAUNCHER_MARK = "# Biggest River launcher"
+
+
+def _launcher_path():
+    return Path("~/.local/bin/river").expanduser()
+
+
+def _login_shell_river():
+    """What `river` is in a new terminal (the login shell reads the profile files), or None."""
+    import subprocess
+    shell = os.environ.get("SHELL") or "/bin/zsh"
+    # Start as a new Terminal window does: the system PATH, then the profile files; not this process's PATH.
+    env = {k: os.environ[k] for k in ("HOME", "USER", "LOGNAME", "SHELL", "LANG", "TMPDIR") if k in os.environ}
+    env.update(PATH="/usr/bin:/bin:/usr/sbin:/sbin", TERM="dumb")
+    try:
+        r = subprocess.run([shell, "-ilc", "command -v river"], capture_output=True, text=True, timeout=8,
+                           stdin=subprocess.DEVNULL, env=env)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    lines = [x.strip() for x in r.stdout.splitlines() if x.strip().startswith("/")]
+    return lines[-1] if r.returncode == 0 and lines else None
+
+
+def river_command_status():
+    """ok: `river` works in a new terminal. ours: it is this launcher. launcher: the launcher's state
+    (current / old / missing). shell_path: what a new terminal finds. where: where the launcher goes."""
+    if PLATFORM == "win32":
+        return {"ok": True, "unsupported": True}
+    lp = _launcher_path()
+    text = lp.read_text(errors="replace") if lp.is_file() else ""
+    launcher = "missing" if not text else "current" if text == _launcher_text() else "old" if LAUNCHER_MARK in text else "other"
+    found = _login_shell_river()
+    # A river command that the setup guide did not write (a link to a clone, pip) is the person's own: fine.
+    ours = bool(found) and Path(found).expanduser() == lp and launcher in ("current", "old")
+    return {"ok": bool(found) and (not ours or launcher == "current"), "shell_path": found, "ours": ours,
+            "launcher": launcher, "where": str(lp), "in_app_image": "/Volumes/" in str(Path(__file__).resolve())}
+
+
+def _launcher_text():
+    import shlex
+    root = Path(__file__).resolve().parent.parent
+    py, script = shlex.quote(sys.executable), shlex.quote(str(root / "bin" / "river"))
+    return (f"#!/bin/sh\n{LAUNCHER_MARK}: runs the river that the setup guide found ({root}).\n"
+            f"# The setup guide rewrites it (Install the river command); delete it to remove it.\n"
+            f"if [ ! -x {py} ] || [ ! -f {script} ]; then\n"
+            f"  echo \"river: {root} is gone (the app moved or was removed). Open Biggest River, then Settings,\" >&2\n"
+            f"  echo \"the setup guide, and Install the river command again.\" >&2\n  exit 1\nfi\n"
+            f"exec {py} {script} \"$@\"\n")
+
+
+def install_river_command():
+    """Write the launcher, and put ~/.local/bin on PATH in the login profile when a new terminal would not
+    find it. A river command that is not ours (a clone or pip) is left alone. Returns what changed."""
+    if PLATFORM == "win32":
+        raise RiverError("the river command installer works on macOS for now; on Windows, add the river "
+                         "folder's bin to PATH")
+    st = river_command_status()
+    if st["in_app_image"]:
+        raise RiverError("the app runs from its download image: drag Biggest River to Applications, open it "
+                         "from there, then install the river command")
+    if st["shell_path"] and not st["ours"]:
+        return {"changed": [], "note": f"river is already installed at {st['shell_path']}; left as it is"}
+    lp, changed = _launcher_path(), []
+    if lp.exists() and st["launcher"] == "other":
+        raise RiverError(f"{lp} exists and is not river's launcher; move it away first")
+    lp.parent.mkdir(parents=True, exist_ok=True)
+    lp.write_text(_launcher_text())
+    lp.chmod(0o755)
+    changed.append(f"{lp}: runs river from {Path(__file__).resolve().parent.parent}")
+    if not _login_shell_river():
+        shell = Path(os.environ.get("SHELL") or "/bin/zsh").name
+        prof = Path("~/.zprofile" if shell == "zsh" else "~/.bash_profile" if shell == "bash" else "~/.profile").expanduser()
+        old = prof.read_text() if prof.exists() else ""
+        line = 'export PATH="$HOME/.local/bin:$PATH"  # Biggest River: the river command'
+        if line not in old:
+            prof.write_text(old + ("\n" if old and not old.endswith("\n") else "") + line + "\n")
+            changed.append(f"{prof}: adds ~/.local/bin to PATH for new terminals")
+    return {"changed": changed, "status": river_command_status()}
 
 
 def setup_skills():
@@ -488,6 +571,7 @@ OPS = {
     "give": lambda c, a, who: core.give(c, int(a["id"]), a["to"], who),
     "split": lambda c, a, who: core.split(c, int(a["id"]), [t for t in a["titles"] if t.strip()], who),
     "setup_block": lambda c, a, who: setup_block(c, a["path"], a.get("move")),
+    "setup_river_cmd": lambda c, a, who: install_river_command(),
     "folder_add": lambda c, a, who: folder_add(c, a.get("path"), a.get("name"), a.get("description") or "", a.get("move"), who),
     "setup_skills": lambda c, a, who: setup_skills(),
     "setup_agent_add": lambda c, a, who: setup_agent_add(c, a["label"], who),

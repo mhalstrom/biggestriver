@@ -894,6 +894,14 @@ function renderSetup(st) {
   out.push(step(st.people.length > 0, "Register yourself as a person",
     st.people.length ? "People: " + st.people.map(esc).join(", ") + ". Pick your name in the top bar." : "River shows you what needs you and sends you notifications.",
     `<input id="suName" placeholder="your name" style="width:140px"><button class="btn" data-su="register">Register</button>`));
+  // Agents run `river go`: a new terminal must find the river command (the app writes a small launcher).
+  const rc = st.river_cmd || {};
+  if (!rc.unsupported) out.push(step(rc.ok, "Let agents use river",
+    rc.ok ? `A new terminal finds the river command${rc.shell_path ? " at " + esc(rc.shell_path) : ""}.`
+      : rc.in_app_image ? "First drag Biggest River to your Applications folder and open it from there."
+      : rc.launcher === "old" ? "The river command points at an older copy of river. Update it to this one."
+      : "Agents you start run the river command, and this computer does not have it yet. River adds it to " + esc(rc.where || "~/.local/bin") + " and tells new terminals where it is.",
+    rc.in_app_image ? "" : `<button class="btn primary" data-su="rivercmd">${rc.launcher === "old" ? "Update" : "Install"} the river command</button>`));
   // One instructions file for every agent: AGENTS.md holds the rules, CLAUDE.md imports it (@AGENTS.md).
   const blocks = st.folders.filter(f => f.exists && (f.claude_md !== "current" || f.agents_md !== "current"));
   const layouts = { shared: "one file for every agent (CLAUDE.md imports AGENTS.md)",
@@ -948,6 +956,7 @@ $("#setupSteps").addEventListener("click", async (e) => {
       await act("config_set", { key: "tracker", value: v, project: b.dataset.project });
     }
     else if (k === "skills") await act("setup_skills", {});
+    else if (k === "rivercmd") { const r = await act("setup_river_cmd", {}); toast(r.note || "Installed the river command. Agents in new terminals can use it now."); }
     else if (k === "agent") await act("setup_agent_add", { label: b.dataset.label });
     else if (k === "ntfy") {
       const r = await act("setup_ntfy", {});

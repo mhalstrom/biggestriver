@@ -355,6 +355,38 @@ class SetupGuide(unittest.TestCase):
             server.folder_add(self.c, other, name="shop")
         self.assertEqual(core._project(self.c, "shop")["path"], os.path.realpath(self.folder))
 
+    def test_install_the_river_command_writes_the_launcher_and_the_path_once(self):
+        home = os.path.join(self.dir.name, "home")
+        os.mkdir(home)
+        found = {"path": None}
+        old = (os.environ.get("HOME"), os.environ.get("SHELL"), server._login_shell_river, server.PLATFORM)
+        os.environ["HOME"], os.environ["SHELL"], server.PLATFORM = home, "/bin/zsh", "darwin"
+        server._login_shell_river = lambda: found["path"]
+        try:
+            self.assertFalse(server.river_command_status()["ok"])
+            r = server.install_river_command()
+            launcher = os.path.join(home, ".local", "bin", "river")
+            self.assertTrue(os.access(launcher, os.X_OK))
+            self.assertIn(server.LAUNCHER_MARK, open(launcher).read())
+            prof = open(os.path.join(home, ".zprofile")).read()
+            self.assertIn('$HOME/.local/bin', prof)
+            self.assertEqual(len(r["changed"]), 2)
+            found["path"] = launcher  # a new terminal now finds it
+            self.assertTrue(server.river_command_status()["ok"])
+            server.install_river_command()  # again: the profile line is not added twice
+            self.assertEqual(open(os.path.join(home, ".zprofile")).read(), prof)
+            # a river command the person installed (a clone, pip) is left alone
+            found["path"] = "/opt/elsewhere/river"
+            self.assertTrue(server.river_command_status()["ok"])
+            self.assertIn("already installed", server.install_river_command()["note"])
+        finally:
+            for k, v in (("HOME", old[0]), ("SHELL", old[1])):
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            server._login_shell_river, server.PLATFORM = old[2], old[3]
+
     def test_block_fix_refuses_a_folder_that_is_not_a_project(self):
         with self.assertRaises(RiverError):
             server.setup_block(self.c, self.dir.name)
