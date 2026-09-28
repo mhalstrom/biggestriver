@@ -8,9 +8,55 @@
   "private": true,
   "scripts": {
     "start": "electron .",
-    "test": "node --test"
+    "test": "node --test",
+    "dist": "electron-builder --mac dmg --arm64 --x64 --publish never",
+    "python": "node scripts/fetch-python.js",
+    "predist": "node scripts/fetch-python.js arm64 x64",
+    "icon": "electron scripts/make-icon.js"
   },
   "devDependencies": {
-    "electron": "^38.0.0"
+    "electron": "^38.0.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.biggestriver.app",
+    "productName": "Biggest River",
+    "directories": {
+      "output": "out"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "server.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../bin",
+        "to": "river-app/bin"
+      },
+      {
+        "from": "../river",
+        "to": "river-app/river",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
+        ]
+      },
+      {
+        "from": "build/python/${arch}/python",
+        "to": "river-app/python"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "identity": null,
+      "target": "dmg",
+      "icon": "icon.png"
+    },
+    "dmg": {
+      "artifactName": "Biggest-River-${version}-${arch}.${ext}"
+    }
   }
 }

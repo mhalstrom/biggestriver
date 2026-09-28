@@ -1,0 +1,61 @@
+# The desktop app: on a version tag (v0.1.0), build the macOS .dmg files (Apple silicon and Intel)
+# and attach them to a GitHub Release for that tag. Not signed or notarized yet (item #249 adds that):
+# the first open needs Open Anyway in System Settings (macOS 15+) or right-click, Open (older macOS).
+name: desktop-release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build and publish, for example v0.1.0 (it is created if it does not exist)"
+        required: true
+permissions:
+  contents: write
+jobs:
+  mac:
+    runs-on: macos-latest
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Install
+        working-directory: desktop
+        run: npm ci
+      - name: Smoke test (river serve starts and stops)
+        working-directory: desktop
+        run: npm test
+      - name: Version from the tag
+        working-directory: desktop
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "tag must look like v1.2.3, not $TAG"; exit 1; }
+          npm version --no-git-tag-version --allow-same-version "${TAG#v}"
+      - name: Build the .dmg files (unsigned)
+        working-directory: desktop
+        run: npm run dist
+      - name: The app starts river from its own bundle, with its own Python
+        working-directory: desktop
+        run: |
+          RIVER_DB="$RUNNER_TEMP/q.db" node -e '
+            const { startRiver } = require("./server");
+            // find: () => null proves the app does not fall back to a Python on the runner.
+            startRiver({ riverRoot: process.argv[1], find: () => null }).then(async (r) => { console.log("river answers on", r.url, "with", r.child.spawnargs[0]); await r.stop(); })
+              .catch((e) => { console.error(e.message); process.exit(1); });' "$PWD/out/mac-arm64/Biggest River.app/Contents/Resources/river-app"
+      - name: Publish the GitHub Release
+        run: |
+          notes="Biggest River desktop app ${TAG}. Download the .dmg for your Mac: arm64 for Apple silicon (M1 and later), x64 for Intel. Drag it to Applications. The app is not signed yet, so the first time: open it once, then go to System Settings > Privacy & Security and click Open Anyway (on macOS 14 and older: right-click the app, choose Open). It carries its own Python: nothing else to install."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" desktop/out/*.dmg --clobber
+          else
+            gh release create "$TAG" desktop/out/*.dmg --title "Biggest River ${TAG}" --notes "$notes" --target "$GITHUB_SHA"
+          fi
