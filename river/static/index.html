@@ -839,12 +839,7 @@ document.addEventListener("click", async (e) => {
   if (t.dataset.unset) { const sc = t.dataset.scope, [kind, name] = sc.includes(":") ? [sc.split(":")[0], sc.slice(sc.indexOf(":") + 1)] : ["global", null];
     const args = { key: t.dataset.unset }; if (kind !== "global") args[kind] = kind === "item" ? +name : name;
     return act("config_unset", args).catch(() => {}); }
-  if (t.dataset.tab) {
-    tab = t.dataset.tab; document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b === t));
-    for (const s of ["board", "graph", "done", "settings"]) $("#tab-" + s).classList.toggle("hidden", s !== tab);
-    renderLog(true);
-    return renderGraph(true);
-  }
+  if (t.dataset.tab) return setTab(t.dataset.tab);
 });
 
 $("#actor").addEventListener("change", () => { store("river.actor", $("#actor").value); ibSig = ""; pollInbox().catch(() => {}); });
@@ -900,7 +895,22 @@ document.addEventListener("drop", async (e) => {
   await act("push", { id, to: a.dataset.agent }).then(() => toast(`Pushed #${id} to ${a.dataset.agent}`)).catch(() => {});
 });
 
-function openFromHash() { const m = location.hash.match(/^#item-(\d+)$/); if (m) openDrawer(+m[1]); }
+function setTab(name) {
+  tab = name; document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.tab === tab));
+  for (const s of ["board", "graph", "done", "settings"]) $("#tab-" + s).classList.toggle("hidden", s !== tab);
+  renderLog(true);
+  return renderGraph(true);
+}
+// Links into the page: #item-4, #tab-graph, #as-alex, or several joined with & (#as-alex&item-4).
+async function openFromHash() {
+  for (const part of location.hash.slice(1).split("&")) {
+    const m = part.match(/^(item|tab|as)-(.+)$/); if (!m) continue;
+    const v = decodeURIComponent(m[2]);
+    if (m[1] === "as" && [...$("#actor").options].some(o => o.value === v)) { $("#actor").value = v; store("river.actor", v); ibSig = ""; await pollInbox().catch(() => {}); }
+    if (m[1] === "tab" && ["board", "graph", "done", "settings"].includes(v)) await setTab(v);
+    if (m[1] === "item") await openDrawer(+v);
+  }
+}
 window.addEventListener("hashchange", openFromHash);
 refresh().then(openFromHash); setInterval(() => { if (!document.hidden) refresh().catch(() => {}); }, 3000);
 // A hidden tab stops the full refresh but keeps asking what needs a person, so notifications still arrive.

@@ -20,4 +20,14 @@ $R --as api-agent claim 1 >/dev/null
 $R --as api-agent done 1 --output "api/orders.md: POST /orders, GET /orders/{id}, status enum" >/dev/null
 $R --as api-agent claim 2 >/dev/null
 $R --as alex send question "Is the orders API paginated? The order history page needs it." --item 2 >/dev/null
+
+# Newer features: a question to the person, a pushed item, a timed blocker, a due date.
+$R config set timezone UTC >/dev/null
+$R register web-agent --note "storefront work" >/dev/null
+$R --as api-agent send question --to alex "Do orders over \$500 need a manual review step?" --item 2 >/dev/null
+$R --as alex push 5 --to web-agent --note "quick one before the checkout work" >/dev/null
+$R --as alex add website "Publish the launch post" --doer human \
+  --context "Post on the blog and the newsletter once checkout is live." >/dev/null                         # 9
+$R --as alex blocked 9 --reason "Launch date is not set yet" --until 3d >/dev/null
+$R --as alex edit 4 --due "$(date -u -v+5d +%Y-%m-%d 2>/dev/null || date -u -d +5days +%Y-%m-%d) UTC" >/dev/null
 echo "Loaded. Try: river serve --open, river status, river go --project website"
