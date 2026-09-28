@@ -164,8 +164,9 @@ class LaunchAgent(unittest.TestCase):
         self.assertLess(s.index('frontmost of process "Terminal"'), s.index('keystroke "t"'))
         self.assertNotIn("delay 0.5", s)
         # The command runs only after the tab count grew; otherwise it falls back to a new window.
-        self.assertLess(s.index("set tabsBefore to count of tabs"), s.index('keystroke "t"'))
-        self.assertLess(s.index("> tabsBefore"), s.index("in selected tab of front window"))
+        self.assertLess(s.index("set {windowsBefore, tabsBefore}"), s.index('keystroke "t"'))
+        # Terminal lists each tab of a tabbed window as its own window, so a new window counts as the new tab.
+        self.assertLess(s.index("(count of windows) > windowsBefore or"), s.index("in selected tab of front window"))
         self.assertIn('error "Terminal opened no new tab"', s)
         self.assertEqual(s.count("do script"), 3)  # the tab, the fallback window, and the no-window case
 

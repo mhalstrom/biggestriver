@@ -46,8 +46,9 @@ def launch_agent(conn, project=None, runner=None, agent=None):
     if t["launch_in"] == "tab":
         # Terminal has no "new tab" command: press Command-T in it, then run the command in that tab.
         # A key press goes to the app in front, so wait until Terminal is in front (else Command-T opens a
-        # browser tab). Then wait until the tab count grows (else the command runs in the old tab, which
-        # can hold a busy agent). Pressing keys needs the Accessibility permission once. Without it, or
+        # browser tab). Then wait until the new tab exists (else the command runs in the old tab, which
+        # can hold a busy agent). Terminal's AppleScript lists each tab of a tabbed window as a window of
+        # its own, so a new tab shows as one more window, or as one more tab of the front window. Pressing keys needs the Accessibility permission once. Without it, or
         # when no new tab appears, fall back to a new window.
         script = "\n".join([
             'tell application "Terminal"', '  activate', '  set hasWindow to (count of windows) > 0', 'end tell',
@@ -59,12 +60,12 @@ def launch_agent(conn, project=None, runner=None, agent=None):
             '      end repeat',
             '      if not (frontmost of process "Terminal") then error "Terminal is not in front"',
             '    end tell',
-            '    tell application "Terminal" to set tabsBefore to count of tabs of front window',
+            '    tell application "Terminal" to set {windowsBefore, tabsBefore} to {count of windows, count of tabs of front window}',
             '    tell application "System Events" to tell process "Terminal" to keystroke "t" using command down',
             '    set gotTab to false',
             '    repeat 60 times',
             '      delay 0.05',
-            '      tell application "Terminal" to set gotTab to (count of tabs of front window) > tabsBefore',
+            '      tell application "Terminal" to set gotTab to (count of windows) > windowsBefore or (count of tabs of front window) > tabsBefore',
             '      if gotTab then exit repeat',
             '    end repeat',
             '    if not gotTab then error "Terminal opened no new tab"',
