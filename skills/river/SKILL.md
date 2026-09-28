@@ -54,6 +54,9 @@ A person registers with `--human`.
 4. Finish: `river done <id> --output "<one line: what changed, commit id>"`.
    The reply lists items that became ready.
    Cannot finish: `river release <id> --note "<why>"`.
+   Done is refused while an item it waits on is open (`river blockers <id>`); close it
+   anyway only with a reason, `river done <id> --force "<why>"` (never a deploy item).
+   When someone adds a prerequisite to an item you hold, you get an alert: stop and wait for it.
    The change must go out, and the project has a deploy target: add `--ship`
    (or run `river ship <id>` later). The item joins that target's next
    deploy item, which only the target owner takes. The owner's `river go`

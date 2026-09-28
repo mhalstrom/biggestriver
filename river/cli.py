@@ -492,6 +492,7 @@ def build_parser():
     x.add_argument("--ship", action="store_true", help="also ask for it to be deployed (river ship)")
     x.add_argument("--note", help="why an agent may close a person's item (required then; the user is told)")
     x.add_argument("--synced", action="store_true", help="you already posted the result to its tracker issues")
+    x.add_argument("--force", metavar="REASON", help="close it although items it waits on are still open (not a deploy)")
     x = sub.add_parser("wait", help="no work now: block until a push, a ready item, or a message comes (up to wait_step)")
     x.add_argument("--project", help="project name(s) to wait on (default: this folder's)")
     x.add_argument("--step", help="return after this long (default: the wait_step setting)")
@@ -1053,7 +1054,7 @@ def dispatch(conn, a, actor):
     if c == "claim":
         return core.claim(conn, a.id, actor)
     if c == "done":
-        return core.done(conn, a.id, a.output, actor, a.ship, a.note, a.synced)
+        return core.done(conn, a.id, a.output, actor, a.ship, a.note, a.synced, a.force)
     if c == "synced":
         return core.synced(conn, a.id, a.ref, actor)
     if c == "cleanup":

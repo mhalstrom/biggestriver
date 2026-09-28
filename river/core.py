@@ -1520,7 +1520,7 @@ def _link(conn, a, b):
                         (a, b, b, a)).fetchone()
 
 
-def _dep_add(conn, item_id, blocked_by, actor, kind="blocks", auto=False):
+def _dep_add(conn, item_id, blocked_by, actor, kind="blocks", auto=False, alert=True):
     if kind not in DEP_KINDS:
         raise RiverError(f"dependency kind is one of {', '.join(DEP_KINDS)}")
     _item(conn, item_id)
@@ -1553,6 +1553,31 @@ def _dep_add(conn, item_id, blocked_by, actor, kind="blocks", auto=False):
     conn.execute("INSERT INTO deps(item_id,blocked_by,kind) VALUES (?,?,?) "
                  "ON CONFLICT(item_id,blocked_by) DO UPDATE SET kind=excluded.kind, auto=0", (item_id, blocked_by, kind))
     _event(conn, item_id, actor, f"waits on {blocked_by}" + (" (feeds)" if kind == "feeds" else ""))
+    if alert:
+        _alert_new_prereq(conn, item_id, blocked_by, actor)
+
+
+def _alert_new_prereq(conn, item_id, blocked_by, actor):
+    """An open prerequisite added to an item someone holds, or to a deploy item, is news that must stop
+    them: alert the holder and the deploy target's owner (not whoever added it)."""
+    it, b = _item(conn, item_id), _item(conn, blocked_by)
+    if it["status"] not in OPEN_STATES or b["status"] not in OPEN_STATES:
+        return
+    to = []
+    if it["assignee"] and it["status"] in ("in_progress", "held"):
+        to.append(it["assignee"])
+    if it["kind"] == "deploy" and it["target"]:
+        tg = conn.execute("SELECT owner FROM targets WHERE name=?", (it["target"],)).fetchone()
+        if tg and tg["owner"]:
+            to.append(tg["owner"])
+    for who in dict.fromkeys(to):
+        if who == actor:
+            continue
+        what = "deploy" if it["kind"] == "deploy" else "item"
+        _send(conn, "alert", actor or "river",
+              f"#{b['id']} {b['title']} was added before your {what} #{it['id']} {it['title']}. "
+              f"Stop and wait for it: river done {it['id']} is refused while it is open (river blockers {it['id']}).",
+              to=who, item_id=it["id"])
 
 
 def dep_add(conn, item_id, on, actor=None, kind="blocks", mode=None):
@@ -2816,11 +2841,23 @@ def claim(conn, item_id, actor=None):
     return item_show(conn, item_id)
 
 
-def _close(conn, item_id, status, actor, output=None, note=None):
+def _close(conn, item_id, status, actor, output=None, note=None, force=None):
     with tx(conn):
         it = _item(conn, item_id)
         if it["status"] in CLOSED_STATES:
             raise RiverError(f"item {item_id} is already {it['status']}")
+        # Done means everything it waits on is done: a deploy never goes out past an open review or
+        # an unfinished item it ships. Other items can be closed anyway with a reason (--force).
+        waits = _open_prereqs(conn, it["id"]) if status == "done" else []
+        if waits:
+            ids = ", ".join(f"#{x}" for x in waits)
+            if it["kind"] == "deploy":
+                raise RiverError(f"refused: deploy #{item_id} still waits on {ids} (river blockers {item_id}); "
+                                 f"finish or drop those first, then deploy")
+            if not (force or "").strip():
+                raise RiverError(f"refused: #{item_id} still waits on {ids} (river blockers {item_id}). Finish those "
+                                 f"first, or close it anyway with a reason: river done {item_id} --force \"<why>\"")
+            _event(conn, it["id"], actor, f"done while {ids} still open: {force.strip()}")
         if it["doer"] == "human" and _is_ai(conn, actor):
             if not (note or "").strip():
                 raise RiverError(f"#{item_id} is for a person; to mark it {status} as an agent, say why the user "
@@ -2904,8 +2941,10 @@ def _approved_fixes(conn, it, actor):
     return [{"id": a["id"], "title": a["title"]} for a in added]
 
 
-def done(conn, item_id, output=None, actor=None, ship_it=False, note=None, synced_=False):
-    res = _close(conn, item_id, "done", actor, output, note)
+def done(conn, item_id, output=None, actor=None, ship_it=False, note=None, synced_=False, force=None):
+    """Close an item as done. Refused while an item it waits on is open; force (a reason) closes a
+    non-deploy item anyway and records the reason."""
+    res = _close(conn, item_id, "done", actor, output, note, force)
     if res["kind"] == "fixes":
         res["fixes_added"] = _approved_fixes(conn, _item(conn, item_id), actor)
     if synced_ and res["refs"]:
@@ -2958,7 +2997,7 @@ def ship(conn, item_id, actor=None):
             _dep_add(conn, rv["id"], it["id"], actor)
         if conn.execute("SELECT 1 FROM deps WHERE item_id=? AND blocked_by=?", (dep["id"], it["id"])).fetchone():
             return item_show(conn, dep["id"])
-        _dep_add(conn, dep["id"], it["id"], actor)
+        _dep_add(conn, dep["id"], it["id"], actor, alert=False)  # the ship request notice below says it
         if it["priority"] < dep["priority"]:
             conn.execute("UPDATE items SET priority=? WHERE id=?", (it["priority"], dep["id"]))
         _event(conn, it["id"], actor, f"ship requested in #{dep['id']} ({tg['name']})")
@@ -3236,7 +3275,7 @@ def check(conn, item_id, result, note=None, actor=None):
     if result == "done":
         if not note:
             raise RiverError(f"say where the work is (commits, files): river check {item_id} done --note \"...\"")
-        return done(conn, item_id, f"found done in a check: {note}", actor, note=note)
+        return done(conn, item_id, f"found done in a check: {note}", actor, note=note, force=f"found done in a check: {note}")
     if result == "partial" and not note:
         raise RiverError(f"say what is done and what is left: river check {item_id} partial --note \"...\"")
     with tx(conn):

@@ -2040,6 +2040,68 @@ class DeployNow(Base):
         self.assertEqual((b["role"], b["item"]["id"]), ("reviewer", r["review"]["id"]))
 
 
+class DoneWaitsOnPrerequisites(Base):
+    """Done is refused while an item it waits on is open; a new prerequisite alerts whoever must stop."""
+
+    def setUp(self):
+        super().setUp()
+        core.project_add(self.c, "a")
+        core.target_add(self.c, "web", "push")
+        core.project_add(self.c, "site", target="web")
+        for n in ("dev", "ops", "mark"):
+            core.register(self.c, n)
+
+    def alerts(self, who):
+        return [m for m in core.inbox(self.c, who) if m["kind"] == "alert"]
+
+    def test_done_is_refused_until_prerequisites_close_or_forced_with_a_reason(self):
+        x, y = self.add("a", "x"), self.add("a", "y")
+        core.dep_add(self.c, x, [y], "t")
+        with self.assertRaises(RiverError) as e:
+            core.done(self.c, x, "out", "t")
+        self.assertIn(f"#{y}", str(e.exception))
+        with self.assertRaises(RiverError):
+            core.done(self.c, x, "out", "t", force="  ")
+        core.done(self.c, x, "out", "t", force="the part y covers is not needed")
+        it = core.item_show(self.c, x)
+        self.assertEqual(it["status"], "done")
+        self.assertTrue(any(f"#{y} still open: the part y covers" in e["change"] for e in it["events"]))
+        z = self.add("a", "z", after=[y])
+        core.done(self.c, y, "y done", "t")
+        self.assertEqual(core.done(self.c, z, "fine", "t")["status"], "done")  # nothing open: no reason needed
+
+    def test_a_deploy_is_refused_even_with_force(self):
+        a = self.add("site", "page")
+        d = core.ship(self.c, a, "dev")
+        with self.assertRaises(RiverError) as e:
+            core.done(self.c, d["id"], "release", "ops", force="ship it anyway")
+        self.assertIn("deploy", str(e.exception))
+
+    def test_a_prerequisite_added_to_a_held_item_alerts_the_holder(self):
+        x, y, z = self.add("a", "x"), self.add("a", "y"), self.add("a", "z")
+        core.claim(self.c, x, "dev")
+        core.dep_add(self.c, x, [y], "ops")
+        got = self.alerts("dev")
+        self.assertEqual([(m["item_id"], m["from_agent"]) for m in got], [(x, "ops")])
+        self.assertIn(f"#{y}", got[0]["body"])
+        core.dep_add(self.c, x, [z], "dev")  # the holder adding its own prerequisite is not news
+        self.assertEqual(self.alerts("dev"), [])
+
+    def test_a_review_added_to_a_deploy_alerts_the_target_owner(self):
+        a = self.add("site", "page")
+        core.claim(self.c, a, "dev")
+        core.target_own(self.c, "web", "ops")
+        dep = core.done(self.c, a, "commit", "dev", ship_it=True)["shipped_in"]
+        core.inbox(self.c, "ops")  # the ship request notice
+        r = core.deploy_now(self.c, "web", review=True, actor="mark")
+        got = self.alerts("ops")
+        self.assertEqual([m["item_id"] for m in got], [dep])
+        self.assertIn("review", got[0]["body"].lower())
+        with self.assertRaises(RiverError):
+            core.done(self.c, dep, "release", "ops")
+        self.assertIsNotNone(r)
+
+
 class ReleaseReview(Base):
     """With review on, a release waits on one review of everything it ships, not on a review per item."""
 
