@@ -316,6 +316,9 @@ def build_parser():
     x = prs.add_parser("show", help="a project's description, who works on it, and its ready items"); x.add_argument("name")
     x = prs.add_parser("target", help="put a project in a deploy target (no target clears it)")
     x.add_argument("name"); x.add_argument("target", nargs="?")
+    x = prs.add_parser("tracker", help="the outside tracker a project uses (agents import from it and update it)")
+    x.add_argument("name"); x.add_argument("text", nargs="?",
+                                          help="which tracker, where, what tool: \"github owner/repo via gh\"; none clears it")
     x = prs.add_parser("rank"); x.add_argument("name"); x.add_argument("rank", type=int)
     x = prs.add_parser("archive"); x.add_argument("name")
     prs.add_parser("list")
@@ -429,6 +432,7 @@ def build_parser():
     x.add_argument("--project", help="project name (default: the folder name)")
     x.add_argument("--description", default="", help="what the project covers, for agents")
     x.add_argument("--file", action="append", help="instructions file to add the block to (default CLAUDE.md and AGENTS.md)")
+    x.add_argument("--tracker", help="the outside tracker it uses: \"github owner/repo via gh\", \"jira PROJ via the Jira MCP server\"")
 
     x = sub.add_parser("go", help="start or continue an agent session: name, role, item, briefing")
     x.add_argument("--project", help="project name(s) when this folder is not linked")
@@ -742,6 +746,10 @@ def init_folder(args):
             lines.append(f"project {name}: created and linked to {here}")
         if args.description and exists:
             core.project_describe(conn, name, args.description, args.actor)
+    if args.tracker:
+        for n in [name] if name else linked_here:
+            core.project_tracker(conn, n, args.tracker, args.actor)
+            lines.append(f"project {n}: tracker {args.tracker}")
     # CLAUDE.md for Claude Code; AGENTS.md for Codex, OpenCode, and the other agents that read it.
     files = [Path(f) for f in (args.file or [])] or [here / "CLAUDE.md", here / "AGENTS.md"]
     for f in files:
@@ -749,6 +757,8 @@ def init_folder(args):
     shown = name or linked_here[0]
     if not core._project(conn, shown)["notes"]:
         lines.append(f'next: describe it for agents: river project describe {shown} "what it covers, where, what helps"')
+    if not core.setting(conn, "tracker", project_id=core._project(conn, shown)["id"]):
+        lines.append(f'if it uses an issue tracker: river project tracker {shown} "github owner/repo via gh"')
     lines.append(f"next: add work (river add {shown} \"...\") or open an agent here and say go")
     print("\n".join(lines))
     return 0
@@ -769,6 +779,8 @@ def dispatch(conn, a, actor):
             return core.project_show(conn, a.name)
         if a.pcmd == "target":
             return core.project_target(conn, a.name, a.target, actor)
+        if a.pcmd == "tracker":
+            return core.project_tracker(conn, a.name, a.text, actor)
         if a.pcmd == "archive":
             return core.project_archive(conn, a.name, actor)
         return core.project_list(conn)
@@ -1040,7 +1052,16 @@ def render_plan(b):
                 f"  {r} project add <name> --description \"<what it covers>\" --path {b['cwd']}"]
     if b["new_name"]:
         out.append(f"Your shell may not keep environment variables, so pass --as {me} on every river command.")
-    out += ["", PLAN_RULES.format(r=r), "", "OVERVIEW"]
+    out += ["", PLAN_RULES.format(r=r)]
+    for n, t in (b.get("trackers") or {}).items():
+        if t:
+            out += ["", f"TRACKER: project {n} uses {t}.",
+                    "  Fetch its open issues with that tool, and add the ones that are not in river yet with --ref "
+                    f"(river list --ref <tracker>:<key> shows if one is)."]
+        else:
+            out += ["", f"No tracker is recorded for {n}. If the user uses one (Jira, GitHub Issues, Linear...),",
+                    f"  record it once, in words an agent can act on: {r} project tracker {n} \"<tracker> <where> via <tool>\""]
+    out += ["", "OVERVIEW"]
     print("\n".join(out))
     render_status(b["status"])
     q = b["questions"]
@@ -1084,6 +1105,8 @@ def render_go(b):
     for n in b["projects"]:
         d = b["descriptions"].get(n)
         out.append(f"Project {n}: {d}" if d else f"Project {n}.")
+        if (b.get("trackers") or {}).get(n):
+            out.append(f"  tracker: {b['trackers'][n]} (items link its issues with --ref)")
     out.append("")
     gb = b.get("goal")
     if gb:
@@ -1269,11 +1292,15 @@ def render(a, res):
                 if not g.get("items"):
                     print(f"  no items yet: river add \"<title>\" --goal {g['name']}")
         return
+    if c == "project" and a.pcmd == "tracker":
+        print(f"{res['name']}: tracker " + (res["tracker"] or "none"))
+        return
     if c == "project":
         if isinstance(res, dict) and "ready_count" in res:
             print(f"{res['name']} (rank {res['rank']})")
             print("  " + (res["description"] or "(no description: river project describe " + res["name"] + " \"...\")"))
             print("  target: " + (res.get("target") or "none (river project target " + res["name"] + " <target>)"))
+            print("  tracker: " + (res.get("tracker") or "none (river project tracker " + res["name"] + " \"<tracker> <where> via <tool>\")"))
             print("  items: " + ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in res["counts"].items() if v))
             print("  working now: " + (", ".join(res["working_now"]) or "nobody"))
             if res["worked_recently"]:

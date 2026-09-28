@@ -79,6 +79,23 @@ Write the description for an agent that must decide whether it fits: what the
 project covers, where it lives (repository, directories), and what knowledge
 helps. Agents read `river project list` to pick an area.
 
+### Outside trackers
+
+When the user says the project uses an issue tracker (Jira, GitHub Issues,
+Linear...), record it once, in words an agent can act on:
+
+```
+river project tracker <name> "github owner/repo via gh"
+river project tracker <name> "jira PROJ via the Jira MCP server"
+```
+
+`river plan` then names the tracker. Fetch its open issues with that tool, and
+add each one that river does not have yet with a link:
+`river add "<title>" --ref github:owner/repo#12` (or `--ref jira:PROJ-123
+--ref-url <link>`). `river list --ref <ref>` shows if an issue is in river
+already, and river refuses a second open item with the same link in a project.
+River has no tracker code: you read and write the tracker with your own tools.
+
 ## Goals
 
 A goal is an outcome in a project with a test for "done". One agent owns a

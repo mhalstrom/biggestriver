@@ -109,6 +109,10 @@ first only when neither applies (`river add <project> "<title>"`).
   (linked both ways in `river show`; it does not block anything)
 - Give the next agent a start: `--context "why, where"`, `--touches <files>`,
   `--check "<command>"`, and `--doer human` for steps only a person can do.
+- The work comes from an outside tracker issue: link it with
+  `--ref <tracker>:<key>` (for example `github:owner/repo#12`, `jira:PROJ-123`).
+  The go briefing names the project's tracker (`river project tracker`); when
+  the user names a tracker for the first time, record it there.
 
 ## When you find other work
 

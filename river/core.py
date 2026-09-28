@@ -70,6 +70,10 @@ DEFAULT_SETTINGS = {
     # everything the release ships. review_prompt tells the reviewer what to do (your review process);
     # review_cmd, when set, must exit 0 before river review pass accepts the review.
     # Set them globally or on the deploy project (deploy-<target>).
+    # The outside tracker a project uses, in words an agent can act on: which tracker, where, and with
+    # what tool, e.g. "github owner/shop via gh" or "jira PROJ via the Jira MCP server". Set it per
+    # project (river project tracker). River has no tracker API code: agents use their own tools.
+    "tracker": "",
     "review": "off",
     "review_prompt": "",
     "review_cmd": "",
@@ -742,14 +746,31 @@ def project_show(conn, name):
         working_now=holders,
         worked_recently=recent,
         goals=goal_list(conn, name, include_complete=False),
+        tracker=setting(conn, "tracker", project_id=p["id"]),
     )
     return p
 
 
 def project_list(conn):
-    return [dict(r) for r in conn.execute(
+    rows = [dict(r) for r in conn.execute(
         "SELECT p.*, (SELECT COUNT(*) FROM items i WHERE i.project_id=p.id AND i.status IN ('open','in_progress','held')) open_items "
         "FROM projects p WHERE archived=0 ORDER BY rank, id")]
+    for r in rows:
+        r["tracker"] = setting(conn, "tracker", project_id=r["id"])
+    return rows
+
+
+def project_tracker(conn, name, text=None, actor=None):
+    """Show, set, or (with none) clear the outside tracker a project uses."""
+    p = _project(conn, name)
+    if text is not None:
+        text = text.strip()
+        if text.lower() in ("", "none"):
+            if conn.execute("SELECT 1 FROM settings WHERE scope=? AND key='tracker'", (f"project:{name}",)).fetchone():
+                config_unset(conn, "tracker", project=name, actor=actor)
+        else:
+            config_set(conn, "tracker", text, project=name, actor=actor)
+    return {"name": p["name"], "tracker": setting(conn, "tracker", project_id=p["id"])}
 
 
 # ---------------------------------------------------------------- goals
@@ -3501,10 +3522,11 @@ def go(conn, cwd, actor=None, project=None, role=None, session=None):
 
     ann = annotate(conn)
     descs = {p["name"]: p["notes"] for p in project_list(conn) if p["name"] in names}
+    trackers = {p["name"]: p["tracker"] for p in project_list(conn) if p["name"] in names and p["tracker"]}
     in_area = [a for a in ann.values() if a["project"] in names]
     open_in_area = [a for a in in_area if a["status"] in OPEN_STATES]
     human_ready = sorted((a for a in in_area if a["ready"] and a["doer"] == "human"), key=lambda a: a["sort_key"])
-    brief = {"agent": actor, "new_name": new_name, "projects": names, "descriptions": descs,
+    brief = {"agent": actor, "new_name": new_name, "projects": names, "descriptions": descs, "trackers": trackers,
              "human_waiting": [{"id": a["id"], "title": a["title"],
                                 "blocks": [{"id": d, "title": ann[d]["title"], "priority": ann[d]["effective_priority"]}
                                            for d in a["unblocks"] if ann[d]["status"] in OPEN_STATES]}
@@ -3776,6 +3798,7 @@ def plan(conn, cwd, actor=None, project=None):
     stuck.sort(key=lambda x: -x["holds_up"])
     return {
         "agent": actor, "new_name": new_name, "projects": names, "role": "planner",
+        "trackers": {n: setting(conn, "tracker", project_id=_project(conn, n)["id"]) for n in names},
         "cwd": cwd, "folder_has_project": bool(names) or project is not None,
         "status": status(conn),
         "questions": {

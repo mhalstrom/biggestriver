@@ -1921,3 +1921,17 @@ class TrackerRefs(Base):
             core.parse_refs(["jira:X"], ["https://a", "https://b"])
         with self.assertRaises(RiverError):
             core.parse_refs(["jira:X"], ["javascript:alert(1)"])
+
+
+class ProjectTracker(Base):
+    def test_set_show_clear_and_briefs(self):
+        core.project_add(self.c, "a", path=self.dir.name)
+        self.assertEqual(core.project_tracker(self.c, "a")["tracker"], "")
+        core.project_tracker(self.c, "a", "github o/r via gh", "t")
+        self.assertEqual(core.project_show(self.c, "a")["tracker"], "github o/r via gh")
+        self.assertEqual(core.project_list(self.c)[0]["tracker"], "github o/r via gh")
+        self.assertEqual(core.plan(self.c, self.dir.name, "p")["trackers"], {"a": "github o/r via gh"})
+        core.item_add(self.c, "a", "x", actor="t")
+        self.assertEqual(core.go(self.c, self.dir.name, "w")["trackers"], {"a": "github o/r via gh"})
+        core.project_tracker(self.c, "a", "none", "t")
+        self.assertEqual(core.project_tracker(self.c, "a", "none", "t")["tracker"], "")  # clearing twice is fine

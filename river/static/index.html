@@ -1181,6 +1181,15 @@ function renderSetup(st) {
   out.push(step(st.ntfy_ready && st.notify_channels.includes("ntfy"), "Phone notifications (ntfy)",
     st.ntfy_ready ? "Channels: " + (st.notify_channels.map(esc).join(", ") || "none") : "Get a push on your phone when an item needs you.",
     `<button class="btn" data-su="ntfy">Turn on ntfy</button><span id="suNtfy" class="sub"></span>`));
+  const tp = (S && S.projects || []).filter(p => p.path);
+  const noTracker = tp.filter(p => !p.tracker);
+  out.push(step(noTracker.length === 0, "Issue tracker (optional)",
+    tp.length ? tp.map(p => `<div>${esc(p.name)}: ${p.tracker ? esc(p.tracker) : "none"}</div>`).join("")
+      + "Agents import issues from it in plan, and update it when an item is done. Say which tracker, where, and with what tool."
+      : "No project has a folder yet.",
+    noTracker.map(p => `<span style="display:flex;gap:4px;align-items:center">${esc(p.name)}
+      <input data-tracker-for="${esc(p.name)}" placeholder="github owner/repo via gh" style="width:220px">
+      <button class="btn" data-su="tracker" data-project="${esc(p.name)}">Save</button></span>`).join("")));
   $("#setupSteps").innerHTML = out.join("");
 }
 $("#setupSteps").addEventListener("click", async (e) => {
@@ -1192,6 +1201,11 @@ $("#setupSteps").addEventListener("click", async (e) => {
       await act("register", { name: n, human: true, note: "" });
       $("#actor").value = n; store("river.actor", n);
     } else if (k === "block") await act("setup_block", { path: b.dataset.path });
+    else if (k === "tracker") {
+      const v = document.querySelector(`[data-tracker-for="${CSS.escape(b.dataset.project)}"]`).value.trim();
+      if (!v) return toast("Say which tracker, for example: github owner/repo via gh", true);
+      await act("config_set", { key: "tracker", value: v, project: b.dataset.project });
+    }
     else if (k === "skills") await act("setup_skills", {});
     else if (k === "agent") await act("setup_agent_add", { label: b.dataset.label });
     else if (k === "ntfy") {
