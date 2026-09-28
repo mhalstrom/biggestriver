@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Biggest River app icon: the site's mark (two waves on blue) on the macOS icon grid (824px square at 100px). -->
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#1f6feb"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#g)"/>
+  <g transform="translate(100 100) scale(25.75)" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round">
+    <path d="M5 12c4-4 7 4 11 0s7-4 11 0M5 20c4-4 7 4 11 0s7-4 11 0"/>
+  </g>
+</svg>
