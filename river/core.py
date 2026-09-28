@@ -1217,6 +1217,79 @@ def split(conn, item_id, titles, actor=None, doer="any"):
     return res
 
 
+def accept_message(conn, msg_id, actor=None):
+    """Say yes to an alert (design 7.4): claim its item now, or, while you hold other work, keep it
+    reserved for you until after that (reserve_ttl). The sender hears which."""
+    with tx(conn):
+        m = _message(conn, msg_id)
+        if m["kind"] != "alert":
+            raise RiverError(f"message {msg_id} is {'an' if m['kind'][0] in 'aeiou' else 'a'} {m['kind']}; only alerts are "
+                             f"accepted by message id (an offer: river give <item> --to <agent>, or river split)")
+        if m["to_agent"] != actor:
+            raise RiverError(f"message {msg_id} is for {m['to_agent']}, not {actor}")
+        if m["state"] not in ("open", "read"):  # reading an alert does not answer it
+            raise RiverError(f"message {msg_id} is already {m['state']}")
+        t = iso(now())
+        conn.execute("UPDATE messages SET state='accepted', read_at=COALESCE(read_at, ?), closed_at=? WHERE id=?",
+                     (t, t, m["id"]))
+        if m["item_id"] is None:
+            _send(conn, "note", actor, f"yes to your alert #{m['id']}", to=m["from_agent"], reply_to=m["id"])
+            return message_show(conn, msg_id)
+        it = _item(conn, m["item_id"])
+        busy = conn.execute("SELECT id FROM items WHERE assignee=? AND status IN ('in_progress','held')",
+                            (actor,)).fetchall()
+        ann = annotate(conn)
+        now_ok = it["status"] == "open" and not busy and ann[it["id"]]["ready"] and not (
+            it["reserved_for"] and it["reserved_for"] != actor)
+        if not now_ok:
+            if it["status"] != "open" or (it["reserved_for"] and it["reserved_for"] != actor):
+                raise RiverError(f"#{it['id']} is {it['status']}" + (f" by {it['assignee']}" if it["assignee"] else "")
+                                 + (f", reserved for {it['reserved_for']}" if it["reserved_for"] else "")
+                                 + f"; decline instead: river decline {msg_id} --message --note \"why\"")
+            ttl = parse_duration(setting(conn, "reserve_ttl", item_id=it["id"], agent=actor))
+            conn.execute("UPDATE items SET reserved_for=?, reserved_until=?, reserved_by=? WHERE id=?",
+                         (actor, iso(now() + ttl), m["from_agent"], it["id"]))
+            _event(conn, it["id"], actor, f"accepted alert #{m['id']}; kept for after "
+                   + (", ".join(f"#{r['id']}" for r in busy) or "its prerequisites"))
+            _send(conn, "note", actor, f"yes to your alert #{m['id']}: I take #{it['id']} after "
+                  + (", ".join(f"#{r['id']}" for r in busy) or "what it waits on"),
+                  to=m["from_agent"], item_id=it["id"], reply_to=m["id"])
+            return message_show(conn, msg_id)
+        _send(conn, "note", actor, f"yes to your alert #{m['id']}: I am taking #{it['id']} now",
+              to=m["from_agent"], item_id=it["id"], reply_to=m["id"])
+    claim(conn, it["id"], actor)
+    return message_show(conn, msg_id)
+
+
+def _holder_of(conn, item_id):
+    it = _item(conn, item_id)
+    if it["status"] not in ("in_progress", "held") or not it["assignee"]:
+        raise RiverError(f"nobody holds #{item_id} ({it['status']}); name the agent, or use --item {item_id} "
+                         f"so the next holder gets it")
+    return it["assignee"]
+
+
+def message(conn, kind, body, to=None, holder_of=None, item=None, file=None, cwd=None, actor=None):
+    """The shortcuts river alert / ask / note (design 7.4): to an agent, to the holder of an item, or
+    (questions) to every agent whose held items touch a file. Returns the messages sent."""
+    if sum(x is not None for x in (to, holder_of, file)) > 1:
+        raise RiverError("give one of: an agent name, --holder-of <id>, or --file <path>")
+    if file is not None:
+        if kind != "question":
+            raise RiverError("--file is for questions: river ask --file <path> \"...\"")
+        targets = [a["name"] for a in who(conn, file=file, cwd=cwd) if a["name"] != actor]
+        if not targets:
+            raise RiverError(f"no agent holds an item that touches {file} (river who --file {file})")
+        return [send(conn, kind, body, t, item, None, actor) for t in targets]
+    if holder_of is not None:
+        to = _holder_of(conn, holder_of)
+        if item is None:
+            item = holder_of
+    if to is None and item is None:
+        raise RiverError("say who gets it: an agent name, --holder-of <id>, or --item <id> (its holder)")
+    return [send(conn, kind, body, to, item, None, actor)]
+
+
 def decline_message(conn, msg_id, note=None, actor=None):
     """Say no to an offer or alert; the sender hears why."""
     with tx(conn):
@@ -1225,7 +1298,7 @@ def decline_message(conn, msg_id, note=None, actor=None):
             raise RiverError(f"message {msg_id} is {'an' if m['kind'][0] in 'aeiou' else 'a'} {m['kind']}; only offers and alerts are declined")
         if m["to_agent"] != actor:
             raise RiverError(f"message {msg_id} is for {m['to_agent']}, not {actor}")
-        if m["state"] != "open":
+        if m["state"] not in ("open", "read"):  # reading an alert does not answer it
             raise RiverError(f"message {msg_id} is already {m['state']}")
         t = iso(now())
         conn.execute("UPDATE messages SET state='declined', read_at=COALESCE(read_at, ?), closed_at=? WHERE id=?", (t, t, m["id"]))
@@ -1931,6 +2004,17 @@ def _close(conn, item_id, status, actor, output=None, note=None):
             resumed = _resume_holds(conn, it["id"])
             ann = annotate(conn)
             newly = [d for d in ann[it["id"]]["unblocks"] if ann[d]["ready"]]
+            # Tell whoever holds an item that waits on this one (design 7.4: "a prerequisite you waited on is done").
+            for d in ann[it["id"]]["unblocks"]:
+                a = ann[d]
+                if a["assignee"] and a["status"] in ("in_progress", "held") and a["assignee"] != actor:
+                    left_ = a["open_blockers"]
+                    _send(conn, "notice", "river", f"#{it['id']} {it['title']} is {status}"
+                          + (f" (output: {output})" if output else "") + f"; your #{d} waits on it. "
+                          + (f"Still open before #{d}: " + ", ".join(f"#{x}" for x in left_) if left_
+                             else (f"Nothing is left before #{d}; it is in progress again" if d in resumed
+                                   else f"Nothing is left before #{d}")),
+                          to=a["assignee"], item_id=d)
     res = item_show(conn, item_id)
     res["now_ready"] = newly
     res["resumed"] = resumed

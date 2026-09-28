@@ -146,6 +146,14 @@ When you see it, read your inbox before you continue.
 - `river inbox`: unread messages and questions that wait for your answer.
   Add `--all` for read ones, `--peek` to leave them unread.
 - `river answer <msg-id> "<text>"`: answer a question. The asker gets it.
+- Shortcuts: `river alert <agent> "<text>" --item <id>` (work they probably need),
+  `river ask <agent> "<text>"`, `river note <agent> "<text>"`. Instead of an agent:
+  `--holder-of <id>` (whoever holds that item), or for `ask`, `--file <path>`
+  (every agent whose held items touch it). `river note "<text>"` alone sets your status.
+- An alert to you: `river accept <msg-id> --message` claims its item now, or,
+  while you hold other work, keeps it reserved for you until after that.
+  `river decline <msg-id> --message --note "why"` says no. The sender hears either way.
+- When an item you hold waits on another one and that one is done, river sends you a notice.
 - `river send question|alert|note "<text>" --to <agent>`: to one agent.
   Use `--item <id>` instead of `--to` to reach whoever holds that item
   (or the next holder, if nobody holds it). `--reply <msg-id>` replies to

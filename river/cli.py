@@ -388,7 +388,18 @@ def build_parser():
                    help="you hold <id>: give it back while the prerequisites wait")
     x = sub.add_parser("push", help="reserve an open item for one agent and alert it")
     x.add_argument("id", type=int); x.add_argument("--to", required=True); x.add_argument("--note")
-    x = sub.add_parser("accept", help="take an item pushed to you"); x.add_argument("id", type=int)
+    x = sub.add_parser("accept", help="take an item pushed to you, or with --message say yes to an alert")
+    x.add_argument("id", type=int)
+    x.add_argument("--message", action="store_true", help="the id is an alert: claim its item now, or keep it for after your current item")
+    for kind, verb in (("alert", "tell an agent about work it probably needs to do"),
+                       ("ask", "ask an agent a question")):
+        x = sub.add_parser(kind, help=f"{verb}: river {kind} [<agent>] \"...\" [--holder-of <id>] [--item <id>]"
+                           + (" [--file <path>]" if kind == "ask" else ""))
+        x.add_argument("words", nargs="+", metavar="[agent] text")
+        x.add_argument("--holder-of", type=int, help="send it to whoever holds this item")
+        x.add_argument("--item", type=int, help="the item it is about (without an agent: its holder)")
+        if kind == "ask":
+            x.add_argument("--file", help="ask every agent whose held items touch this file")
     x = sub.add_parser("decline", help="hand a pushed item back, or with --message say no to an offer or alert")
     x.add_argument("id", type=int); x.add_argument("--note")
     x.add_argument("--message", action="store_true", help="the id is a message (an offer or alert), not an item")
@@ -424,7 +435,10 @@ def build_parser():
     x.add_argument("--session", help="the Claude Code session this agent runs in")
     x = sub.add_parser("session", help="record the Claude Code session you run in"); x.add_argument("name")
     x = sub.add_parser("unregister", help="remove an agent that holds nothing"); x.add_argument("name")
-    x = sub.add_parser("note", help="set your status note"); x.add_argument("text")
+    x = sub.add_parser("note", help="set your status note; with an agent, --holder-of, or --item: send a note")
+    x.add_argument("words", nargs="+", metavar="[agent] text")
+    x.add_argument("--holder-of", type=int, help="send the note to whoever holds this item")
+    x.add_argument("--item", type=int, help="the item it is about (without an agent: its holder)")
     x = sub.add_parser("who", help="who is doing what"); x.add_argument("--item", type=int); x.add_argument("--project")
     x.add_argument("--file", help="only agents whose held items touch this file or directory")
     sub.add_parser("heartbeat", help="renew your leases")
@@ -696,7 +710,15 @@ def dispatch(conn, a, actor):
     if c == "push":
         return core.push(conn, a.id, a.to, a.note, actor)
     if c == "accept":
+        if a.message:
+            return core.accept_message(conn, a.id, actor)
         return core.accept(conn, a.id, actor)
+    if c in ("alert", "ask") or (c == "note" and (len(a.words) > 1 or a.holder_of or a.item)):
+        if len(a.words) > 2:
+            raise RiverError("put the text in quotes: river " + c + " [<agent>] \"...\"")
+        to, text = (a.words[0], a.words[1]) if len(a.words) == 2 else (None, a.words[0])
+        kind = {"ask": "question", "alert": "alert", "note": "note"}[c]
+        return core.message(conn, kind, text, to, a.holder_of, a.item, getattr(a, "file", None), os.getcwd(), actor)
     if c == "decline":
         if a.message:
             return core.decline_message(conn, a.id, a.note, actor)
@@ -740,7 +762,7 @@ def dispatch(conn, a, actor):
     if c == "note":
         if not actor:
             raise RiverError("set RIVER_AGENT or pass --as <name>")
-        return core.agent_note(conn, actor, a.text)
+        return core.agent_note(conn, actor, " ".join(a.words))
     if c == "who":
         return core.who(conn, a.item, a.project, a.file, os.getcwd())
     if c == "heartbeat":
@@ -1115,9 +1137,14 @@ def render(a, res):
     if c in ("offer", "decline") and "kind" in res and "body" in res:
         print(f"{'sent' if c == 'offer' else 'declined'} #{res['id']} {res['kind']}" + (f" to {res['to_agent']}" if c == "offer" else ""))
         return
-    if c == "send":
-        to = res["to_agent"] or f"the next holder of #{res['item_id']} (nobody holds it now)"
-        print(f"sent #{res['id']} {res['kind']} to {to}")
+    if c == "send" or (c in ("alert", "ask", "note") and isinstance(res, list)):
+        for m in res if isinstance(res, list) else [res]:
+            to = m["to_agent"] or f"the next holder of #{m['item_id']} (nobody holds it now)"
+            print(f"sent #{m['id']} {m['kind']} to {to}")
+        return
+    if c == "accept" and a.message:
+        print(f"accepted alert #{res['id']}" + (f"; see: river show {res['item_id']}" if res["item_id"] else "")
+              + "; the sender is told")
         return
     if c == "answer":
         print(f"answered: sent #{res['id']} to {res['to_agent']}; question #{res['reply_to']} is closed")
@@ -1164,7 +1191,10 @@ def render(a, res):
         else:
             print(json.dumps(res, ensure_ascii=False))
         return
-    if c == "register" or c == "note":
+    if c == "note":
+        print(f"{res['name']}: status note set")
+        return
+    if c == "register":
         print(f"{res['name']} ({res['kind']}) registered. Set RIVER_AGENT={res['name']} in your shell.")
         return
     if c == "session":

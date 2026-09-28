@@ -309,6 +309,40 @@ class Messages(Base):
         core.register(self.c, "bob")
         self.x = self.add("a", "x")
 
+    def test_alert_accept_claims_now_or_keeps_for_later(self):
+        found = self.add("a", "found work")
+        m = core.message(self.c, "alert", "you need this", to="alice", item=found, actor="bob")[0]
+        core.inbox(self.c, "alice")  # reading an alert does not answer it
+        core.accept_message(self.c, m["id"], "alice")  # alice holds nothing: she takes it now
+        self.assertEqual(core._item(self.c, found)["assignee"], "alice")
+        self.assertEqual(core.message_show(self.c, m["id"])["state"], "accepted")
+        later = self.add("a", "later work")
+        m2 = core.message(self.c, "alert", "and this", holder_of=found, item=later, actor="bob")[0]
+        self.assertEqual(m2["to_agent"], "alice")
+        core.accept_message(self.c, m2["id"], "alice")  # busy: kept for after the current item
+        it = core._item(self.c, later)
+        self.assertEqual((it["status"], it["reserved_for"], it["reserved_by"]), ("open", "alice", "bob"))
+        self.assertEqual([r["body"][:10] for r in core.inbox(self.c, "bob")], ["yes to you", "yes to you"])
+        q = core.message(self.c, "question", "why?", to="bob", actor="alice")[0]
+        with self.assertRaises(RiverError):
+            core.accept_message(self.c, q["id"], "bob")  # only alerts
+        with self.assertRaises(RiverError):
+            core.message(self.c, "alert", "x", holder_of=self.x, actor="bob")  # nobody holds x
+
+    def test_ask_by_file_and_prerequisite_done_notice(self):
+        core.project_add(self.c, "p", path=self.dir.name)
+        pre = core.item_add(self.c, "p", "pre", actor="t")["id"]
+        big = core.item_add(self.c, "p", "big", actor="t", touches="app.py")["id"]
+        core.claim(self.c, big, "alice")
+        core.dep_add(self.c, big, [pre], "t")
+        qs = core.message(self.c, "question", "is app.py yours?", file="app.py", actor="bob")
+        self.assertEqual([q["to_agent"] for q in qs], ["alice"])
+        core.claim(self.c, pre, "bob")
+        core.done(self.c, pre, "made the table", "bob")
+        notes = [m["body"] for m in core.inbox(self.c, "alice") if m["kind"] == "notice"]
+        self.assertEqual(len(notes), 1)
+        self.assertIn(f"#{pre} pre is done (output: made the table); your #{big} waits on it", notes[0])
+
     def test_question_to_item_reaches_next_holder_and_answer_closes_it(self):
         q = core.send(self.c, "question", "why?", item=self.x, actor="bob")
         self.assertIsNone(q["to_agent"])
