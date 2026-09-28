@@ -209,6 +209,7 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
     <button data-tab="settings">Settings</button>
   </nav>
   <span class="spacer"></span>
+  <button class="btn" id="updateBtn" title="Pull the latest Biggest River from git and restart this page's server">Update</button>
   <label class="sub">Acting as
     <select id="actor"></select>
   </label>
@@ -1263,6 +1264,35 @@ async function openFromHash() {
   }
 }
 window.addEventListener("hashchange", openFromHash);
+// Update button: shows how many new commits the river clone is missing; a click pulls them and restarts the server.
+async function checkUpdate() {
+  const r = await fetch("/api/update"); const u = await r.json(); const b = $("#updateBtn");
+  if (!r.ok || !u.git) return b.classList.toggle("hidden", !u.git && r.ok);
+  b.classList.toggle("primary", u.behind > 0);
+  b.textContent = u.behind ? `Update · ${u.behind} new` : "Update";
+  b.title = u.behind ? "New in Biggest River:\n" + u.commits.join("\n")
+    : u.fetch_error ? "Could not check for updates: " + u.fetch_error : `Up to date (${u.head})`;
+}
+$("#updateBtn").onclick = async () => {
+  const b = $("#updateBtn"); b.disabled = true; b.textContent = "Updating…";
+  try {
+    const boot = (await (await fetch("/api/update?fetch=0")).json()).boot;
+    const r = await fetch("/api/action", { method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ op: "update", args: {}, actor: actor() }) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || "update failed");
+    const u = j.result;
+    if (!u.updated) { toast(`Already up to date (${u.head})`); return; }
+    toast(`Updated ${u.from} → ${u.head}. Restarting…`);
+    for (let i = 0; i < 60; i++) {  // wait for the restarted server, then load the new page
+      await new Promise(res => setTimeout(res, 500));
+      try { const s = await (await fetch("/api/update?fetch=0")).json(); if (s.boot !== boot) return location.reload(); } catch (e) {}
+    }
+    toast("The server did not come back; run river serve again", true);
+  } catch (e) { toast(e.message, true); }
+  finally { b.disabled = false; checkUpdate().catch(() => {}); }
+};
+checkUpdate().catch(() => {}); setInterval(() => { if (!document.hidden) checkUpdate().catch(() => {}); }, 30 * 60 * 1000);
 refresh().then(openFromHash).then(maybeSetup); setInterval(() => { if (!document.hidden) refresh().catch(() => {}); }, 3000);
 // A hidden tab stops the full refresh but keeps asking what needs a person, so notifications still arrive.
 setInterval(() => { if (document.hidden) pollNeedsYou().catch(() => {}); }, 15000);

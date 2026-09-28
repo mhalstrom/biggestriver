@@ -241,3 +241,49 @@ class StartPushesToWaiting(unittest.TestCase):
         t = server.launch_agent(self.c, runner=sent.append)
         self.assertEqual((t["pushed_to"], len(sent)), ("w", 1))
         self.assertEqual(core.item_show(self.c, x)["reserved_for"], "w")
+
+
+class PageUpdate(unittest.TestCase):
+    """The Update button: status of the river clone against its upstream, and a fast-forward that restarts."""
+
+    def setUp(self):
+        import subprocess
+        self.dir = tempfile.TemporaryDirectory()
+        d = self.dir.name
+        self.git = lambda repo, *a: subprocess.run(["git", "-C", repo, *a], check=True, capture_output=True, text=True).stdout.strip()
+        self.up, self.clone = os.path.join(d, "up"), os.path.join(d, "clone")
+        subprocess.run(["git", "init", "-q", "-b", "main", self.up], check=True)
+        self.commit(self.up, "one")
+        subprocess.run(["git", "clone", "-q", self.up, self.clone], check=True)
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def commit(self, repo, msg):
+        with open(os.path.join(repo, msg), "w") as f:
+            f.write(msg)
+        self.git(repo, "add", msg)
+        self.git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", msg)
+
+    def test_behind_then_update_fast_forwards_and_restarts(self):
+        self.assertEqual(server.update_status(self.clone)["behind"], 0)
+        restarts = []
+        self.assertFalse(server.update_apply(self.clone, lambda: restarts.append(1))["updated"])
+        self.commit(self.up, "two")
+        st = server.update_status(self.clone)
+        self.assertEqual((st["behind"], len(st["commits"])), (1, 1))
+        res = server.update_apply(self.clone, lambda: restarts.append(1))
+        self.assertTrue(res["updated"])
+        self.assertEqual(res["head"], self.git(self.up, "rev-parse", "--short", "HEAD"))
+        self.assertEqual((res["behind"], restarts), (0, [1]))
+
+    def test_refuses_a_clone_with_its_own_commits(self):
+        self.commit(self.up, "two")
+        self.commit(self.clone, "mine")
+        with self.assertRaises(RiverError):
+            server.update_apply(self.clone, lambda: self.fail("restarted"))
+
+    def test_not_a_git_clone(self):
+        self.assertEqual(server.update_status(self.dir.name), {"git": False})
+        with self.assertRaises(RiverError):
+            server.update_apply(self.dir.name, lambda: None)

@@ -17,6 +17,7 @@ from .core import RiverError
 STATIC = Path(__file__).resolve().parent / "static"
 PKG = Path(__file__).resolve().parent
 DEV = {"on": False}
+BOOT = str(time.time())  # changes when the server restarts; the page waits for a new one after an update
 
 
 def _watched():
@@ -88,6 +89,71 @@ def launch_agent(conn, project=None, runner=None, agent=None):
         raise RiverError(f"could not open Terminal: {why}. macOS may ask once to let river control Terminal "
                          f"(System Settings, Privacy & Security, Automation)")
     return t
+
+
+REPO = PKG.parent
+
+
+def _git(repo, *args, timeout=60):
+    import subprocess
+    try:
+        r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise RiverError(f"git {args[0]}: {e}")
+    if r.returncode:
+        raise RiverError(f"git {args[0]}: {(r.stderr or r.stdout).strip()}")
+    return r.stdout.strip()
+
+
+def update_status(repo=REPO, fetch=True):
+    """Whether this river install (a git clone) is behind its upstream branch: the page's Update button."""
+    if not (Path(repo) / ".git").exists():
+        return {"git": False}
+    out = {"git": True, "fetch_error": None}
+    if fetch:
+        try:
+            _git(repo, "fetch", "--quiet")
+        except RiverError as e:
+            out["fetch_error"] = str(e)
+    out["head"] = _git(repo, "rev-parse", "--short", "HEAD")
+    out["branch"] = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+    try:
+        out["upstream"] = _git(repo, "rev-parse", "--abbrev-ref", "@{u}")
+    except RiverError:
+        return {**out, "upstream": None, "behind": 0, "ahead": 0, "commits": []}
+    out["behind"] = int(_git(repo, "rev-list", "--count", "HEAD..@{u}"))
+    out["ahead"] = int(_git(repo, "rev-list", "--count", "@{u}..HEAD"))
+    out["commits"] = _git(repo, "log", "--format=%h %s", "-20", "HEAD..@{u}").splitlines() if out["behind"] else []
+    return out
+
+
+def _restart_soon():
+    """Start the server process again after the reply goes out, so it runs the new code."""
+    def go():
+        time.sleep(0.8)
+        print("updated; restarting", flush=True)
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+    threading.Thread(target=go, daemon=True).start()
+
+
+def update_apply(repo=REPO, restart=_restart_soon):
+    """Fast-forward this river install to its upstream branch, then restart the server. Agents and the
+    command pick up the new code on their next run, because `river` and the skills link into this folder."""
+    st = update_status(repo)
+    if not st["git"]:
+        raise RiverError("this river is not a git clone; update it the way you installed it")
+    if st["fetch_error"]:
+        raise RiverError(f"could not check for updates: {st['fetch_error']}")
+    if not st["upstream"]:
+        raise RiverError(f"branch {st['branch']} has no upstream to update from")
+    if not st["behind"]:
+        return {**st, "updated": False}
+    if st["ahead"]:
+        raise RiverError(f"this clone has {st['ahead']} commit(s) that {st['upstream']} does not have; "
+                         f"run git pull in {repo} yourself")
+    _git(repo, "merge", "--ff-only", "@{u}")
+    restart()
+    return {**update_status(repo, fetch=False), "updated": True, "from": st["head"], "commits": st["commits"]}
 
 
 # Agent CLIs the setup guide offers for the Start button. Each gets an explicit first prompt, so it works
@@ -229,6 +295,7 @@ OPS = {
     "setup_ntfy": lambda c, a, who: setup_ntfy(c, who),
     "launch_agent": lambda c, a, who: launch_agent(c, a.get("project"), agent=a.get("agent")),
     "decline_message": lambda c, a, who: core.decline_message(c, int(a["msg"]), a.get("note"), who),
+    "update": lambda c, a, who: update_apply(),
 }
 
 
@@ -321,6 +388,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": str(e)})
             finally:
                 conn.close()
+        if path == "/api/update":
+            try:
+                return self._send(200, {**update_status(fetch="fetch=0" not in self.path), "boot": BOOT})
+            except RiverError as e:
+                return self._send(409, {"error": str(e)})
         if path == "/api/setup":
             conn = core.connect()
             try:
