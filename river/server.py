@@ -20,6 +20,31 @@ DEV = {"on": False}
 BOOT = str(time.time())  # changes when the server restarts; the page waits for a new one after an update
 
 
+# Types the page's own files use; anything else under static is sent as bytes.
+STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+                ".mjs": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
+                ".map": "application/json", ".json": "application/json", ".svg": "image/svg+xml",
+                ".png": "image/png", ".woff2": "font/woff2", ".txt": "text/plain; charset=utf-8",
+                ".md": "text/plain; charset=utf-8"}
+
+
+def static_file(path, root=None):
+    """The (bytes, content type) of a file under river/static for a URL path, or None.
+
+    Refuses anything that resolves outside the folder: '..', symlinks out, encoded slashes, hidden files."""
+    from urllib.parse import unquote
+    root = (root or STATIC).resolve()
+    rel = unquote(path.lstrip("/")) if "%2f" not in path.lower() and "%5c" not in path.lower() else None
+    if not rel or "\\" in rel or "\0" in rel or any(part.startswith(".") for part in rel.split("/")):
+        return None
+    f = (root / rel).resolve()
+    if root not in f.parents or not f.is_file():
+        return None
+    name = f.name.lower()
+    ctype = "text/plain; charset=utf-8" if name.startswith("license") else STATIC_TYPES.get(f.suffix.lower(), "application/octet-stream")
+    return f.read_bytes(), ctype
+
+
 def _watched():
     return sorted(PKG.glob("*.py")) + sorted(STATIC.glob("*"))
 
@@ -419,6 +444,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, {"error": str(e)})
             finally:
                 conn.close()
+        if not path.startswith("/api/"):
+            got = static_file(path)
+            if got:
+                return self._send(200, *got)
         return self._send(404, {"error": "not found"})
 
     def do_POST(self):

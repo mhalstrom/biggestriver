@@ -287,3 +287,45 @@ class PageUpdate(unittest.TestCase):
         self.assertEqual(server.update_status(self.dir.name), {"git": False})
         with self.assertRaises(RiverError):
             server.update_apply(self.dir.name, lambda: None)
+
+
+class StaticFiles(unittest.TestCase):
+    """The page's .js/.css/vendor files come from river/static; nothing outside it is served."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        base = os.path.realpath(self.dir.name)
+        self.root = os.path.join(base, "static")
+        os.makedirs(os.path.join(self.root, "vendor", "tab"))
+        for rel, body in (("app.js", "export const a = 1;"), ("app.css", "b{}"), ("vendor/tab/LICENSE", "MIT"),
+                          ("vendor/tab/t.min.js.map", "{}"), (".hidden", "x")):
+            with open(os.path.join(self.root, rel), "w") as f:
+                f.write(body)
+        with open(os.path.join(base, "secret.txt"), "w") as f:
+            f.write("no")
+        os.symlink(os.path.join(base, "secret.txt"), os.path.join(self.root, "link.txt"))
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_types_and_refusals(self):
+        from pathlib import Path
+        get = lambda p: server.static_file(p, Path(self.root))
+        self.assertEqual(get("/app.js"), (b"export const a = 1;", "text/javascript; charset=utf-8"))
+        self.assertEqual(get("/app.css")[1], "text/css; charset=utf-8")
+        self.assertEqual(get("/vendor/tab/LICENSE")[1], "text/plain; charset=utf-8")
+        self.assertEqual(get("/vendor/tab/t.min.js.map")[1], "application/json")
+        for bad in ("/../secret.txt", "/vendor/../../secret.txt", "/%2e%2e/secret.txt", "/vendor%2ftab%2fLICENSE",
+                    "/link.txt", "/.hidden", "/vendor", "/", "/nope.js"):
+            self.assertIsNone(get(bad), bad)
+
+    def test_handler_serves_the_real_static_folder(self):
+        h = server.Handler.__new__(server.Handler)
+        out = {}
+        h._send = lambda code, body, ctype=None: out.update(code=code, ctype=ctype)
+        h.path = "/index.html"
+        h.do_GET()
+        self.assertEqual((out["code"], out["ctype"]), (200, "text/html; charset=utf-8"))
+        h.path = "/../server.py"
+        h.do_GET()
+        self.assertEqual(out["code"], 404)
