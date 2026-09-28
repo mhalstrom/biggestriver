@@ -701,6 +701,19 @@ class Plan(Base):
             core.plan(self.c, self.dir.name, "ag")
 
 
+class Sessions(Base):
+    def test_session_name_recorded_and_shown(self):
+        core.project_add(self.c, "a", path=self.dir.name)
+        core.register(self.c, "ag", session="toolscaledcore-60")
+        self.assertEqual(core.who(self.c)[0]["session"], "toolscaledcore-60")
+        b = core.go(self.c, self.dir.name)
+        self.assertIsNone(b["session"])  # a new agent: the briefing asks for it
+        b = core.go(self.c, self.dir.name, actor=b["agent"], session="web-7")
+        self.assertEqual(b["session"], "web-7")
+        with self.assertRaises(RiverError):
+            core.set_session(self.c, "ag", "two words")
+
+
 class WhoFile(Base):
     def test_who_file_matches_held_touches(self):
         root = self.dir.name

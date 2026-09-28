@@ -354,6 +354,7 @@ def build_parser():
     x = sub.add_parser("go", help="start or continue an agent session: name, role, item, briefing")
     x.add_argument("--project", help="project name(s) when this folder is not linked")
     x.add_argument("--role", choices=core.ROLES, help="ask for a role instead of letting river pick")
+    x.add_argument("--session", help="your Claude Code session name, so others can message this session")
 
     x = sub.add_parser("plan", help="start a planner session: overview, open questions, and the planner's rules")
     x.add_argument("--project", help="project name(s) to focus on (default: this folder's, else all)")
@@ -420,6 +421,8 @@ def build_parser():
 
     x = sub.add_parser("register", help="register this agent or person")
     x.add_argument("name"); x.add_argument("--human", action="store_true"); x.add_argument("--note", default="")
+    x.add_argument("--session", help="the Claude Code session this agent runs in")
+    x = sub.add_parser("session", help="record the Claude Code session you run in"); x.add_argument("name")
     x = sub.add_parser("unregister", help="remove an agent that holds nothing"); x.add_argument("name")
     x = sub.add_parser("note", help="set your status note"); x.add_argument("text")
     x = sub.add_parser("who", help="who is doing what"); x.add_argument("--item", type=int); x.add_argument("--project")
@@ -661,7 +664,7 @@ def dispatch(conn, a, actor):
     if c == "log":
         return core.completed(conn, a.project, None if a.since == "all" else a.since)
     if c == "go":
-        return core.go(conn, os.getcwd(), actor, a.project, a.role)
+        return core.go(conn, os.getcwd(), actor, a.project, a.role, a.session)
     if c == "plan":
         return core.plan(conn, os.getcwd(), actor, a.project)
     if c == "next":
@@ -727,7 +730,11 @@ def dispatch(conn, a, actor):
             return {"thread_id": None, "messages": core.item_messages(conn, a.item)}
         return core.thread(conn, a.id, actor)
     if c == "register":
-        return core.register(conn, a.name, a.human, a.note)
+        return core.register(conn, a.name, a.human, a.note, a.session)
+    if c == "session":
+        if not actor:
+            raise RiverError("set RIVER_AGENT or pass --as <name>")
+        return core.set_session(conn, actor, a.name)
     if c == "unregister":
         return core.unregister(conn, a.name, actor)
     if c == "note":
@@ -844,6 +851,9 @@ def render_go(b):
     out.append(f"You are river agent {me}. Role: {b['role'].upper()}. ({b['why']})")
     if b["new_name"]:
         out.append(f"Your shell may not keep environment variables, so pass --as {me} on every river command.")
+    if not b.get("session"):
+        out.append(f"Record your Claude Code session name once, so others can message this session "
+                   f"(ListAgents prints 'This session is <name>'): {r} session <name>")
     for n in b["projects"]:
         d = b["descriptions"].get(n)
         out.append(f"Project {n}: {d}" if d else f"Project {n}.")
@@ -1130,7 +1140,8 @@ def render(a, res):
         for ag in res:
             holds = ", ".join(f"#{h['id']} {h['title']}" for h in ag["holds"]) or "nothing"
             note = f" — {ag['note']}" if ag["note"] else ""
-            print(f"{ag['name']} ({ag['kind']}, {ag['state']}){note}\n    holds: {holds}"
+            print(f"{ag['name']} ({ag['kind']}, {ag['state']}){note}"
+                  + (f"\n    session: {ag['session']}" if ag.get("session") else "") + f"\n    holds: {holds}"
                   + (f"\n    owns: {', '.join(o['name'] for o in ag['owns'])}" if ag.get("owns") else ""))
             for t in ag.get("touching", []):
                 print(f"    touches: #{t['id']} {', '.join(t['paths'])}")
@@ -1155,6 +1166,9 @@ def render(a, res):
         return
     if c == "register" or c == "note":
         print(f"{res['name']} ({res['kind']}) registered. Set RIVER_AGENT={res['name']} in your shell.")
+        return
+    if c == "session":
+        print(f"{res['name']}: session {res['session']} recorded")
         return
     if c == "heartbeat":
         print("leases renewed")

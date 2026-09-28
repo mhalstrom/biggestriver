@@ -139,6 +139,7 @@ CREATE TABLE IF NOT EXISTS agents (
   kind           TEXT NOT NULL DEFAULT 'ai' CHECK (kind IN ('ai','human')),
   note           TEXT NOT NULL DEFAULT '',
   role           TEXT,
+  session        TEXT,
   registered_at  TEXT NOT NULL,
   last_seen      TEXT NOT NULL
 );
@@ -347,8 +348,11 @@ def _migrate(conn):
         conn.execute("ALTER TABLE projects ADD COLUMN path TEXT")
     if "target" not in cols:
         conn.execute("ALTER TABLE projects ADD COLUMN target TEXT")
-    if "role" not in {r["name"] for r in conn.execute("PRAGMA table_info(agents)")}:
+    acols = {r["name"] for r in conn.execute("PRAGMA table_info(agents)")}
+    if "role" not in acols:
         conn.execute("ALTER TABLE agents ADD COLUMN role TEXT")
+    if "session" not in acols:
+        conn.execute("ALTER TABLE agents ADD COLUMN session TEXT")
     if "auto" not in {r["name"] for r in conn.execute("PRAGMA table_info(deps)")}:
         conn.execute("ALTER TABLE deps ADD COLUMN auto INTEGER NOT NULL DEFAULT 0")
     icols = {r["name"] for r in conn.execute("PRAGMA table_info(items)")}
@@ -1689,7 +1693,7 @@ def outbox_mark(conn, notification_id, ok, error=None):
     return dict(conn.execute("SELECT * FROM notifications WHERE id=?", (notification_id,)).fetchone())
 
 
-def register(conn, name, human=False, note=""):
+def register(conn, name, human=False, note="", session=None):
     if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", name):
         raise RiverError("agent names use letters, digits, '.', '_', '-' (up to 64)")
     t = iso(now())
@@ -1699,6 +1703,21 @@ def register(conn, name, human=False, note=""):
             "ON CONFLICT(name) DO UPDATE SET kind=excluded.kind, note=excluded.note, last_seen=excluded.last_seen",
             (name, "human" if human else "ai", note, t, t))
         _event(conn, None, name, f"registered as {'human' if human else 'ai'}")
+    if session:
+        set_session(conn, name, session)
+    return agent_status(conn, name)
+
+
+def set_session(conn, name, session):
+    """Record the Claude Code session an agent runs in, so people and agents can message that session."""
+    session = (session or "").strip()
+    if not session or len(session) > 128 or any(c.isspace() for c in session):
+        raise RiverError("a session name is one word of up to 128 characters (the name ListAgents shows for this session)")
+    with tx(conn):
+        old = _agent(conn, name)["session"]
+        if old != session:
+            conn.execute("UPDATE agents SET session=? WHERE name=?", (session, name))
+            _event(conn, None, name, f"session: {session}")
     return agent_status(conn, name)
 
 
@@ -2532,7 +2551,7 @@ def state(conn):
 ROLES = ("deployer", "worker", "unblocker", "planner", "idle")
 
 
-def go(conn, cwd, actor=None, project=None, role=None):
+def go(conn, cwd, actor=None, project=None, role=None, session=None):
     """One call for a fresh agent session: find the project, name the session, pick a role, and brief it."""
     if role is not None and role not in ROLES:
         raise RiverError(f"role is one of {', '.join(ROLES)}")
@@ -2562,6 +2581,8 @@ def go(conn, cwd, actor=None, project=None, role=None):
         register(conn, actor, note=f"started with river go in {area}")
         new_name = True
     activity(conn, actor)
+    if session:
+        set_session(conn, actor, session)
     with tx(conn):
         conn.execute("UPDATE agents SET role=NULL WHERE name=? AND role='planner'", (actor,))
 
@@ -2577,6 +2598,7 @@ def go(conn, cwd, actor=None, project=None, role=None):
                                for a in human_ready],
              "has_history": bool(history(conn, actor, limit=1)),
              "auto_continue": setting(conn, "auto_continue", agent=actor) == "on",
+             "session": _agent(conn, actor)["session"],
              "messages": unread(conn, actor),
              "humans": [r["name"] for r in conn.execute("SELECT name FROM agents WHERE kind='human' ORDER BY name")]}
 
