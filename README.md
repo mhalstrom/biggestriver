@@ -30,7 +30,10 @@ projects at the same time.
   more agent sessions the ready work could use right now.
 
 One SQLite file, one command (`river`), one page. Python 3.10 or later, standard
-library only. Inspired by [Beads](https://github.com/steveyegge/beads).
+library only. The page ships one vendored JavaScript library,
+[Tabulator](https://tabulator.info) 6.5.3 (MIT license, in
+`river/static/vendor/tabulator`), so its tables work offline; the graph loads
+Mermaid from a CDN. Inspired by [Beads](https://github.com/steveyegge/beads).
 
 ## Install
 
