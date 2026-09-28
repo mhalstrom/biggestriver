@@ -1,7 +1,7 @@
 import { $, esc, store, actor, toast, act, ago, left, clip, copyText, fillSelect, hooks } from "./lib.js";
-import { chip, prioNumChip, doerChip, projectChip, ownerChip, countChip } from "./components/chip.js";
+import { chip, prioNumChip, doerChip, personChip, projectChip, ownerChip, countChip } from "./components/chip.js";
 import { bar, pct, capacityBars } from "./components/bar.js";
-import { nyCard, goalCard, projCard, agentCard } from "./components/card.js";
+import { nyCard, goalCard, projCard } from "./components/card.js";
 import { itemRow, itemOrder, itemTableRows, itemTableColumns } from "./components/itemRow.js";
 import { makeTable } from "./components/table.js";
 import { makeDrawer, itemDrawerHtml, msgLine } from "./components/drawer.js";
@@ -108,17 +108,46 @@ function giveWork(a) {
 }
 
 const giveChoice = {};
+// Agents and people as a table. Name and Holds always show; on a narrow panel the other columns
+// fold into a detail row (the ▸ at the start of the row). A row is a drop target for an item row.
+let agentsTable = null;
 function renderAgents() {
   // The panel redraws every few seconds: leave it alone while someone picks from a Give work menu.
   if (document.activeElement && document.activeElement.matches("#agents select")) return;
   const hidden = S.agents.filter(a => !agentShown(a)), showIdle = $("#showIdle").checked;
   $("#showIdleWrap").classList.toggle("hidden", !hidden.length);
   $("#showIdleText").textContent = `show ${hidden.length} stopped`;
-  $("#agents").innerHTML = S.agents.filter(a => showIdle || agentShown(a)).map(a => agentCard(a, `<div class="st">${a.state}, seen ${ago(a.last_seen)}${a.note ? " · " + esc(a.note) : ""}</div>
-      ${a.role === "waiting" && !a.holds.length ? giveWork(a) : ""}
+  agentsTable ||= makeTable($("#agents"), { key: "agents", index: "name", placeholder: "No agents registered.",
+    responsiveLayout: "collapse", responsiveLayoutCollapseStartOpen: false,
+    rowFormatter: (row) => { row.getElement().dataset.agent = row.getData().name; },
+    columns: [
+      { formatter: "responsiveCollapse", width: 28, minWidth: 28, headerSort: false, filter: false, resizable: false },
+      { title: "Name", field: "name", minWidth: 120, widthGrow: 1, responsive: 0, cssClass: "wrap",
+        html: (r) => `<span class="dot ${r.state}"></span><span class="nm">${esc(r.name)}</span>${r.a.note ? `<div class="st">${esc(r.a.note)}</div>` : ""}` },
+      { title: "Holds", field: "holds", minWidth: 140, widthGrow: 1, responsive: 0, cssClass: "wrap", html: (r) => agentHolds(r.a) },
+      { title: "Status", field: "state", width: 90, filter: "select", responsive: 1 },
+      { title: "Kind", field: "kind", width: 80, filter: "select", responsive: 2, html: (r) => personChip(r.a.kind) },
+      { title: "Role", field: "role", width: 90, filter: "select", responsive: 2 },
+      { title: "Seen", field: "last_seen", width: 84, filter: false, responsive: 3, html: (r) => ago(r.last_seen) },
+      { title: "Session", field: "session", width: 150, responsive: 4, cssClass: "wrap", html: (r) => agentSession(r.a) },
+    ] });
+  agentsTable.set(S.agents.filter(a => showIdle || agentShown(a)).map(a => ({
+    name: a.name, state: a.state, kind: a.kind === "human" ? "human" : "agent", role: a.role || "", last_seen: a.last_seen,
+    session: [a.session, a.session_ref].filter(Boolean).join(" "), a,
+    holds: a.holds.map(h => `#${h.id} ${h.title}`).join(" "),
+    // what the Holds cell shows changes with time, so it is part of the row
+    view: agentHolds(a),
+  })));
+}
+// What an agent holds, owns, was pushed, or (while it waits) can be given.
+function agentHolds(a) {
+  return `${a.role === "waiting" && !a.holds.length ? giveWork(a) : ""}
       ${(S.goals || []).filter(g => g.owner === a.name && g.status === "open").map(g => `<div class="st">owns goal <span class="link" data-goal="${esc(g.name)}">${esc(g.name)}</span>${g.owner_expires_at ? " · " + left(g.owner_expires_at) + " left" : ""}</div>`).join("")}
       ${a.holds.map(h => `<div class="st">holds <span class="link" data-open="${h.id}">#${h.id} ${esc(h.title)}</span>${h.lease_expires_at ? " · " + left(h.lease_expires_at) + " left" : ""}</div>`).join("") || '<div class="st">holds nothing</div>'}
-      ${S.items.filter(i => i.status === "open" && i.reserved_until && i.reserved_for === a.name).map(i => `<div class="st">pushed <span class="link" data-open="${i.id}">#${i.id} ${esc(i.title)}</span> · ${left(i.reserved_until)} left · <span class="link" data-unpush="${i.id}">cancel</span></div>`).join("")}`)).join("") || `<div class="muted">No agents registered.</div>`;
+      ${S.items.filter(i => i.status === "open" && i.reserved_until && i.reserved_for === a.name).map(i => `<div class="st">pushed <span class="link" data-open="${i.id}">#${i.id} ${esc(i.title)}</span> · ${left(i.reserved_until)} left · <span class="link" data-unpush="${i.id}">cancel</span></div>`).join("")}`;
+}
+function agentSession(a) {
+  return `${a.session ? `<span title="Claude Code session">${esc(a.session)}${a.session_ref ? " [" + esc(a.session_ref) + "]" : ""}</span>` : ""}${a.session_url ? ` <a class="link" href="${esc(a.session_url)}" target="_blank" rel="noopener">open</a>` : ""}`;
 }
 
 function renderTargets() {

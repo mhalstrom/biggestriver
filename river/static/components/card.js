@@ -1,6 +1,6 @@
-// Cards: goal cards, project cards, agent cards, and the .ny cards of targets, blocked items, takeovers and the inbox.
+// Cards: goal cards, project cards, and the .ny cards of targets, blocked items, takeovers and the inbox.
 import { esc } from "../lib.js";
-import { chip, ownerChip, personChip } from "./chip.js";
+import { chip, ownerChip } from "./chip.js";
 import { bar, pct } from "./bar.js";
 
 // A .ny card: a head line, then the body. cls adds classes (for example "msg read").
@@ -39,14 +39,6 @@ export function projCard(p, closed, inner) {
         <span class="spacer"></span>
         <button class="iconbtn" data-rank="${esc(p.name)}" data-to="${p.rank - 1}" title="more important">↑</button>
         <button class="iconbtn" data-rank="${esc(p.name)}" data-to="${p.rank + 1}" title="less important">↓</button></div>
-      ${inner}
-    </div>`;
-}
-
-// An agent or person: state dot, name, kind, session links, then the caller's lines.
-export function agentCard(a, inner) {
-  return `<div class="agent" data-agent="${esc(a.name)}">
-      <div><span class="dot ${a.state}"></span><span class="nm">${esc(a.name)}</span> ${personChip(a.kind)}${a.session_url ? ` <a class="link" style="font-size:12px" href="${esc(a.session_url)}" target="_blank" rel="noopener">open session</a>` : ""}${a.session ? ` <span class="muted" style="font-size:12px" title="Claude Code session">session ${esc(a.session)}${a.session_ref ? " [" + esc(a.session_ref) + "]" : ""}</span>` : ""}</div>
       ${inner}
     </div>`;
 }
