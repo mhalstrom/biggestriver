@@ -41,7 +41,20 @@ def launch_agent(conn, project=None, runner=None):
                          "start one yourself: cd <project folder> && claude go")
     t = core.launch_target(conn, project)
     shell = f"cd {shlex.quote(t['path'])} && {t['command']}"
-    script = f'tell application "Terminal"\n  activate\n  do script {_applescript_str(shell)}\nend tell'
+    cmd = _applescript_str(shell)
+    if t["launch_in"] == "tab":
+        # Terminal has no "new tab" command: press Command-T in it, then run the command in that tab.
+        # Pressing keys needs the Accessibility permission once; without it, fall back to a new window.
+        script = "\n".join([
+            'tell application "Terminal"', '  activate', '  set hasWindow to (count of windows) > 0', 'end tell',
+            'if hasWindow then', '  try',
+            '    tell application "System Events" to tell process "Terminal" to keystroke "t" using command down',
+            '    delay 0.5',
+            f'    tell application "Terminal" to do script {cmd} in selected tab of front window',
+            '  on error', f'    tell application "Terminal" to do script {cmd}', '  end try',
+            'else', f'  tell application "Terminal" to do script {cmd}', 'end if'])
+    else:
+        script = f'tell application "Terminal"\n  activate\n  do script {cmd}\nend tell'
     try:
         (runner or (lambda s: subprocess.run(["osascript", "-e", s], check=True, capture_output=True,
                                              text=True, timeout=20)))(script)

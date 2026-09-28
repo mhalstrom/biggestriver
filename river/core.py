@@ -60,6 +60,7 @@ DEFAULT_SETTINGS = {
     "auto_continue": "on",
     "due_warn_before": "3d",
     "launch_command": "claude go",
+    "launch_in": "tab",
 }
 
 SCHEMA = """
@@ -549,6 +550,8 @@ def config_set(conn, key, value, project=None, item=None, agent=None, actor=None
     elif key in ("keep_prereq_limit", "replan_threshold", "max_leases", "serve_port", "smtp_port"):
         if not value.isdigit():
             raise RiverError(f"{key} takes a whole number")
+    elif key == "launch_in" and value not in ("tab", "window"):
+        raise RiverError("launch_in is tab or window")
     elif key == "auto_continue" and value not in ("on", "off"):
         raise RiverError("auto_continue is on or off")
     elif key == "default_prerequisite_mode" and value not in ("keep", "release"):
@@ -3168,7 +3171,8 @@ def launch_target(conn, project=None):
         raise RiverError(f"project {p['name']} has no folder, so river cannot start a session there: "
                          f"river project path {p['name']} <folder>")
     return {"project": p["name"], "path": p["path"], "item": {"id": top["id"], "title": top["title"]},
-            "ready": len(pool), "command": setting(conn, "launch_command", project_id=p["id"])}
+            "ready": len(pool), "command": setting(conn, "launch_command", project_id=p["id"]),
+            "launch_in": setting(conn, "launch_in", project_id=p["id"])}
 
 
 def recent_events(conn, limit=40):

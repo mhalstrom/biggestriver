@@ -131,6 +131,11 @@ class LaunchAgent(unittest.TestCase):
         t = server.launch_agent(self.c, runner=sent.append)
         self.assertEqual((t["project"], t["item"]["id"], t["command"]), ("shop", x, "claude go"))
         self.assertIn('tell application "Terminal"', sent[0])
+        self.assertIn('keystroke "t" using command down', sent[0])  # a new tab by default
+        core.config_set(self.c, "launch_in", "window")
+        server.launch_agent(self.c, runner=sent.append)
+        self.assertNotIn("keystroke", sent[-1])
+        core.config_set(self.c, "launch_in", "tab")
         self.assertIn("claude go", sent[0])
         self.assertIn('my \\"shop\\" app', sent[0])  # quotes escaped inside the AppleScript string
         core.config_set(self.c, "launch_command", "claude --model opus go")
