@@ -511,6 +511,11 @@ def build_parser():
     x = sub.add_parser("serve", help="the web page on 127.0.0.1")
     x.add_argument("--port", type=int); x.add_argument("--open", action="store_true")
     x.add_argument("--dev", action="store_true", help="restart on code change; the page reloads itself")
+    db = sub.add_parser("db", help="where the queue database is, and moving it to ~/.biggestriver")
+    dbs = db.add_subparsers(dest="dcmd", required=True)
+    dbs.add_parser("path", help="print the database file river uses")
+    x = dbs.add_parser("move", help="copy a clone's data/river.db to ~/.biggestriver/river.db and use it from now on")
+    x.add_argument("--force", action="store_true", help="even when agents were active in the last 10 minutes")
     sub.add_parser("mcp", help="an MCP server on stdin/stdout, for agents that cannot run shell commands")
     x = sub.add_parser("guide", help="how to use river: worker loop, planner, or agent setup")
     x.add_argument("which", nargs="?", default="river", choices=["river", "planner", "river-planner", "setup"])
@@ -534,6 +539,13 @@ def run(argv=None):
         return 0
     if args.cmd == "init":
         return init_folder(args)
+    if args.cmd == "db":
+        if args.dcmd == "move":
+            r = core.db_move(args.force)
+            print(f"moved {r['items']} items: {r['from']} -> {r['to']}; the old file is kept as {r['backup']}")
+        else:
+            print(core.db_path())
+        return 0
     if args.cmd == "mcp":
         from . import mcp
         mcp.serve()

@@ -47,8 +47,12 @@ dependencies):
 pipx install git+https://github.com/mhalstrom/biggestriver
 ```
 
-The package carries the agent guides (`river guide`, `river guide planner`). The queue database is `data/river.db` in the clone; set `RIVER_DB` to
-use another file.
+The package carries the agent guides (`river guide`, `river guide planner`). The queue database is one file per user, `~/.biggestriver/river.db`; set
+`RIVER_DB` to use another file. A clone that already has `data/river.db`
+keeps using it until you run `river db move`, which copies it to the home
+folder (stop agent sessions and `river serve` first). `river db path` shows
+the file in use. If your agents run in a sandbox, allow them to write to
+`~/.biggestriver` before you move it.
 
 ## Set up a project
 

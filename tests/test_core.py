@@ -982,6 +982,39 @@ class GoalOwners(Base):
         self.assertIsNone(core.goal_show(self.c, "g1")["owner"])
 
 
+class DbLocation(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.old = (core.HOME_DB, core.LEGACY_DB, os.environ.pop("RIVER_DB", None))
+        core.HOME_DB = __import__("pathlib").Path(self.dir.name, "home", "river.db")
+        core.LEGACY_DB = __import__("pathlib").Path(self.dir.name, "clone", "data", "river.db")
+
+    def tearDown(self):
+        core.HOME_DB, core.LEGACY_DB, env = self.old
+        if env is not None:
+            os.environ["RIVER_DB"] = env
+        self.dir.cleanup()
+
+    def test_clone_keeps_its_file_until_moved(self):
+        self.assertEqual(core.db_path(), core.HOME_DB)  # nothing yet: the home file
+        c = core.connect(core.LEGACY_DB)
+        core.project_add(c, "a")
+        core.item_add(c, "a", "x")
+        core.register(c, "busy-agent")
+        c.close()
+        self.assertEqual(core.db_path(), core.LEGACY_DB)  # a clone with data keeps using it
+        with self.assertRaises(RiverError):
+            core.db_move()  # an agent was active a moment ago
+        r = core.db_move(force=True)
+        self.assertEqual((r["items"], core.db_path()), (1, core.HOME_DB))
+        self.assertFalse(core.LEGACY_DB.exists())
+        c = core.connect()
+        self.assertEqual(c.execute("SELECT title FROM items").fetchone()[0], "x")
+        c.close()
+        with self.assertRaises(RiverError):
+            core.db_move(force=True)  # already moved
+
+
 class Sessions(Base):
     def test_session_name_recorded_and_shown(self):
         core.project_add(self.c, "a", path=self.dir.name)

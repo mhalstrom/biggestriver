@@ -12,7 +12,10 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-DEFAULT_DB = Path(__file__).resolve().parent.parent / "data" / "river.db"
+# One database per user. A repository clone that already has data/river.db keeps using it until
+# `river db move` copies it to the home folder (sandboxed agents may not be allowed to write there yet).
+HOME_DB = Path("~/.biggestriver/river.db")
+LEGACY_DB = Path(__file__).resolve().parent.parent / "data" / "river.db"
 
 OPEN_STATES = ("open", "in_progress", "held")
 CLOSED_STATES = ("done", "dropped")
@@ -364,7 +367,51 @@ def show_time(iso_s: str | None, zone: str = "") -> str:
 # ---------------------------------------------------------------- connection
 
 def db_path() -> Path:
-    return Path(os.environ.get("RIVER_DB", DEFAULT_DB)).expanduser()
+    """RIVER_DB, else ~/.biggestriver/river.db, except that an existing data/river.db in a clone is kept
+    while the home file does not exist yet."""
+    if os.environ.get("RIVER_DB"):
+        return Path(os.environ["RIVER_DB"]).expanduser()
+    home = HOME_DB.expanduser()
+    return LEGACY_DB if not home.exists() and LEGACY_DB.exists() else home
+
+
+def db_move(force=False):
+    """Copy the clone's data/river.db to ~/.biggestriver/river.db (SQLite backup, safe while it is open),
+    then rename the old file to river.db.moved so every later command uses the new one."""
+    if os.environ.get("RIVER_DB"):
+        raise RiverError("RIVER_DB is set, so river does not use the default location; unset it first")
+    src, dst = LEGACY_DB, HOME_DB.expanduser()
+    if dst.exists():
+        raise RiverError(f"{dst} exists already; river uses it (river db path)")
+    if not src.exists():
+        raise RiverError(f"no {src} to move; river already uses {dst}")
+    old = connect(src)
+    try:
+        if not force:
+            busy = [r["name"] for r in old.execute("SELECT name, last_seen FROM agents WHERE kind='ai'")
+                    if parse_iso(r["last_seen"]) > now() - timedelta(minutes=10)]
+            if busy:
+                raise RiverError(f"agents were active in the last 10 minutes ({', '.join(busy)}); they would keep "
+                                 f"writing to the old file. Stop them (and river serve), then run it again, "
+                                 f"or add --force")
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dst.with_suffix(".db.tmp")
+        new = sqlite3.connect(tmp)
+        try:
+            old.backup(new)
+        finally:
+            new.close()
+        tmp.rename(dst)
+        n = old.execute("SELECT COUNT(*) FROM items").fetchone()[0]
+        old.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        old.close()
+    src.rename(src.with_suffix(".db.moved"))
+    for side in ("-wal", "-shm"):
+        f = Path(str(src) + side)
+        if f.exists():
+            f.unlink()
+    return {"from": str(src), "to": str(dst), "items": n, "backup": str(src.with_suffix(".db.moved"))}
 
 
 def connect(path: Path | str | None = None) -> sqlite3.Connection:
