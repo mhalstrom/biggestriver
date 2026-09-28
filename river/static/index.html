@@ -158,6 +158,28 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
 .goal .go { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .goal .ga { margin-top: 3px; display: flex; gap: 8px; }
 .c-goal { border-color: var(--accent); color: var(--accent); }
+.strip { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.strip button { display: flex; gap: 8px; align-items: baseline; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; cursor: pointer; color: var(--muted); font-size: 12px; }
+.strip button b { font-size: 18px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.strip button.hum b { color: var(--human); } .strip button.good b { color: var(--ready); } .strip button.bad b { color: var(--warn); }
+.strip button:hover { border-color: var(--accent); }
+.dash { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr) minmax(0, .8fr); gap: 16px; align-items: start; }
+.dash .col { max-height: calc(100vh - 150px); overflow-y: auto; padding-right: 2px; }
+.dash .col .panel:last-child { margin-bottom: 0; }
+@media (max-width: 1100px) { .dash { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); } #colAgents { grid-column: 1 / -1; max-height: none; overflow: visible; } }
+@media (max-width: 800px) { .dash { grid-template-columns: 1fr; } .dash .col { max-height: none; overflow: visible; } }
+.nyl { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 6px 4px; border-top: 1px solid var(--line); cursor: pointer; }
+.nyl:first-child { border-top: none; }
+.nyl:hover { background: var(--bg); }
+.nyl .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nyx { padding: 0 4px 8px; }
+.wp { border-top: 1px solid var(--line); }
+.wp:first-child { border-top: none; }
+.wp-h { display: flex; gap: 8px; align-items: baseline; padding: 7px 4px; cursor: pointer; }
+.wp-h:hover { background: var(--bg); }
+.wp-h .tw { color: var(--muted); width: 12px; }
+.wp-h .counts { color: var(--muted); font-size: 12px; margin-left: auto; white-space: nowrap; }
+.wp-items { padding: 0 0 6px 16px; }
 .hidden { display: none !important; }
 </style>
 </head>
@@ -166,6 +188,9 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
   <h1>Biggest River</h1>
   <nav>
     <button data-tab="board" class="on">Board</button>
+    <button data-tab="projects">Projects</button>
+    <button data-tab="targets">Targets</button>
+    <button data-tab="capacity">Capacity</button>
     <button data-tab="graph">Graph</button>
     <button data-tab="done">Done</button>
     <button data-tab="settings">Settings</button>
@@ -179,14 +204,17 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
 
 <main>
   <section id="tab-board">
+    <div class="strip" id="strip"></div>
+    <div class="dash">
+      <div class="col" id="colNeeds">
     <div class="panel hidden" id="takeoverPanel">
-      <h2>Agents took these off your list</h2>
       <div id="takeovers"></div>
     </div>
     <div class="panel hidden" id="needsYouPanel">
-      <h2>Needs you <span class="spacer"></span><button class="btn" id="copyAll" title="One prompt for an agent that walks you through all of these">Copy prompt for all</button><button class="btn hidden" id="notifyOn">Turn on browser notifications</button></h2>
+      <h2>Needs you <span class="spacer"></span><button class="btn" id="copyAll" title="Copy one prompt for an agent that walks you through all of these">Copy prompt</button><button class="btn hidden" id="notifyOn" title="Turn on browser notifications">Notify me</button></h2>
       <div id="needsYou"></div>
     </div>
+        <div class="panel muted hidden" id="nothingForYou" style="font-size:13px">Nothing waits on you now.</div>
     <div class="panel hidden" id="inboxPanel">
       <h2><span id="inboxTitle">Inbox</span> <span class="spacer"></span><label class="sub"><input type="checkbox" id="inboxAll"> show read</label></h2>
       <div id="inbox"></div>
@@ -198,14 +226,8 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
         <button class="btn" id="sendGo">Send</button>
       </div>
     </div>
-    <div class="panel hidden" id="blockedPanel">
-      <h2>Blocked outside the queue</h2>
-      <div id="blockedList"></div>
-    </div>
-    <div class="panel" id="capacity"></div>
-    <div class="panel hidden" id="targetsPanel"><h2>Deploy targets</h2><div id="targets"></div></div>
-    <div class="grid">
-      <div>
+      </div>
+      <div class="col" id="colWork">
         <div class="panel">
           <h2>Next up
             <span class="spacer"></span>
@@ -215,11 +237,11 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
           <div id="next"></div>
         </div>
         <div class="panel">
-          <h2>Projects <span class="spacer"></span><select id="goalFilter" title="Show only the items of one goal"><option value="">All goals</option><option value="__none">No goal</option></select><label class="sub"><input type="checkbox" id="showDone"> show done</label></h2>
-          <div id="projects"></div>
+          <h2>Work <span class="spacer"></span><span class="link" data-tab="projects" style="text-transform:none;letter-spacing:0">all items</span></h2>
+          <div id="work"></div>
         </div>
       </div>
-      <div>
+      <div class="col" id="colAgents">
         <div class="panel"><h2>Agents <span class="spacer"></span><label class="sub hidden" id="showIdleWrap"><input type="checkbox" id="showIdle"> <span id="showIdleText"></span></label></h2><div id="agents"></div>
           <details style="margin-top:8px"><summary>Register an agent or person</summary>
             <div class="form" style="margin-top:8px">
@@ -229,6 +251,24 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
             </div>
           </details>
         </div>
+        <div class="panel"><h2>Recent</h2><div id="events"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-projects" class="hidden">
+    <div class="grid">
+      <div>
+        <div class="panel">
+          <h2>Projects <span class="spacer"></span><select id="goalFilter" title="Show only the items of one goal"><option value="">All goals</option><option value="__none">No goal</option></select><label class="sub"><input type="checkbox" id="showDone"> show done</label></h2>
+          <div id="projects"></div>
+        </div>
+      </div>
+      <div>
+    <div class="panel hidden" id="blockedPanel">
+      <h2>Blocked outside the queue</h2>
+      <div id="blockedList"></div>
+    </div>
         <div class="panel"><h2>Add item</h2>
           <div class="form">
             <input id="addTitle" placeholder="Title">
@@ -257,9 +297,16 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
             <div class="form" style="margin-top:8px"><input id="projName" placeholder="name (lower-case)"><button class="btn" id="projGo">Add project</button></div>
           </details>
         </div>
-        <div class="panel"><h2>Recent</h2><div id="events"></div></div>
       </div>
     </div>
+  </section>
+
+  <section id="tab-targets" class="hidden">
+    <div class="panel" id="targetsPanel"><h2>Deploy targets</h2><div id="targets"></div></div>
+  </section>
+
+  <section id="tab-capacity" class="hidden">
+    <div class="panel" id="capacity"></div>
   </section>
 
   <section id="tab-graph" class="hidden">
@@ -408,7 +455,7 @@ function renderNext() {
   const area = $("#area").value;
   if (area === "__mine") { $("#next").innerHTML = `<div class="muted">Use <b>Claim next</b>: the server picks the ready item closest to what "${esc(actor() || "(choose Acting as)")}" claimed or finished before.</div>`; return; }
   const ready = S.items.filter(i => i.ready && (!area || i.project === area) && inGoal(i));
-  $("#next").innerHTML = ready.slice(0, 10).map(i => rowHtml(i, i.reason)).join("") || `<div class="muted">Nothing is ready${area ? " in " + esc(area) : ""}.</div>`;
+  $("#next").innerHTML = ready.slice(0, 5).map(i => rowHtml(i, i.reason)).join("") || `<div class="muted">Nothing is ready${area ? " in " + esc(area) : ""}.</div>`;
 }
 
 function renderProjects() {
@@ -465,7 +512,6 @@ function renderAgents() {
 
 function renderTargets() {
   const T = S.targets || [];
-  $("#targetsPanel").classList.toggle("hidden", !T.length);
   const shipList = (s) => s.map(x => `<span class="link" data-open="${x.id}">#${x.id}</span> ${esc(clip(x.title, 50))} <span class="muted">(${esc(x.status.replace("_", " "))})</span>`).join("; ") || '<span class="muted">nothing yet</span>';
   $("#targets").innerHTML = T.map(t => `<div class="ny">
       <div class="ny-h"><b>${esc(t.name)}</b>
@@ -474,7 +520,7 @@ function renderTargets() {
       ${t.description ? `<div class="ny-c">${esc(clip(t.description, 300))}</div>` : ""}
       ${t.pending.map(d => `<div class="st" style="margin-top:4px"><span class="link" data-open="${d.id}">#${d.id}</span> ${d.ready ? "ready to deploy" : d.status === "open" ? "collecting" : esc(d.status.replace("_", " ")) + (d.assignee ? " · " + esc(d.assignee) : "")}: ${shipList(d.ships)}</div>`).join("") || '<div class="st muted">No pending ship requests.</div>'}
       ${t.last_deploy ? `<div class="st" style="margin-top:4px">Last deploy <span class="link" data-open="${t.last_deploy.id}">#${t.last_deploy.id}</span> ${ago(t.last_deploy.closed_at)}${t.last_deploy.output ? ": " + esc(clip(t.last_deploy.output, 200)) : ""}<div class="muted" style="font-size:12px">shipped ${shipList(t.last_deploy.ships)}</div></div>` : '<div class="st muted">Never deployed.</div>'}
-    </div>`).join("");
+    </div>`).join("") || `<div class="muted">No deploy targets. Add one: river target add &lt;name&gt; --description "how it deploys"</div>`;
 }
 
 function renderBlocked() {
@@ -486,14 +532,47 @@ function renderBlocked() {
       <div class="muted" style="font-size:12px">${i.blocked_at ? "since " + ago(i.blocked_at) : "since: not recorded"} · ${i.blocked_until ? `until ${esc(i.blocked_until_text)} (${left(i.blocked_until)} left), then ready by itself` : "until someone clears it"}${i.blocked_set_by ? " · set by " + esc(i.blocked_set_by) : ""}</div></div>`).join("");
 }
 
+let takeoversOpen = false;
 function renderTakeovers() {
   const T = S.takeovers || [];
   $("#takeoverPanel").classList.toggle("hidden", !T.length);
   const words = { "took over": "took over", "done": "marked done", "dropped": "dropped" };
-  $("#takeovers").innerHTML = T.map(t => `<div class="ny">
+  const head = `<div class="nyl" data-takeovers-toggle="1"><span class="t">${takeoversOpen ? "▾" : "▸"} ${T.length} item${T.length === 1 ? "" : "s"} an agent took off your list: review or undo</span><span class="chips"><button class="btn" data-takeovers-okall="1" title="Accept all of them">OK all</button></span></div>`;
+  if (!takeoversOpen) { $("#takeovers").innerHTML = head; return; }
+  $("#takeovers").innerHTML = head + T.map(t => `<div class="ny">
       <div class="ny-h"><b>#${t.id} ${esc(t.title)}</b> <span class="chip c-p">${esc(t.project)}</span><span class="muted" style="font-size:12px">${ago(t.takeover_at)}</span></div>
       <div class="ny-c"><b>${esc(t.takeover_by)}</b> ${words[t.takeover_kind] || t.takeover_kind} it: ${esc(t.takeover_note || "")}</div>
       <div class="actions"><button class="btn" data-open="${t.id}">Open</button><button class="btn" data-undo-takeover="${t.id}">Undo: give it back to me</button><button class="btn primary" data-takeover-ok="${t.id}">OK</button></div></div>`).join("");
+}
+
+// The status strip: counts you click to go where they are.
+function renderStrip() {
+  if (!S) return;
+  const ready = S.items.filter(i => i.ready && i.doer !== "human").length;
+  const running = S.items.filter(i => ["in_progress", "held"].includes(i.status)).length;
+  const blocked = S.items.filter(i => i.blocked_reason && !["done", "dropped"].includes(i.status)).length;
+  const T = (S.takeovers || []).length, slots = S.capacity ? S.capacity.spare_slots : 0;
+  const b = (n, label, go, cls) => `<button data-strip="${go}" class="${n ? cls : ""}"><b>${n}</b>${label}</button>`;
+  $("#strip").innerHTML = b(NY.length, "need you", "needs", "hum") + (T ? b(T, "taken off your list", "takeovers", "hum") : "")
+    + b(ready, "ready for agents", "work", "good") + b(running, "in progress", "work", "")
+    + b(blocked, "blocked outside", "blocked", "bad") + b(slots, "open agent slots", "capacity", "good");
+}
+
+// Work column: one row per project; a click opens its open items (ready first).
+function workOpen() { try { return new Set(JSON.parse(store("river.work.open") || "[]")); } catch (e) { return new Set(); } }
+function renderWork() {
+  const open = workOpen();
+  const order = (a, b) => (b.ready - a.ready) || (a.effective_priority - b.effective_priority) || (b.unblocks_count - a.unblocks_count) || (a.rank - b.rank);
+  $("#work").innerHTML = S.projects.map(p => {
+    const items = S.items.filter(i => i.project === p.name && !["done", "dropped"].includes(i.status));
+    if (!items.length) return "";
+    const ready = items.filter(i => i.ready).length, run = items.filter(i => ["in_progress", "held"].includes(i.status)).length;
+    const hum = items.filter(i => i.ready && i.doer === "human").length;
+    const isOpen = open.has(p.name), shown = items.sort(order).slice(0, 8);
+    return `<div class="wp"><div class="wp-h" data-wp="${esc(p.name)}"><span class="tw">${isOpen ? "▾" : "▸"}</span><b>${esc(p.name)}</b>
+        <span class="counts">${items.length} open · ${ready} ready${run ? ` · ${run} running` : ""}${hum ? ` · ${hum} for you` : ""}</span></div>
+      ${isOpen ? `<div class="wp-items">${shown.map(i => rowHtml(i)).join("")}${items.length > shown.length ? `<div class="muted" style="font-size:12px;padding:4px 6px">${items.length - shown.length} more: <span class="link" data-tab="projects">Projects tab</span></div>` : ""}</div>` : ""}</div>`;
+  }).join("") || `<div class="muted">No open items.</div>`;
 }
 
 function renderEvents() {
@@ -802,6 +881,7 @@ async function toggleThread(msg) {
 
 // ---- Needs you: decisions and steps waiting for a person, with browser notifications.
 let NY = [], nySig = "";
+const nyOpen = new Set();
 function humanActor() { const a = S && S.agents.find(x => x.name === actor()); return a && a.kind === "human" ? a.name : null; }
 function clip(s, n) { s = String(s || "").trim(); return s.length > n ? s.slice(0, n) + "…" : s; }
 
@@ -816,7 +896,9 @@ function renderNeedsYou() {
   document.title = NY.length ? `(${NY.length}) Biggest River` : "Biggest River";
   $("#notifyOn").classList.toggle("hidden", !("Notification" in window) || Notification.permission !== "default");
   $("#needsYouPanel").classList.toggle("hidden", !NY.length);
-  const sig = JSON.stringify(NY.map(e => [e.id, e.summary, e.item_status]));
+  $("#nothingForYou").classList.toggle("hidden", !!NY.length || !!(S && (S.takeovers || []).length));
+  renderStrip();
+  const sig = JSON.stringify([NY.map(e => [e.id, e.summary, e.item_status]), [...nyOpen]]);
   if (sig === nySig) return;
   nySig = sig;
   $("#needsYou").innerHTML = NY.map(e => {
@@ -828,11 +910,12 @@ function renderNeedsYou() {
           ? `<button class="btn primary" data-ny="answer" data-msg="${e.message_id}">Answer</button>`
           : `<button class="btn" data-ny="read" data-msg="${e.message_id}">Mark read</button>`)
         + (e.item_id ? `<button class="btn" data-open="${e.item_id}">Open #${e.item_id}</button>` : "");
-    return `<div class="ny">
-      <div class="ny-h"><b>${esc(isItem ? `#${e.item_id} ${e.item_title}` : `${e.message_kind} from ${e.from_agent}`)}</b>
-        ${e.priority != null ? `<span class="chip" title="${esc(e.priority_from ? `priority from #${e.priority_from}` : "own priority")}${e.unblocks_count ? `; unblocks ${e.unblocks_count}` : ""}">P${e.priority}</span>` : ""}${e.project ? `<span class="chip c-p">${esc(e.project)}</span>` : ""}<span class="muted" style="font-size:12px">${ago(e.opened_at)}</span></div>
-      ${detail ? `<div class="ny-c">${esc(clip(detail, 500))}</div>` : ""}
-      <div class="actions">${buttons}</div></div>`;
+    // One line each; a click opens the details and the buttons (design: the Board fits one screen).
+    const title = isItem ? `#${e.item_id} ${e.item_title}` : `${e.message_kind} from ${e.from_agent}: ${e.body || ""}`;
+    const open = nyOpen.has(e.id);
+    return `<div class="nyl" data-nyt="${e.id}" title="${esc(clip(detail || title, 300))}"><span class="t">${esc(title)}</span>
+        <span class="chips">${e.priority != null ? `<span class="chip ${e.priority === 0 ? "c-p0" : "c-p"}" title="${esc(e.priority_from ? `priority from #${e.priority_from}` : "own priority")}${e.unblocks_count ? `; unblocks ${e.unblocks_count}` : ""}">P${e.priority}</span>` : ""}${e.project ? `<span class="chip c-p">${esc(e.project)}</span>` : ""}</span></div>
+      ${open ? `<div class="nyx"><div class="muted" style="font-size:12px">${ago(e.opened_at)}${e.project ? " · " + esc(e.project) : ""}</div>${detail ? `<div class="ny-c">${esc(clip(detail, 800))}</div>` : ""}<div class="actions">${buttons}</div></div>` : ""}`;
   }).join("");
 }
 
@@ -882,7 +965,7 @@ async function needsYouAction(t) {
 async function refresh() {
   const r = await fetch("/api/state"); S = await r.json();
   if (S.dev_build) { if (window._build && window._build !== S.dev_build) return location.reload(); window._build = S.dev_build; }
-  renderSelects(); renderCapacity(); renderNext(); renderProjects(); renderAgents(); renderEvents(); renderSettings(); renderTakeovers(); renderBlocked(); renderTargets();
+  renderSelects(); renderCapacity(); renderNext(); renderProjects(); renderWork(); renderStrip(); renderAgents(); renderEvents(); renderSettings(); renderTakeovers(); renderBlocked(); renderTargets();
   renderGraph(false); renderLog(false); pollNeedsYou().catch(() => {}); pollInbox().catch(() => {});
   $("#stamp").textContent = "updated " + new Date().toLocaleTimeString();
   if (openItem != null && $("#drawer").classList.contains("open")) openDrawer(openItem);
@@ -890,7 +973,17 @@ async function refresh() {
 
 document.addEventListener("click", async (e) => {
   const t = e.target;
-  if (t.dataset.addgoal) { const d = $("#goalName").closest("details"); d.open = true; $("#goalProject").value = t.dataset.addgoal; d.scrollIntoView({ block: "center" }); $("#goalName").focus(); return; }
+  const nyt = t.closest("[data-nyt]"); if (nyt && !t.closest("button")) { const id = +nyt.dataset.nyt; nyOpen.has(id) ? nyOpen.delete(id) : nyOpen.add(id); return renderNeedsYou(); }
+  if (t.dataset.takeoversOkall) { for (const x of S.takeovers || []) await act("takeover_seen", { id: x.id }).catch(() => {}); return; }
+  if (t.closest("[data-takeovers-toggle]") && !t.closest("button")) { takeoversOpen = !takeoversOpen; return renderTakeovers(); }
+  const wp = t.closest("[data-wp]"); if (wp) { const o = workOpen(), n = wp.dataset.wp; o.has(n) ? o.delete(n) : o.add(n); store("river.work.open", JSON.stringify([...o])); return renderWork(); }
+  const sb = t.closest("[data-strip]"); if (sb) { const go = sb.dataset.strip;
+    if (go === "blocked") { await setTab("projects"); return $("#blockedPanel").scrollIntoView({ block: "start" }); }
+    if (go === "capacity") return setTab("capacity");
+    await setTab("board");
+    if (go === "takeovers") { takeoversOpen = true; renderTakeovers(); }
+    return $(go === "work" ? "#colWork" : "#colNeeds").scrollIntoView({ block: "start" }); }
+  if (t.dataset.addgoal) { await setTab("projects"); const d = $("#goalName").closest("details"); d.open = true; $("#goalProject").value = t.dataset.addgoal; d.scrollIntoView({ block: "center" }); $("#goalName").focus(); return; }
   if (t.dataset.goalAct) return goalAction(t.dataset.goalAct, t.dataset.g);
   if (t.dataset.untag) { await act("item_edit", { id: openItem, untag: [t.dataset.untag] }).catch(() => {}); return openDrawer(openItem); }
   const card = t.closest("[data-goal]"); if (card) { const g = card.dataset.goal; setGoal(goalSel() === g ? "" : g); return; }
@@ -1006,9 +1099,10 @@ document.addEventListener("drop", async (e) => {
   await act("push", { id, to: a.dataset.agent }).then(() => toast(`Pushed #${id} to ${a.dataset.agent}`)).catch(() => {});
 });
 
+const TABS = ["board", "projects", "targets", "capacity", "graph", "done", "settings"];
 function setTab(name) {
   tab = name; document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.tab === tab));
-  for (const s of ["board", "graph", "done", "settings"]) $("#tab-" + s).classList.toggle("hidden", s !== tab);
+  for (const s of TABS) $("#tab-" + s).classList.toggle("hidden", s !== tab);
   renderLog(true);
   return renderGraph(true);
 }
@@ -1018,7 +1112,7 @@ async function openFromHash() {
     const m = part.match(/^(item|tab|as)-(.+)$/); if (!m) continue;
     const v = decodeURIComponent(m[2]);
     if (m[1] === "as" && [...$("#actor").options].some(o => o.value === v)) { $("#actor").value = v; store("river.actor", v); ibSig = ""; await pollInbox().catch(() => {}); }
-    if (m[1] === "tab" && ["board", "graph", "done", "settings"].includes(v)) await setTab(v);
+    if (m[1] === "tab" && TABS.includes(v)) await setTab(v);
     if (m[1] === "item") await openDrawer(+v);
   }
 }
