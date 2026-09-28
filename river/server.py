@@ -86,7 +86,7 @@ def _can_open_terminal(runner, hint):
         raise RiverError(f"starting an agent from the page works on macOS and Windows only; start one yourself: {hint}")
 
 
-def launch_agent(conn, project=None, runner=None, agent=None):
+def launch_agent(conn, project=None, runner=None, agent=None, actor=None):
     """Open a Terminal window in the project folder of the most important ready agent item and run
     the command of the chosen launch_agents entry there (default `claude go --remote-control`), so one click starts one
     agent session. macOS and Windows."""
@@ -94,7 +94,7 @@ def launch_agent(conn, project=None, runner=None, agent=None):
     top = core.launch_target(conn, project, agent)
     waiting = core.waiting_agent_for(conn, top["project"])
     if waiting:
-        core.push(conn, top["item"]["id"], waiting, "from the Start button: you were waiting for work")
+        core.push(conn, top["item"]["id"], waiting, "from the Start button: you were waiting for work", actor)
         return {**top, "pushed_to": waiting}
     _can_open_terminal(runner, "cd <project folder> && claude go")
     t = core.launch_target(conn, project, agent)
@@ -102,7 +102,7 @@ def launch_agent(conn, project=None, runner=None, agent=None):
     return t
 
 
-def dispatch_item(conn, item_id, runner=None, agent=None):
+def dispatch_item(conn, item_id, runner=None, agent=None, actor=None):
     """Start work on one ready item: a session that waits for work in its project gets it (push);
     else river names a new session, reserves the item for it (push), and opens the chosen agent in the
     project folder with RIVER_AGENT set to that name, so its first river go takes this item."""
@@ -110,17 +110,17 @@ def dispatch_item(conn, item_id, runner=None, agent=None):
     t = core.launch_target(conn, agent=agent, item=item_id)
     waiting = core.waiting_agent_for(conn, t["project"])
     if waiting:
-        core.push(conn, t["item"]["id"], waiting, "from the page: Dispatch; you were waiting for work")
+        core.push(conn, t["item"]["id"], waiting, "from the page: Dispatch; you were waiting for work", actor)
         return {**t, "pushed_to": waiting}
     _can_open_terminal(runner, f"cd <project folder> && claude go, then river push {t['item']['id']} --to <its name>")
     name = f"{t['project']}-{secrets.token_hex(2)}"
     core.register(conn, name, note=f"started from the page for #{t['item']['id']}")
-    core.push(conn, t["item"]["id"], name, "from the page: Dispatch started this session for it")
+    core.push(conn, t["item"]["id"], name, "from the page: Dispatch started this session for it", actor)
     _open_terminal(t, {"RIVER_AGENT": name}, runner)
     return {**t, "session_name": name}
 
 
-def open_agent_on(conn, item_id, runner=None, agent=None, person=None):
+def open_agent_on(conn, item_id, runner=None, agent=None, person=None, actor=None):
     """Open an agent session for one item from its drawer. A ready item: Dispatch. A person's item: a
     session that does it together with the person. An item that waits: a session that first takes what
     blocks it. The session learns which from RIVER_FOCUS, which its river go reads."""
@@ -133,7 +133,7 @@ def open_agent_on(conn, item_id, runner=None, agent=None, person=None):
     if it["doer"] == "human" or mine:
         focus = f"help:{it['id']}" + (f"@{person}" if person else "")
     elif it["ready"]:
-        return dispatch_item(conn, it["id"], runner, agent)
+        return dispatch_item(conn, it["id"], runner, agent, actor)
     else:
         focus = f"unblock:{it['id']}"
     p = core._project(conn, it["project"])
@@ -454,9 +454,9 @@ OPS = {
     "setup_skills": lambda c, a, who: setup_skills(),
     "setup_agent_add": lambda c, a, who: setup_agent_add(c, a["label"], who),
     "setup_ntfy": lambda c, a, who: setup_ntfy(c, who),
-    "launch_agent": lambda c, a, who: launch_agent(c, a.get("project"), agent=a.get("agent")),
-    "dispatch_item": lambda c, a, who: dispatch_item(c, int(a["id"]), agent=a.get("agent")),
-    "open_agent_on": lambda c, a, who: open_agent_on(c, int(a["id"]), agent=a.get("agent"), person=a.get("person")),
+    "launch_agent": lambda c, a, who: launch_agent(c, a.get("project"), agent=a.get("agent"), actor=who),
+    "dispatch_item": lambda c, a, who: dispatch_item(c, int(a["id"]), agent=a.get("agent"), actor=who),
+    "open_agent_on": lambda c, a, who: open_agent_on(c, int(a["id"]), agent=a.get("agent"), person=a.get("person"), actor=who),
     "open_needs_you": lambda c, a, who: open_needs_you(c, agent=a.get("agent"), person=a.get("person")),
     "deploy_now": lambda c, a, who: deploy_now(c, a["target"], bool(a.get("review")), agent=a.get("agent"), actor=who),
     "decline_message": lambda c, a, who: core.decline_message(c, int(a["msg"]), a.get("note"), who),

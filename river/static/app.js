@@ -156,7 +156,7 @@ function renderTargets() {
   $("#targets").innerHTML = T.map(t => nyCard(`<b>${esc(t.name)}</b>
         ${ownerChip(t.owner)}${t.owner ? `<span class="muted" style="font-size:12px">${t.owner_expires_at ? left(t.owner_expires_at) + " left" : ""}</span>` : ""}
         <span class="muted" style="font-size:12px">${t.project_names.length ? "projects: " + t.project_names.map(esc).join(", ") : "no projects"}</span>`, `${t.description ? `<div class="ny-c">${esc(clip(t.description, 300))}</div>` : ""}
-      ${t.pending.map(d => `<div class="st" style="margin-top:4px"><span class="link" data-open="${d.id}">#${d.id}</span> ${d.ready ? "ready to deploy" : d.status === "open" ? "collecting" : esc(d.status.replace("_", " ")) + (d.assignee ? " · " + esc(d.assignee) : "")}: ${shipList(d.ships)}</div>`).join("") || '<div class="st muted">No pending ship requests.</div>'}
+      ${t.pending.map(d => `<div class="st" style="margin-top:4px"><span class="link" data-open="${d.id}">#${d.id}</span> ${d.ready ? "ready to deploy" : d.status === "open" ? "collecting" : esc(d.status.replace("_", " ")) + (d.assignee ? " · " + esc(d.assignee) : "")}: ${shipList(d.ships)}${d.review ? `<div class="muted" style="font-size:12px">first a review: <span class="link" data-open="${d.review.id}">#${d.review.id}</span> (${esc(d.review.status.replace("_", " "))}${d.review.assignee ? " · " + esc(d.review.assignee) : ""})</div>` : ""}</div>`).join("") || '<div class="st muted">No pending ship requests.</div>'}
       <div class="actions" style="margin-top:6px">${t.pending.some(d => d.status === "open" && d.ships.length)
         ? `<button class="btn primary" data-deploy="${esc(t.name)}" title="Start the deploy now: the owner gets an alert, or an agent opens to take it">Deploy now</button>
            <button class="btn" data-deploy="${esc(t.name)}" data-review="1" title="First one review of everything it ships (review steps per project), then the deploy">Review and deploy</button>`
@@ -186,7 +186,7 @@ function renderTakeovers() {
 // The status strip: counts you click to go where they are.
 function renderStrip() {
   if (!S) return;
-  const ready = S.items.filter(i => i.ready && i.doer !== "human").length;
+  const ready = S.items.filter(i => i.ready && i.doer !== "human" && !["deploy", "review"].includes(i.kind)).length;
   const running = S.items.filter(i => ["in_progress", "held"].includes(i.status)).length;
   const blocked = S.items.filter(i => i.blocked_reason && !["done", "dropped"].includes(i.status)).length;
   const T = (S.takeovers || []).length, slots = S.capacity ? S.capacity.spare_slots : 0;
@@ -848,7 +848,7 @@ function renderReady() {
   if (!S || !readyDialog.isOpen()) return;
   const rows = S.items.filter(i => i.ready && i.doer !== "human" && !["deploy", "review"].includes(i.kind)).sort(itemOrder);
   const LA = S.launch_agents || [], pick = $("#launchAgent") ? $("#launchAgent").value : (LA.includes(store("river.launch.agent")) ? store("river.launch.agent") : LA[0]);
-  $("#readyList").innerHTML = rows.map(i => `<div class="row"><div>
+  $("#readyList").innerHTML = rows.map(i => `<div class="rrow"><div>
       <div class="t"><span class="link" data-open="${i.id}">#${i.id} ${esc(i.title)}</span></div>
       <div class="sub">${projectChip(i.project)}${prioNumChip(i.effective_priority ?? i.priority, "priority")}${doerChip(i)}
         ${i.reserved_for ? `<span>reserved for ${esc(i.reserved_for)}${i.reserved_until ? ", " + left(i.reserved_until) + " left" : ""}</span>` : ""}</div></div>

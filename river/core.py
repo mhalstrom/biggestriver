@@ -1146,7 +1146,10 @@ def targets_view(conn, ann=None):
     """Each target with its owner, projects, open deploy items (with what they ship), and last finished deploy."""
     ann = ann if ann is not None else annotate(conn)
     ships = lambda a: [{"id": b, "title": ann[b]["title"], "status": ann[b]["status"], "project": ann[b]["project"]}
-                       for b in a["waits_on"] if b in ann]
+                       for b in a["waits_on"] if b in ann and ann[b]["kind"] != "review"]
+    review = lambda a: next(({"id": b, "status": ann[b]["status"], "assignee": ann[b]["assignee"]}
+                             for b in a["waits_on"] if b in ann and ann[b]["kind"] == "review"
+                             and ann[b]["status"] in OPEN_STATES), None)
     out = []
     for t in target_list(conn):
         deploys = [a for a in ann.values() if a["kind"] == "deploy" and a["target"] == t["name"]]
@@ -1158,7 +1161,7 @@ def targets_view(conn, ann=None):
                 "SELECT name FROM projects WHERE target=? AND archived=0 AND name<>? ORDER BY rank, id",
                 (t["name"], f"deploy-{t['name']}"))],
             pending=[{"id": a["id"], "title": a["title"], "status": a["status"], "assignee": a["assignee"],
-                      "ready": a["ready"], "ships": ships(a)} for a in pending],
+                      "ready": a["ready"], "ships": ships(a), "review": review(a)} for a in pending],
             last_deploy=({"id": last["id"], "title": last["title"], "closed_at": last["closed_at"],
                           "output": last["output"], "ships": ships(last)} if last else None),
             history=[{"id": a["id"], "title": a["title"], "closed_at": a["closed_at"], "output": a["output"],
@@ -2936,8 +2939,7 @@ def ship(conn, item_id, actor=None):
 def _release_review(conn, dep, tg, actor, force=False):
     """With review on, the open review item the deploy item waits on; started when there is none.
 
-    A new review also waits on the release's items that are still open, so it covers what a
-    finished review did not see."""
+    A new review waits on the release's items that no finished review of this deploy covered."""
     if not force and setting(conn, "review", item_id=dep["id"]) != "on":
         return None
     rv = conn.execute("SELECT i.* FROM items i JOIN deps d ON d.blocked_by=i.id WHERE d.item_id=? AND i.kind='review' "
@@ -2955,8 +2957,13 @@ def _release_review(conn, dep, tg, actor, force=False):
          setting(conn, "review_cmd", item_id=dep["id"]), tg["name"], iso(now())))
     rv = _item(conn, cur.lastrowid)
     _event(conn, rv["id"], actor, f"review for deploy #{dep['id']} ({tg['name']}) started")
-    for r in conn.execute(f"SELECT i.id FROM items i JOIN deps d ON d.blocked_by=i.id WHERE d.item_id=? "
-                          f"AND i.kind<>'review' AND i.status IN {OPEN_STATES}", (dep["id"],)).fetchall():
+    # Every shipped item that no finished review of this deploy covered (done ones too: Review and deploy
+    # can start after the work is finished).
+    for r in conn.execute("SELECT i.id FROM items i JOIN deps d ON d.blocked_by=i.id WHERE d.item_id=? "
+                          "AND i.kind<>'review' AND i.status<>'dropped' AND i.id NOT IN ("
+                          "  SELECT d2.blocked_by FROM deps d2 JOIN items r ON r.id=d2.item_id JOIN deps d3 ON d3.blocked_by=r.id "
+                          "  WHERE d3.item_id=? AND r.kind='review' AND r.status='done')",
+                          (dep["id"], dep["id"])).fetchall():
         _dep_add(conn, rv["id"], r["id"], actor)
     _dep_add(conn, dep["id"], rv["id"], actor)
     return rv

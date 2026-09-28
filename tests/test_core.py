@@ -2004,6 +2004,9 @@ class DeployNow(Base):
         core.done(self.c, a, "commit", "dev", ship_it=True)
         r = core.deploy_now(self.c, "web", review=True)
         self.assertEqual((r["start"]["kind"], r["ready"]), ("review", True))
+        self.assertIn(a, core.item_show(self.c, r["review"]["id"])["waits_on"])  # it covers the finished work
+        v = core.targets_view(self.c)[0]["pending"][0]
+        self.assertEqual(([x["id"] for x in v["ships"]], v["review"]["id"]), ([a], r["review"]["id"]))
         self.assertIn(r["review"]["id"], core.item_show(self.c, r["deploy"]["id"])["waits_on"])
         b = core.go(self.c, self.dir.name, None, focus="review:web")  # the session the page opens
         self.assertEqual((b["role"], b["item"]["id"]), ("reviewer", r["review"]["id"]))
