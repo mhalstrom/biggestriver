@@ -355,6 +355,10 @@ def setup_status(conn):
     skills = Path("~/.claude/skills").expanduser()
     agents = core.parse_launch_agents(core.setting(conn, "launch_agents"))
     have = {label for label, _ in agents}
+    # Agent programs as a new terminal finds them (the app itself has only Finder's short PATH).
+    # Agents start in a new Terminal window, so that is where their programs must be found (on Windows: PATH).
+    exes = sorted({exe for _, exe, _ in KNOWN_AGENTS} | {c.split()[0] for _, c in agents})
+    term = _login_shell_which(exes) if PLATFORM != "win32" else {e: shutil.which(e) for e in exes}
     return {
         "done": core.setting(conn, "setup_done") == "on",
         "folders": [{"path": d, "projects": names, "exists": Path(d).is_dir(),
@@ -366,7 +370,9 @@ def setup_status(conn):
         "claude_home": Path("~/.claude").expanduser().is_dir(),
         "skills": {n: ("installed" if (skills / n / "SKILL.md").is_file() else "missing") for n in ("river", "river-planner")},
         "launch_agents": [label for label, _ in agents],
-        "agent_clis": [{"label": label, "found": bool(shutil.which(exe)), "added": label in have, "command": _agent_cmd(cmd)}
+        # Each Start button agent, and whether its program is on this computer (the first word of its command).
+        "start_agents": [{"label": label, "found": bool(term.get(cmd.split()[0]))} for label, cmd in agents],
+        "agent_clis": [{"label": label, "found": bool(term.get(exe)), "added": label in have, "command": _agent_cmd(cmd)}
                        for label, exe, cmd in KNOWN_AGENTS],
         "notify_channels": core._channels(core.setting(conn, "notify_channels")),
         "ntfy_ready": bool(core.setting(conn, "ntfy_topic")),
@@ -421,20 +427,29 @@ def _launcher_path():
     return Path("~/.local/bin/river").expanduser()
 
 
-def _login_shell_river():
-    """What `river` is in a new terminal (the login shell reads the profile files), or None."""
+def _login_shell_which(names):
+    """Where a new terminal finds each command, {name: path or None}. The app runs with the short PATH
+    that Finder gives, so ask a login shell started as Terminal starts one: the system PATH, then the
+    profile files (not this process's PATH)."""
+    import re
     import subprocess
+    names = [n for n in names if re.fullmatch(r"[A-Za-z0-9._-]+", n)]
     shell = os.environ.get("SHELL") or "/bin/zsh"
-    # Start as a new Terminal window does: the system PATH, then the profile files; not this process's PATH.
     env = {k: os.environ[k] for k in ("HOME", "USER", "LOGNAME", "SHELL", "LANG", "TMPDIR") if k in os.environ}
     env.update(PATH="/usr/bin:/bin:/usr/sbin:/sbin", TERM="dumb")
+    script = "; ".join(f'printf "@@{n}=%s\\n" "$(command -v {n})"' for n in names)
     try:
-        r = subprocess.run([shell, "-ilc", "command -v river"], capture_output=True, text=True, timeout=8,
+        r = subprocess.run([shell, "-ilc", script], capture_output=True, text=True, timeout=8,
                            stdin=subprocess.DEVNULL, env=env)
     except (OSError, subprocess.SubprocessError):
-        return None
-    lines = [x.strip() for x in r.stdout.splitlines() if x.strip().startswith("/")]
-    return lines[-1] if r.returncode == 0 and lines else None
+        return {n: None for n in names}
+    found = dict(x[2:].split("=", 1) for x in r.stdout.splitlines() if x.startswith("@@") and "=" in x)
+    return {n: (found.get(n) or "").strip() if (found.get(n) or "").strip().startswith("/") else None for n in names}
+
+
+def _login_shell_river():
+    """What `river` is in a new terminal, or None."""
+    return _login_shell_which(["river"])["river"]
 
 
 def river_command_status():
@@ -506,7 +521,11 @@ def setup_agent_add(conn, label, actor=None):
         raise RiverError(f"unknown agent {label!r}")
     agents = core.parse_launch_agents(core.setting(conn, "launch_agents"))
     if label not in {a for a, _ in agents}:
-        agents.append((label, cmd))
+        # The first agent is the Start button's default: when its program is not on this computer (the
+        # default Claude Code on a Mac that has only Codex), the agent added now becomes the default.
+        first = agents[0][1].split()[0] if agents else None
+        missing = first and PLATFORM != "win32" and not _login_shell_which([first])[first]
+        agents = [(label, cmd)] + agents if missing else agents + [(label, cmd)]
         core.config_set(conn, "launch_agents", "; ".join(f"{a}={c}" for a, c in agents), actor=actor)
     return [a for a, _ in agents]
 

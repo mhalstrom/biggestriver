@@ -392,7 +392,18 @@ class SetupGuide(unittest.TestCase):
             server.setup_block(self.c, self.dir.name)
         self.assertFalse(os.path.exists(os.path.join(self.dir.name, "CLAUDE.md")))
 
+    def test_an_added_agent_becomes_the_default_when_the_first_is_not_installed(self):
+        old = server._login_shell_which
+        server._login_shell_which = lambda names: {n: None for n in names}
+        try:
+            self.assertEqual(server.setup_agent_add(self.c, "Codex"), ["Codex", "Claude Code"])
+        finally:
+            server._login_shell_which = old
+
     def test_add_agent_appends_to_launch_agents_once(self):
+        old = server._login_shell_which
+        server._login_shell_which = lambda names: {n: "/bin/" + n for n in names}
+        self.addCleanup(setattr, server, "_login_shell_which", old)
         server.setup_agent_add(self.c, "Codex")
         labels = server.setup_agent_add(self.c, "Codex")
         self.assertEqual(labels, ["Claude Code", "Codex"])

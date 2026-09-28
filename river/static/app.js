@@ -888,57 +888,88 @@ async function openSetup() {
 const setupDialog = makeDialog($("#setup"));
 function closeSetup() { setupDialog.close(); }
 function renderSetup(st) {
-  const step = (ok, title, sub, fix) => `<div class="step"><div class="mark ${ok ? "ok" : "todo"}">${ok ? "✓" : "•"}</div>
+  // The first run is a short path in order (you, river for agents, a folder, an agent, a first task, Start);
+  // each step checks itself. The first step not done yet is marked as the next one. Extras come after, folded.
+  let n = 0, next = true;
+  const step = (ok, title, sub, fix) => {
+    n++; const here = !ok && next; if (here) next = false;
+    return `<div class="step${here ? " next" : ""}"><div class="mark ${ok ? "ok" : "todo"}">${ok ? "✓" : n}</div>
+      <div><b>${title}</b>${sub ? `<div class="sub">${sub}</div>` : ""}${!ok && fix ? `<div class="fix">${fix}</div>` : ""}</div></div>`;
+  };
+  const extra = (ok, title, sub, fix) => `<div class="step"><div class="mark ${ok ? "ok" : "opt"}">${ok ? "✓" : "·"}</div>
     <div><b>${title}</b>${sub ? `<div class="sub">${sub}</div>` : ""}${!ok && fix ? `<div class="fix">${fix}</div>` : ""}</div></div>`;
   const out = [];
-  out.push(step(st.people.length > 0, "Register yourself as a person",
-    st.people.length ? "People: " + st.people.map(esc).join(", ") + ". Pick your name in the top bar." : "River shows you what needs you and sends you notifications.",
-    `<input id="suName" placeholder="your name" style="width:140px"><button class="btn" data-su="register">Register</button>`));
+  out.push(step(st.people.length > 0, "Tell river your name",
+    st.people.length ? "You're here as " + st.people.map(esc).join(", ") + ". Pick your name at the top right if it isn't chosen."
+      : "So river can show you what needs you, and let you know.",
+    `<input id="suName" placeholder="your name" style="width:160px"><button class="btn primary" data-su="register">Save</button>`));
   // Agents run `river go`: a new terminal must find the river command (the app writes a small launcher).
   const rc = st.river_cmd || {};
   if (!rc.unsupported) out.push(step(rc.ok, "Let agents use river",
-    rc.ok ? `A new terminal finds the river command${rc.shell_path ? " at " + esc(rc.shell_path) : ""}.`
-      : rc.in_app_image ? "First drag Biggest River to your Applications folder and open it from there."
-      : rc.launcher === "old" ? "The river command points at an older copy of river. Update it to this one."
-      : "Agents you start run the river command, and this computer does not have it yet. River adds it to " + esc(rc.where || "~/.local/bin") + " and tells new terminals where it is.",
-    rc.in_app_image ? "" : `<button class="btn primary" data-su="rivercmd">${rc.launcher === "old" ? "Update" : "Install"} the river command</button>`));
+    rc.ok ? `Agents can run the river command${rc.shell_path ? ` (${esc(rc.shell_path)})` : ""}.`
+      : rc.in_app_image ? "First drag Biggest River to your Applications folder, then open it from there."
+      : rc.launcher === "old" ? "The river command still points at an older copy of river. Update it to this one."
+      : "The agents you start talk to river with a small command. One click adds it to this Mac.",
+    rc.in_app_image ? "" : `<button class="btn primary" data-su="rivercmd">${rc.launcher === "old" ? "Update" : "Add"} the river command</button>`));
   // One instructions file for every agent: AGENTS.md holds the rules, CLAUDE.md imports it (@AGENTS.md).
   const blocks = st.folders.filter(f => f.exists && (f.claude_md !== "current" || f.agents_md !== "current"));
-  const layouts = { shared: "one file for every agent (CLAUDE.md imports AGENTS.md)",
-    claude_only: "the rules are only in CLAUDE.md; Codex and other agents miss them",
-    both: "CLAUDE.md and AGENTS.md hold different rules; each agent reads only one" };
-  const state = (f) => `CLAUDE.md ${f.claude_md}, AGENTS.md ${f.agents_md}` + (layouts[f.layout] ? `; ${layouts[f.layout]}` : "");
-  out.push(step(st.folders.length > 0 && blocks.length === 0, "Tell agents about the queue in each project folder",
-    st.folders.length ? st.folders.map(f => `<div>${esc(f.path)} (${f.projects.map(esc).join(", ")}): ${f.exists ? esc(state(f)) : "folder not found"}`
+  const layouts = { claude_only: "its CLAUDE.md has rules that Codex and other agents don't read",
+    both: "CLAUDE.md and AGENTS.md have different rules; each agent reads only one" };
+  out.push(step(st.folders.length > 0 && blocks.length === 0, "Add a project folder",
+    st.folders.length ? st.folders.map(f => `<div>${esc(f.path)} <span class="muted">(${f.projects.map(esc).join(", ")})</span>`
+      + (!f.exists ? " · folder not found" : layouts[f.layout] ? " · " + esc(layouts[f.layout]) : "")
       + (f.layout === "claude_only" ? ` <button class="btn" data-su="block" data-move="1" data-path="${esc(f.path)}"
-          title="The text of CLAUDE.md goes to AGENTS.md; CLAUDE.md becomes the one line @AGENTS.md">Move the rules to AGENTS.md</button>` : "")
+          title="The text of CLAUDE.md goes to AGENTS.md; CLAUDE.md becomes the one line @AGENTS.md">Share them with every agent</button>` : "")
       + `</div>`).join("")
-      + (st.projects_without_folder.length ? `<div>No folder: ${st.projects_without_folder.map(esc).join(", ")}</div>` : "")
-      + `<details style="margin-top:6px"><summary>Add another project folder</summary>${folderForm()}</details>`
-      : "Pick a folder you work in. River links it as a project and tells agents there about the queue (in AGENTS.md)." + folderForm(),
+      + `<details style="margin-top:6px"><summary>Add another folder</summary>${folderForm()}</details>`
+      : "The folder of something you're building. Agents you start work in it." + folderForm(),
     blocks.map(f => `<button class="btn" data-su="block" data-path="${esc(f.path)}">Update ${esc(f.path.split("/").pop())}</button>`).join("")));
-  const missing = Object.entries(st.skills).filter(([, v]) => v !== "installed").map(([k]) => k);
-  if (st.claude_home) out.push(step(missing.length === 0, "Install the Claude Code skills",
-    missing.length ? "Missing in ~/.claude/skills: " + missing.join(", ") : "river and river-planner are installed.",
-    `<button class="btn" data-su="skills">Install skills</button>`));
+  // An agent the Start button can open: installed here, and on the Start button's list.
+  const ready = (st.start_agents || []).filter(a => a.found).map(a => a.label);
   const addable = st.agent_clis.filter(a => a.found && !a.added);
-  out.push(step(addable.length === 0, "Agents for the Start button",
-    "Start button offers: " + st.launch_agents.map(esc).join(", ")
-      + (addable.length ? ". Also on this computer: " + addable.map(a => esc(a.label)).join(", ") : ""),
-    addable.map(a => `<button class="btn" data-su="agent" data-label="${esc(a.label)}" title="${esc(a.command)}">Add ${esc(a.label)}</button>`).join("")));
-  out.push(step(st.ntfy_ready && st.notify_channels.includes("ntfy"), "Phone notifications (ntfy)",
-    st.ntfy_ready ? "Channels: " + (st.notify_channels.map(esc).join(", ") || "none") : "Get a push on your phone when an item needs you.",
+  const none = !ready.length && !addable.length;
+  const addBtns = addable.map(a => `<button class="btn${ready.length ? "" : " primary"}" data-su="agent" data-label="${esc(a.label)}" title="${esc(a.command)}">Add ${esc(a.label)}</button>`).join("");
+  out.push(step(ready.length > 0, "Choose an agent",
+    ready.length ? "The Start button opens " + ready.map(esc).join(" or ") + "."
+        + (addable.length ? ` Also on this Mac: <span class="fix" style="display:inline-flex">${addBtns}</span>` : "")
+      : none ? `No AI coding agent is installed on this Mac yet. Install one, then check again:
+          <a href="https://docs.claude.com/en/docs/claude-code/setup" target="_blank" rel="noopener">Claude Code</a> or
+          <a href="https://github.com/openai/codex" target="_blank" rel="noopener">Codex</a>.`
+      : "Found on this Mac: " + addable.map(a => esc(a.label)).join(", ") + ". Add one to the Start button.",
+    (none ? `<button class="btn" data-su="recheck">Check again</button>` : "") + addBtns));
+  // A first task, then an agent that takes it.
+  const tasks = (S && S.items || []).filter(i => !["deploy", "review"].includes(i.kind));
+  const folderProjects = (S && S.projects || []).filter(p => p.path);
+  out.push(step(tasks.length > 0, "Add a first task",
+    tasks.length ? `${tasks.length} task${tasks.length === 1 ? "" : "s"} on the list.`
+      : "Something small an agent can do in your project, so you can see how it goes.",
+    folderProjects.length ? `<select id="suTaskProject">${folderProjects.map(p => `<option>${esc(p.name)}</option>`).join("")}</select>
+      <input id="suTaskTitle" placeholder="for example: add a README that says what this project does" style="flex:1 1 280px">
+      <button class="btn primary" data-su="task">Add task</button>` : `<span class="muted">Add a project folder first.</span>`));
+  const started = (S && S.agents || []).some(a => a.kind !== "human") || tasks.some(i => ["in_progress", "held", "done"].includes(i.status));
+  out.push(step(started, "Start an agent",
+    started ? "An agent has picked up work. Watch it on the Board; finished tasks show on Done."
+      : "An agent opens in a new Terminal window, takes your task, and gets to work. You'll see it on the Board.",
+    tasks.length && ready.length ? agentStart(S.launch_agents, { label: "Start an agent", cls: "btn primary", attrs: 'data-launch="1"',
+        title: "Open a new Terminal window in the project folder and start the chosen agent there" })
+      : `<span class="muted">Needs an agent and a task first.</span>`));
+  // Extras: nice to have, not needed for a first result.
+  const more = [];
+  const missing = Object.entries(st.skills).filter(([, v]) => v !== "installed").map(([k]) => k);
+  if (st.claude_home) more.push(extra(missing.length === 0, "Claude Code skills",
+    missing.length ? "Teach Claude Code river's full workflow (missing: " + missing.join(", ") + ")." : "river and river-planner are installed.",
+    `<button class="btn" data-su="skills">Install skills</button>`));
+  more.push(extra(st.ntfy_ready && st.notify_channels.includes("ntfy"), "Phone notifications",
+    st.ntfy_ready ? "Channels: " + (st.notify_channels.map(esc).join(", ") || "none") : "Get a push on your phone when something needs you (ntfy).",
     `<button class="btn" data-su="ntfy">Turn on ntfy</button><span id="suNtfy" class="sub"></span>`));
-  const tp = (S && S.projects || []).filter(p => p.path);
-  const noTracker = tp.filter(p => !p.tracker);
-  out.push(step(noTracker.length === 0, "Issue tracker (optional)",
-    tp.length ? tp.map(p => `<div>${esc(p.name)}: ${p.tracker ? esc(p.tracker) : "none"}</div>`).join("")
-      + "Agents import issues from it in plan, and update it when an item is done. Say which tracker, where, and with what tool."
-      : "No project has a folder yet.",
+  const noTracker = folderProjects.filter(p => !p.tracker);
+  if (folderProjects.length) more.push(extra(noTracker.length === 0, "Issue tracker",
+    folderProjects.map(p => `<div>${esc(p.name)}: ${p.tracker ? esc(p.tracker) : "none"}</div>`).join("")
+      + "If you use GitHub Issues, Jira, or Linear, agents can bring issues in and close them when they're done. Say which tracker, where, and with what tool.",
     noTracker.map(p => `<span style="display:flex;gap:4px;align-items:center">${esc(p.name)}
       <input data-tracker-for="${esc(p.name)}" placeholder="github owner/repo via gh" style="width:220px">
       <button class="btn" data-su="tracker" data-project="${esc(p.name)}">Save</button></span>`).join("")));
-  $("#setupSteps").innerHTML = out.join("");
+  $("#setupSteps").innerHTML = out.join("") + `<details class="more"><summary>More (optional)</summary>${more.join("")}</details>`;
 }
 $("#setupSteps").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-su]"); if (!b) return;
@@ -956,6 +987,11 @@ $("#setupSteps").addEventListener("click", async (e) => {
       await act("config_set", { key: "tracker", value: v, project: b.dataset.project });
     }
     else if (k === "skills") await act("setup_skills", {});
+    else if (k === "task") {
+      const title = $("#suTaskTitle").value.trim(); if (!title) return toast("Write the task first", true);
+      await act("item_add", { project: $("#suTaskProject").value, title, doer: "ai" });
+    }
+    else if (k === "recheck") { /* openSetup below checks again */ }
     else if (k === "rivercmd") { const r = await act("setup_river_cmd", {}); toast(r.note || "Installed the river command. Agents in new terminals can use it now."); }
     else if (k === "agent") await act("setup_agent_add", { label: b.dataset.label });
     else if (k === "ntfy") {
