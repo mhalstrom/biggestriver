@@ -120,6 +120,29 @@ CREATE TABLE IF NOT EXISTS items (
   closed_at         TEXT
 );
 
+-- A goal is an outcome in a project with a "done when" test. One agent owns it at a time
+-- and creates and takes the items that reach it; items carry goal tags (item_goals).
+CREATE TABLE IF NOT EXISTS goals (
+  id                INTEGER PRIMARY KEY,
+  project_id        INTEGER NOT NULL REFERENCES projects(id),
+  name              TEXT NOT NULL UNIQUE,
+  outcome           TEXT NOT NULL DEFAULT '',
+  done_when         TEXT NOT NULL DEFAULT '',
+  rank              REAL NOT NULL,
+  status            TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','complete')),
+  owner             TEXT,
+  owner_expires_at  TEXT,
+  result            TEXT NOT NULL DEFAULT '',
+  created_at        TEXT NOT NULL,
+  completed_at      TEXT
+);
+
+CREATE TABLE IF NOT EXISTS item_goals (
+  item_id  INTEGER NOT NULL REFERENCES items(id),
+  goal_id  INTEGER NOT NULL REFERENCES goals(id),
+  PRIMARY KEY (item_id, goal_id)
+);
+
 CREATE TABLE IF NOT EXISTS deps (
   item_id     INTEGER NOT NULL REFERENCES items(id),
   blocked_by  INTEGER NOT NULL REFERENCES items(id),
@@ -634,6 +657,7 @@ def project_show(conn, name):
         ready_count=len(ready),
         working_now=holders,
         worked_recently=recent,
+        goals=goal_list(conn, name, include_complete=False),
     )
     return p
 
@@ -642,6 +666,165 @@ def project_list(conn):
     return [dict(r) for r in conn.execute(
         "SELECT p.*, (SELECT COUNT(*) FROM items i WHERE i.project_id=p.id AND i.status IN ('open','in_progress','held')) open_items "
         "FROM projects p WHERE archived=0 ORDER BY rank, id")]
+
+
+# ---------------------------------------------------------------- goals
+
+def _goal(conn, name):
+    r = conn.execute("SELECT * FROM goals WHERE name=?", (name,)).fetchone()
+    if not r:
+        known = [x["name"] for x in conn.execute("SELECT name FROM goals WHERE status='open' ORDER BY rank")]
+        raise RiverError(f"no goal {name!r}" + (f"; open goals: {', '.join(known)}" if known
+                                                else "; add one: river goal add <project> <name> --outcome \"...\""))
+    return r
+
+
+def _tag(conn, item_id, goal, actor):
+    g = _goal(conn, goal)
+    if conn.execute("INSERT OR IGNORE INTO item_goals(item_id, goal_id) VALUES (?,?)", (item_id, g["id"])).rowcount:
+        _event(conn, item_id, actor, f"tagged goal {goal}")
+
+
+def _goal_view(conn, g, ann=None):
+    ann = ann if ann is not None else annotate(conn)
+    d = dict(g)
+    d["project"] = _project_name(conn, g["project_id"])
+    ids = [r["item_id"] for r in conn.execute("SELECT item_id FROM item_goals WHERE goal_id=?", (g["id"],))]
+    items = [ann[i] for i in ids if i in ann]
+    d["items_open"] = sorted(a["id"] for a in items if a["status"] in OPEN_STATES)
+    d["items_done"] = sorted(a["id"] for a in items if a["status"] == "done")
+    d["items_dropped"] = sorted(a["id"] for a in items if a["status"] == "dropped")
+    return d
+
+
+def goal_add(conn, project, name, outcome="", done_when="", actor=None, rank=None):
+    if not re.match(r"^[a-z0-9][a-z0-9._-]{0,63}$", name):
+        raise RiverError("goal names use lower-case letters, digits, '.', '_', '-' (up to 64), like project names")
+    with tx(conn):
+        p = _project(conn, project)
+        if conn.execute("SELECT 1 FROM goals WHERE name=?", (name,)).fetchone():
+            raise RiverError(f"goal {name} already exists: river goal show {name}")
+        top = conn.execute("SELECT COALESCE(MAX(rank),0) m FROM goals WHERE project_id=?", (p["id"],)).fetchone()["m"]
+        conn.execute("INSERT INTO goals(project_id,name,outcome,done_when,rank,created_at) VALUES (?,?,?,?,?,?)",
+                     (p["id"], name, outcome or "", done_when or "", top + 1, iso(now())))
+        _event(conn, None, actor, f"goal {name} added to {project}")
+    if rank is not None:
+        goal_rank(conn, name, rank, actor)
+    return goal_show(conn, name)
+
+
+def goal_list(conn, project=None, include_complete=False):
+    """Goals in order: project rank, then goal rank. Each with its owner and tagged-item progress."""
+    ann = annotate(conn)
+    sql = ("SELECT g.* FROM goals g JOIN projects p ON p.id=g.project_id WHERE p.archived=0"
+           + ("" if include_complete else " AND g.status='open'") + (" AND p.name=?" if project else "")
+           + " ORDER BY g.status='complete', p.rank, g.rank, g.id")
+    return [_goal_view(conn, g, ann) for g in conn.execute(sql, (project,) if project else ())]
+
+
+def goal_show(conn, name):
+    g = _goal(conn, name)
+    ann = annotate(conn)
+    d = _goal_view(conn, g, ann)
+    d["items"] = [{k: v for k, v in ann[i].items() if k != "sort_key"}
+                  for i in sorted(d["items_open"] + d["items_done"] + d["items_dropped"],
+                                  key=lambda i: (ann[i]["status"] in CLOSED_STATES, ann[i]["sort_key"]))]
+    return d
+
+
+def goal_rank(conn, name, rank, actor=None):
+    """Put a goal at position `rank` (1 = first) among its project's goals."""
+    with tx(conn):
+        g = _goal(conn, name)
+        names = [r["name"] for r in conn.execute("SELECT name FROM goals WHERE project_id=? AND name<>? "
+                                                  "ORDER BY rank, id", (g["project_id"], name))]
+        names.insert(max(0, min(int(rank) - 1, len(names))), name)
+        for i, n in enumerate(names, 1):
+            conn.execute("UPDATE goals SET rank=? WHERE name=?", (i, n))
+        _event(conn, None, actor, f"goal {name} ranked {rank}")
+    return goal_show(conn, name)
+
+
+def goal_edit(conn, name, outcome=None, done_when=None, new_name=None, actor=None):
+    with tx(conn):
+        g = _goal(conn, name)
+        if outcome is not None and outcome != g["outcome"]:
+            conn.execute("UPDATE goals SET outcome=? WHERE id=?", (outcome, g["id"]))
+            _event(conn, None, actor, f"goal {name}: outcome changed")
+        if done_when is not None and done_when != g["done_when"]:
+            conn.execute("UPDATE goals SET done_when=? WHERE id=?", (done_when, g["id"]))
+            _event(conn, None, actor, f"goal {name}: done-when changed")
+        if new_name and new_name != name:
+            if not re.match(r"^[a-z0-9][a-z0-9._-]{0,63}$", new_name):
+                raise RiverError("goal names use lower-case letters, digits, '.', '_', '-' (up to 64)")
+            if conn.execute("SELECT 1 FROM goals WHERE name=?", (new_name,)).fetchone():
+                raise RiverError(f"goal {new_name} already exists")
+            conn.execute("UPDATE goals SET name=? WHERE id=?", (new_name, g["id"]))
+            _event(conn, None, actor, f"goal {name} renamed to {new_name}")
+            name = new_name
+    return goal_show(conn, name)
+
+
+def goal_own(conn, name, actor=None):
+    """Own a goal: create and take the items that reach it. One owner at a time, on a lease (owner_ttl)."""
+    if not actor:
+        raise RiverError("owning a goal needs an agent name: set RIVER_AGENT or pass --as <name>")
+    with tx(conn):
+        _sweep(conn)
+        g = _goal(conn, name)
+        if g["status"] != "open":
+            raise RiverError(f"goal {name} is complete; reopen it first: river goal reopen {name}")
+        if g["owner"] and g["owner"] != actor:
+            raise RiverError(f"goal {name} is owned by {g['owner']}; ask them (river send question --to {g['owner']} ...), "
+                             f"or take another: river goal list")
+        ttl = parse_duration(setting(conn, "owner_ttl", agent=actor))
+        conn.execute("UPDATE goals SET owner=?, owner_expires_at=? WHERE id=?", (actor, iso(now() + ttl), g["id"]))
+        if g["owner"] != actor:
+            _event(conn, None, actor, f"owns goal {name}")
+    return goal_show(conn, name)
+
+
+def goal_release(conn, name, actor=None):
+    with tx(conn):
+        g = _goal(conn, name)
+        if g["owner"] != actor:
+            raise RiverError(f"goal {name} is " + (f"owned by {g['owner']}" if g["owner"] else "not owned"))
+        conn.execute("UPDATE goals SET owner=NULL, owner_expires_at=NULL WHERE id=?", (g["id"],))
+        _event(conn, None, actor, f"released goal {name}")
+    return goal_show(conn, name)
+
+
+def goal_done(conn, name, result, actor=None, drop_open=False):
+    """Declare a goal complete with a one-line result. Refused while tagged items are open, unless
+    drop_open, which drops them with the result as the note."""
+    if not (result or "").strip():
+        raise RiverError("say what the goal achieved: river goal done <name> --result \"<one line>\"")
+    g = _goal(conn, name)
+    if g["status"] == "complete":
+        raise RiverError(f"goal {name} is already complete")
+    if g["owner"] and actor and g["owner"] != actor:
+        raise RiverError(f"goal {name} is owned by {g['owner']}; the owner declares it complete")
+    still = _goal_view(conn, g)["items_open"]
+    if still and not drop_open:
+        raise RiverError(f"goal {name} has open items: {', '.join('#' + str(i) for i in still)}. Finish them, untag them "
+                         f"(river edit <id> --untag {name}), or drop them: river goal done {name} --result \"...\" --drop-open")
+    for i in still:
+        drop(conn, i, actor, note=f"goal {name} completed without it: {result}")
+    with tx(conn):
+        conn.execute("UPDATE goals SET status='complete', result=?, completed_at=?, owner=NULL, owner_expires_at=NULL "
+                     "WHERE id=?", (result.strip(), iso(now()), g["id"]))
+        _event(conn, None, actor, f"goal {name} complete: {result.strip()}")
+    return goal_show(conn, name)
+
+
+def goal_reopen(conn, name, actor=None):
+    with tx(conn):
+        g = _goal(conn, name)
+        if g["status"] == "open":
+            raise RiverError(f"goal {name} is open already")
+        conn.execute("UPDATE goals SET status='open', completed_at=NULL WHERE id=?", (g["id"],))
+        _event(conn, None, actor, f"goal {name} reopened")
+    return goal_show(conn, name)
 
 
 # ---------------------------------------------------------------- deploy targets
@@ -793,7 +976,8 @@ def touches_list(text):
 
 
 def item_add(conn, project, title, priority=2, notes="", doer="any", after=(), actor=None,
-             context="", touches=None, check="", blocks=None, mode=None, found_during=None, feeds=(), due=None):
+             context="", touches=None, check="", blocks=None, mode=None, found_during=None, feeds=(), due=None,
+             goals=None):
     """Add an item. `after`: items it waits on. `feeds`: items it waits on and whose output it reads."""
     if doer not in DOERS:
         raise RiverError(f"doer is one of {', '.join(DOERS)}")
@@ -811,6 +995,11 @@ def item_add(conn, project, title, priority=2, notes="", doer="any", after=(), a
              check or "", iso(now())))
         iid = cur.lastrowid
         _event(conn, iid, actor, f"added to {project} at P{priority}")
+        # Goal tags: the ones named, else the goal the actor owns (if any).
+        names = list(goals) if goals else [r["name"] for r in conn.execute(
+            "SELECT name FROM goals WHERE owner=? AND status='open' ORDER BY rank, id LIMIT 1", (actor,))] if actor else []
+        for g in names:
+            _tag(conn, iid, g, actor)
         if due:
             t = parse_due(due, setting(conn, "timezone"))
             conn.execute("UPDATE items SET due=? WHERE id=?", (t, iid))
@@ -904,9 +1093,15 @@ def add_plan(conn, project, text, actor=None, priority=2, doer="any", dry_run=Fa
 
 
 def item_edit(conn, item_id, title=None, notes=None, doer=None, project=None, actor=None,
-              context=None, touches=None, check=None, due=None):
+              context=None, touches=None, check=None, due=None, goals=None, untag=None):
     with tx(conn):
         it = _item(conn, item_id)
+        for g in goals or ():
+            _tag(conn, it["id"], g, actor)
+        for g in untag or ():
+            gid = _goal(conn, g)["id"]
+            if conn.execute("DELETE FROM item_goals WHERE item_id=? AND goal_id=?", (it["id"], gid)).rowcount:
+                _event(conn, it["id"], actor, f"untagged goal {g}")
         if due is not None:
             zone = setting(conn, "timezone")
             t = parse_due(due, zone)
@@ -1508,6 +1703,10 @@ def annotate(conn):
     projects, items, waits_on, waited_by, conflicts, feeds = _load_graph(conn)
     is_open = {i: items[i]["status"] in OPEN_STATES for i in items}
     zone = setting(conn, "timezone")
+    tags: dict[int, list] = {}
+    for r in conn.execute("SELECT ig.item_id, g.name FROM item_goals ig JOIN goals g ON g.id=ig.goal_id "
+                          "ORDER BY g.rank, g.id"):
+        tags.setdefault(r["item_id"], []).append(r["name"])
     now_s = iso(now())
     soon_s = iso(now() + parse_duration(setting(conn, "due_warn_before")))
 
@@ -1570,6 +1769,7 @@ def annotate(conn):
             if items[d]["due"] and (due is None or items[d]["due"] < due):
                 due, due_from = items[d]["due"], d
         a["effective_due"], a["due_from"] = (due, due_from) if is_open[i] else (it["due"], None)
+        a["goals"] = tags.get(i, [])
         a["due_text"] = show_time(a["effective_due"], zone)
         a["due_state"] = (None if not is_open[i] or not a["effective_due"]
                           else "overdue" if a["effective_due"] <= now_s
@@ -1705,6 +1905,7 @@ def _touch_agent(conn, actor):
         conn.execute("UPDATE items SET hold_expires_at=? WHERE id=?", (iso(t + ttl), r["id"]))
     owner_ttl = parse_duration(setting(conn, "owner_ttl", agent=actor))
     conn.execute("UPDATE targets SET owner_expires_at=? WHERE owner=?", (iso(t + owner_ttl), actor))
+    conn.execute("UPDATE goals SET owner_expires_at=? WHERE owner=? AND status='open'", (iso(t + owner_ttl), actor))
     for r in conn.execute("SELECT id FROM items WHERE assignee=? AND status='in_progress'", (actor,)).fetchall():
         ttl = parse_duration(setting(conn, "lease_ttl", item_id=r["id"], agent=actor))
         conn.execute("UPDATE items SET lease_expires_at=? WHERE id=?", (iso(t + ttl), r["id"]))
@@ -1738,6 +1939,12 @@ def _sweep(conn):
             _send(conn, "notice", "river", f"the wait on #{r['id']} {r['title']} ended "
                   f"({r['blocked_reason']}); it can start now", to=r["blocked_set_by"], item_id=r["id"])
     _due_warnings(conn, t)
+    for r in conn.execute("SELECT name, owner FROM goals WHERE owner IS NOT NULL AND owner_expires_at < ?",
+                          (t,)).fetchall():
+        conn.execute("UPDATE goals SET owner=NULL, owner_expires_at=NULL WHERE name=?", (r["name"],))
+        _event(conn, None, "river", f"goal {r['name']} ownership expired (was {r['owner']})")
+        _send(conn, "notice", "river", f"your ownership of goal {r['name']} expired; nobody owns it now. "
+              f"Take it again if you still work on it: river goal own {r['name']}", to=r["owner"])
     _question_nudges(conn)
     for r in conn.execute("SELECT id, assignee FROM items WHERE status='held' AND hold_expires_at < ?", (t,)).fetchall():
         _unhold(conn, r["id"], "river", f"hold expired (was {r['assignee']}); released")
@@ -2391,9 +2598,12 @@ def item_show(conn, item_id, ann=None):
     return a
 
 
-def item_list(conn, project=None, status=None, include_closed=False):
+def item_list(conn, project=None, status=None, include_closed=False, goal=None):
     ann = annotate(conn)
     rows = [a for a in ann.values() if not a["project_archived"]]
+    if goal is not None:
+        _goal(conn, goal)
+        rows = [a for a in rows if goal in a["goals"]]
     if project is not None:
         _project(conn, project)
         rows = [a for a in rows if a["project"] == project]

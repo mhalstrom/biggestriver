@@ -871,6 +871,51 @@ class PlanFile(Base):
         self.assertEqual(len(core.item_list(self.c, "shop")), 6)
 
 
+class Goals(Base):
+    def setUp(self):
+        super().setUp()
+        core.project_add(self.c, "shop")
+        core.register(self.c, "ag")
+        core.register(self.c, "bo")
+
+    def test_goal_lifecycle(self):
+        core.goal_add(self.c, "shop", "checkout", "customers can pay", "a test order succeeds", "t")
+        core.goal_add(self.c, "shop", "speed", "pages load in 1s", actor="t")
+        core.goal_rank(self.c, "speed", 1)
+        self.assertEqual([g["name"] for g in core.goal_list(self.c)], ["speed", "checkout"])
+        core.goal_own(self.c, "checkout", "ag")
+        with self.assertRaises(RiverError):
+            core.goal_own(self.c, "checkout", "bo")  # one owner at a time
+        a = core.item_add(self.c, "shop", "cart", actor="ag")["id"]  # tagged with the goal ag owns
+        b = core.item_add(self.c, "shop", "pay", actor="bo", goals=["checkout", "speed"])["id"]
+        c = core.item_add(self.c, "shop", "untagged", actor="bo")["id"]
+        self.assertEqual(core.annotate(self.c)[a]["goals"], ["checkout"])
+        self.assertEqual([x["id"] for x in core.item_list(self.c, goal="checkout")], [a, b])
+        core.item_edit(self.c, b, untag=["speed"])
+        core.item_edit(self.c, c, goals=["speed"])
+        g = core.goal_show(self.c, "checkout")
+        self.assertEqual((g["owner"], g["items_open"]), ("ag", [a, b]))
+        with self.assertRaises(RiverError):
+            core.goal_done(self.c, "checkout", "shipped", "ag")  # items still open
+        with self.assertRaises(RiverError):
+            core.goal_done(self.c, "checkout", "shipped", "bo")  # not the owner
+        core.claim(self.c, a, "ag")
+        core.done(self.c, a, "ok", "ag")
+        g = core.goal_done(self.c, "checkout", "cart works; pay dropped for now", "ag", drop_open=True)
+        self.assertEqual((g["status"], g["owner"], g["items_dropped"]), ("complete", None, [b]))
+        self.assertEqual([x["name"] for x in core.project_show(self.c, "shop")["goals"]], ["speed"])
+        core.goal_reopen(self.c, "checkout")
+        self.assertEqual(core.goal_show(self.c, "checkout")["status"], "open")
+
+    def test_owner_lease_expires_with_notice(self):
+        core.goal_add(self.c, "shop", "g1", actor="t")
+        core.goal_own(self.c, "g1", "ag")
+        self.c.execute("UPDATE goals SET owner_expires_at=?", (core.iso(core.now() - timedelta(minutes=1)),))
+        core.activity(self.c, "bo")
+        self.assertIsNone(core.goal_show(self.c, "g1")["owner"])
+        self.assertIn("goal g1 expired", core.inbox(self.c, "ag")[0]["body"].replace("ownership of ", ""))
+
+
 class Sessions(Base):
     def test_session_name_recorded_and_shown(self):
         core.project_add(self.c, "a", path=self.dir.name)

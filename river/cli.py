@@ -89,6 +89,13 @@ HINTS = {
 }
 
 
+def _fmt_goal(g):
+    n_open, n_done = len(g["items_open"]), len(g["items_done"])
+    state = "complete" if g["status"] == "complete" else (f"owner {g['owner']}" if g["owner"] else "no owner")
+    return (f"{g['name']} [{g['project']}] ({state}; {n_done} done, {n_open} open)"
+            + (f": {g['outcome']}" if g["outcome"] else ""))
+
+
 def _fmt_item(a, show_reason=True):
     flags = []
     if a["status"] != "open":
@@ -107,6 +114,8 @@ def _fmt_item(a, show_reason=True):
         flags.append(f"pushed to {a['reserved_for']}" if a.get("reserved_until") else f"reserved for {a['reserved_for']}")
     if a.get("replan"):
         flags.append("replan")
+    if a.get("goals"):
+        flags.append("goal " + ",".join(a["goals"]))
     if a.get("effective_due") and a["status"] in core.OPEN_STATES:
         flags.append(("OVERDUE " if a["due_state"] == "overdue" else "due soon " if a["due_state"] == "soon" else "due ")
                      + a["due_text"] + (f" (from #{a['due_from']})" if a.get("due_from") else ""))
@@ -284,6 +293,25 @@ def build_parser():
     x = prs.add_parser("archive"); x.add_argument("name")
     prs.add_parser("list")
 
+    gl = sub.add_parser("goal", help="goals: outcomes in a project that one agent owns and works toward")
+    gls = gl.add_subparsers(dest="gcmd", required=True)
+    x = gls.add_parser("add", help="river goal add <project> <name> --outcome \"...\" --done-when \"...\"")
+    x.add_argument("project"); x.add_argument("name"); x.add_argument("--outcome", default="")
+    x.add_argument("--done-when", dest="done_when", default="", help="the test that shows the outcome is reached")
+    x.add_argument("--rank", type=int, help="position among the project's goals (1 = first)")
+    x = gls.add_parser("list", help="open goals in order (--all: complete ones too)")
+    x.add_argument("--project"); x.add_argument("--all", action="store_true")
+    x = gls.add_parser("show", help="a goal, its owner, and its items"); x.add_argument("name")
+    x = gls.add_parser("rank", help="move a goal among its project's goals (1 = first)"); x.add_argument("name"); x.add_argument("rank", type=int)
+    x = gls.add_parser("edit"); x.add_argument("name"); x.add_argument("--outcome"); x.add_argument("--done-when", dest="done_when")
+    x.add_argument("--rename")
+    x = gls.add_parser("own", help="own a goal: you create and take the items that reach it"); x.add_argument("name")
+    x = gls.add_parser("release", help="stop owning a goal"); x.add_argument("name")
+    x = gls.add_parser("done", help="declare a goal complete (refused while its items are open)"); x.add_argument("name")
+    x.add_argument("--result", required=True, help="one line: what the goal achieved")
+    x.add_argument("--drop-open", action="store_true", help="drop the goal's open items, with the result as the note")
+    x = gls.add_parser("reopen"); x.add_argument("name")
+
     tg = sub.add_parser("target", help="deploy targets: where projects ship to")
     tgs = tg.add_subparsers(dest="tcmd", required=True)
     x = tgs.add_parser("add"); x.add_argument("name")
@@ -301,6 +329,7 @@ def build_parser():
     x.add_argument("--from", dest="plan_file", metavar="FILE",
                    help="add every line of a plan file (an outline) as an item; a line waits on the lines indented under it")
     x.add_argument("--dry-run", action="store_true", help="with --from: show what would be added")
+    x.add_argument("--goal", action="append", help="goal this item works toward (repeatable; default: the goal you own)")
     x.add_argument("--priority", "-p", type=int, default=2, help="0 highest .. 4 lowest (default 2)")
     x.add_argument("--after", type=int, nargs="*", default=[], help="items this one waits on")
     x.add_argument("--feeds", type=int, nargs="*", default=[], help="items this one waits on and whose output it reads")
@@ -325,9 +354,12 @@ def build_parser():
     x.add_argument("--context"); x.add_argument("--touches", nargs="*", help="replaces the list; give none to clear it")
     x.add_argument("--check")
     x.add_argument("--due", help="due date (2026-10-15, 'fri 17:00'), or none to remove it")
+    x.add_argument("--goal", action="append", help="tag the item with a goal (repeatable)")
+    x.add_argument("--untag", action="append", help="remove a goal tag (repeatable)")
 
     x = sub.add_parser("list", help="list items (open by default)")
     x.add_argument("--project"); x.add_argument("--status"); x.add_argument("--all", action="store_true")
+    x.add_argument("--goal", help="only items tagged with this goal")
 
     x = sub.add_parser("show", help="one item with its links and history"); x.add_argument("id", type=int)
     nt = sub.add_parser("notify", help="send needs-you notifications: run, test a channel, status")
@@ -639,6 +671,26 @@ def dispatch(conn, a, actor):
         if a.pcmd == "archive":
             return core.project_archive(conn, a.name, actor)
         return core.project_list(conn)
+    if c == "goal":
+        g = a.gcmd
+        if g == "add":
+            return core.goal_add(conn, a.project, a.name, a.outcome, a.done_when, actor, a.rank)
+        if g == "list":
+            return core.goal_list(conn, a.project, a.all)
+        if g == "show":
+            return core.goal_show(conn, a.name)
+        if g == "rank":
+            return core.goal_rank(conn, a.name, a.rank, actor)
+        if g == "edit":
+            return core.goal_edit(conn, a.name, a.outcome, a.done_when, a.rename, actor)
+        if g == "own":
+            return core.goal_own(conn, a.name, actor)
+        if g == "release":
+            return core.goal_release(conn, a.name, actor)
+        if g == "done":
+            return core.goal_done(conn, a.name, a.result, actor, a.drop_open)
+        if g == "reopen":
+            return core.goal_reopen(conn, a.name, actor)
     if c == "target":
         if a.tcmd == "add":
             return core.target_add(conn, a.name, a.description, actor)
@@ -672,12 +724,12 @@ def dispatch(conn, a, actor):
             title = a.words[0]
             project = core.project_for_add(conn, os.getcwd(), a.blocks if a.blocks is not None else a.found_during)
         return core.item_add(conn, project, title, a.priority, a.notes, a.doer, a.after, actor,
-                             a.context, a.touches, a.check, a.blocks, a.mode, a.found_during, a.feeds, a.due)
+                             a.context, a.touches, a.check, a.blocks, a.mode, a.found_during, a.feeds, a.due, a.goal)
     if c == "edit":
         return core.item_edit(conn, a.id, a.title, a.notes, a.doer, a.project, actor, a.context, a.touches, a.check,
-                              a.due)
+                              a.due, a.goal, a.untag)
     if c == "list":
-        return core.item_list(conn, a.project, a.status, a.all)
+        return core.item_list(conn, a.project, a.status, a.all, a.goal)
     if c == "show":
         return core.item_show(conn, a.id)
     if c == "status":
@@ -1043,6 +1095,22 @@ def render(a, res):
         if res["dry_run"]:
             print("Run it again without --dry-run to add them.")
         return
+    if c == "goal":
+        rows = res if isinstance(res, list) else [res]
+        if not rows:
+            print("(no open goals: river goal add <project> <name> --outcome \"...\" --done-when \"...\")")
+        for g in rows:
+            print(_fmt_goal(g))
+            if isinstance(res, dict):
+                if g["done_when"]:
+                    print(f"  done when: {g['done_when']}")
+                if g["result"]:
+                    print(f"  result: {g['result']}")
+                for it in g.get("items", []):
+                    print("  " + _fmt_item(it, show_reason=False))
+                if not g.get("items"):
+                    print(f"  no items yet: river add \"<title>\" --goal {g['name']}")
+        return
     if c == "project":
         if isinstance(res, dict) and "ready_count" in res:
             print(f"{res['name']} (rank {res['rank']})")
@@ -1052,6 +1120,8 @@ def render(a, res):
             print("  working now: " + (", ".join(res["working_now"]) or "nobody"))
             if res["worked_recently"]:
                 print("  worked here recently: " + ", ".join(res["worked_recently"]))
+            for g in res.get("goals", []):
+                print("  goal " + _fmt_goal(g))
             print(f"  ready ({res['ready_count']}):")
             for it in res["ready"]:
                 print("    " + _fmt_item(it, show_reason=False))

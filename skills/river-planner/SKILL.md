@@ -75,6 +75,25 @@ Write the description for an agent that must decide whether it fits: what the
 project covers, where it lives (repository, directories), and what knowledge
 helps. Agents read `river project list` to pick an area.
 
+## Goals
+
+A goal is an outcome in a project with a test for "done". One agent owns a
+goal at a time; it creates and takes the items that reach it and tags them.
+
+```
+river goal add <project> <name> --outcome "..." --done-when "..." [--rank N]
+river goal list [--project P] [--all]    # open goals in order, with owner and progress
+river goal show <name>                    # the goal and its items
+river goal rank <name> <N>                # 1 = first among the project's goals
+river goal edit <name> [--outcome] [--done-when] [--rename]
+river goal own <name> / river goal release <name>
+river goal done <name> --result "<one line>" [--drop-open]   # refused while its items are open
+river goal reopen <name>
+river add "<title>" --goal <name>         # repeatable; default: the goal you own
+river edit <id> --goal <name> / --untag <name>
+river list --goal <name>
+```
+
 ## Items
 
 ```
