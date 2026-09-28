@@ -39,7 +39,7 @@
       <div id="takeovers"></div>
     </div>
     <div class="panel hidden" id="needsYouPanel">
-      <h2>Needs you <span class="spacer"></span><button class="btn" id="copyAll" title="Copy one prompt for an agent that walks you through all of these">Copy prompt</button><button class="btn" id="agentAll" title="Open an agent session that walks you through all of these, with the same prompt">Open agent</button><button class="btn hidden" id="notifyOn" title="Turn on browser notifications">Notify me</button></h2>
+      <h2>Needs you <span class="spacer"></span><button class="btn" id="copyAll" title="Copy one prompt for an agent that walks you through all of these">Copy prompt</button><span id="agentAllSlot"></span><button class="btn hidden" id="notifyOn" title="Turn on browser notifications">Notify me</button></h2>
       <div id="needsYou"></div>
     </div>
         <div class="panel muted hidden" id="nothingForYou" style="font-size:13px">Nothing waits on you now.</div>
@@ -61,7 +61,7 @@
             <span class="spacer"></span>
             <select id="area"><option value="">All projects</option><option value="__mine">Near my earlier work</option></select>
             <button class="btn primary" id="claimNext">Claim next</button>
-            <label class="muted" style="font-size:12px;font-weight:400;text-transform:none;letter-spacing:normal;display:flex;align-items:center;gap:4px" title="After you claim, open an agent in the item's project folder that helps you do it"><input type="checkbox" id="claimAgent" checked>with an agent</label>
+            <label class="muted" style="font-size:12px;font-weight:400;text-transform:none;letter-spacing:normal;display:flex;align-items:center;gap:4px" title="After you claim, open an agent in the item's project folder that helps you do it"><input type="checkbox" id="claimAgent" checked>with an agent</label><span id="claimAgentPick"></span>
           </h2>
           <div id="next"></div>
         </div>

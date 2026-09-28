@@ -313,14 +313,22 @@ def update_apply(repo=REPO, restart=_restart_soon):
 
 
 # Agent CLIs the setup guide offers for the Start button. Each gets an explicit first prompt, so it works
-# even where the agent does not read the project's instruction file.
+# even where the agent does not read the project's instruction file. {river_dir} becomes the folder of the
+# queue: Codex's sandbox writes only in the project folder unless --add-dir names another one.
 KNOWN_AGENTS = [
     ("Claude Code", "claude", "claude go --remote-control"),
-    ("Codex", "codex", 'codex "run river go in this folder and follow the briefing"'),
+    ("Codex", "codex", 'codex --add-dir {river_dir} "run river go in this folder and follow the briefing"'),
     ("Grok", "grok", 'grok "run river go in this folder and follow the briefing"'),
     ("OpenCode", "opencode", 'opencode --prompt "run river go in this folder and follow the briefing"'),
     ("Gemini", "gemini", 'gemini -i "run river go in this folder and follow the briefing"'),
 ]
+
+
+def _agent_cmd(cmd):
+    """A KNOWN_AGENTS command with {river_dir} filled in for this computer."""
+    import shlex
+    d = str(core.db_path().expanduser().resolve().parent)
+    return cmd.replace("{river_dir}", f'"{d}"' if PLATFORM == "win32" else shlex.quote(d))
 
 
 def _block_state(path):
@@ -355,7 +363,7 @@ def setup_status(conn):
         "claude_home": Path("~/.claude").expanduser().is_dir(),
         "skills": {n: ("installed" if (skills / n / "SKILL.md").is_file() else "missing") for n in ("river", "river-planner")},
         "launch_agents": [label for label, _ in agents],
-        "agent_clis": [{"label": label, "found": bool(shutil.which(exe)), "added": label in have, "command": cmd}
+        "agent_clis": [{"label": label, "found": bool(shutil.which(exe)), "added": label in have, "command": _agent_cmd(cmd)}
                        for label, exe, cmd in KNOWN_AGENTS],
         "notify_channels": core._channels(core.setting(conn, "notify_channels")),
         "ntfy_ready": bool(core.setting(conn, "ntfy_topic")),
@@ -381,7 +389,7 @@ def setup_skills():
 
 def setup_agent_add(conn, label, actor=None):
     """Add one of KNOWN_AGENTS to launch_agents (the Start button's list)."""
-    cmd = next((c for lab, _, c in KNOWN_AGENTS if lab == label), None)
+    cmd = next((_agent_cmd(c) for lab, _, c in KNOWN_AGENTS if lab == label), None)
     if cmd is None:
         raise RiverError(f"unknown agent {label!r}")
     agents = core.parse_launch_agents(core.setting(conn, "launch_agents"))

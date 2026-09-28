@@ -98,6 +98,13 @@ the block in each project folder, skills, agents for the Start button, phone
 notifications), with a button to fix each step. "Don't show again" hides it;
 the Settings tab opens it again.
 
+Every button on the page that starts an agent (Start an agent, Open agent,
+Dispatch, Deploy now, Claim next with an agent) has the same agent picker next
+to it when the Start button offers more than one agent. The choice is shared.
+Add Codex, Grok, OpenCode, or Gemini in the setup guide when the page finds them
+on this computer. The Codex command gets `--add-dir <river data folder>`, so its
+sandbox can write the queue.
+
 To see it with sample data first: `./seed/example.sh` on an empty database.
 
 ## Use it

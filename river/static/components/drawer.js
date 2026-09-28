@@ -2,6 +2,7 @@
 import { esc, ago, left, clip } from "../lib.js";
 import { chip, statusChip, prioChip, doerChip } from "./chip.js";
 import { input, textarea, select, field, two, renderKeepingEdits } from "./form.js";
+import { agentStart } from "./agentStart.js";
 
 // The drawer element. show() redraws it and keeps what the person typed (see renderKeepingEdits);
 // a different key (another item) or fresh starts clean. While a field in it has focus, show() waits.
@@ -47,14 +48,14 @@ function offerHelpHtml(it, me) {
 
 // Open an agent session on this item (server open_agent_on): with the person on a person's item,
 // on what blocks an item that waits, or Dispatch on a ready item.
-function agentButton(it) {
+function agentButton(it, S) {
   if (["done", "dropped", "in_progress"].includes(it.status)) return "";
   const [label, title] = it.doer === "human"
     ? ["Work on it with an agent", "Open an agent in the project folder that helps you do this item together"]
     : !it.ready ? ["Open an agent to unblock it", "Open an agent in the project folder that first takes what this item waits on"]
     : it.status === "open" && !it.reserved_for ? ["Dispatch an agent", "Give it to a session waiting in its project, or start a new agent for it"]
     : [];
-  return label ? `<button class="btn" data-do="agent" title="${title}">▶ ${label}</button>` : "";
+  return label ? agentStart(S && S.launch_agents, { label, title, attrs: 'data-do="agent"' }) : "";
 }
 
 // The drawer for one item (it from /api/item/<id>). S: the page state; me: who acts.
@@ -75,7 +76,7 @@ export function itemDrawerHtml(it, { S, me }) {
       ${["in_progress", "held"].includes(it.status) ? `<button class="btn primary" data-do="done">Done</button><button class="btn" data-do="release">Release</button>` : ""}
       ${it.status === "open" ? `<button class="btn" data-do="done">Mark done</button>` : ""}
       ${!closed ? `<button class="btn" data-do="drop">Drop</button>` : `<button class="btn" data-do="reopen">Reopen</button>`}
-      ${agentButton(it)}
+      ${agentButton(it, S)}
     </div>
     <div class="sec"><h4>Details</h4><div class="form">
       ${input({ id: "dTitle", value: it.title })}

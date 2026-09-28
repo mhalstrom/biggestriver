@@ -6,6 +6,7 @@ import { itemRow, itemOrder, itemTableRows, itemTableColumns } from "./component
 import { makeTable } from "./components/table.js";
 import { makeDrawer, itemDrawerHtml, msgLine } from "./components/drawer.js";
 import { makeDialog } from "./components/dialog.js";
+import { agentStart, agentPick, pickedAgent, wireAgentPicks } from "./components/agentStart.js";
 hooks.refresh = refresh;
 let S = null, openItem = null, tab = "board", graphSig = "";
 const drawer = makeDrawer($("#drawer"));
@@ -158,8 +159,9 @@ function renderTargets() {
         <span class="muted" style="font-size:12px">${t.project_names.length ? "projects: " + t.project_names.map(esc).join(", ") : "no projects"}</span>`, `${t.description ? `<div class="ny-c">${esc(clip(t.description, 300))}</div>` : ""}
       ${t.pending.map(d => `<div class="st" style="margin-top:4px"><span class="link" data-open="${d.id}">#${d.id}</span> ${d.ready ? "ready to deploy" : d.status === "open" ? "collecting" : esc(d.status.replace("_", " ")) + (d.assignee ? " · " + esc(d.assignee) : "")}: ${shipList(d.ships)}${d.review ? `<div class="muted" style="font-size:12px">first a review: <span class="link" data-open="${d.review.id}">#${d.review.id}</span> (${esc(d.review.status.replace("_", " "))}${d.review.assignee ? " · " + esc(d.review.assignee) : ""})</div>` : ""}</div>`).join("") || '<div class="st muted">No pending ship requests.</div>'}
       <div class="actions" style="margin-top:6px">${t.pending.some(d => d.status === "open" && d.ships.length)
-        ? `<button class="btn primary" data-deploy="${esc(t.name)}" title="Start the deploy now: the owner gets an alert, or an agent opens to take it">Deploy now</button>
-           <button class="btn" data-deploy="${esc(t.name)}" data-review="1" title="First one review of everything it ships (review steps per project), then the deploy">Review and deploy</button>`
+        ? agentStart(S.launch_agents, [
+            { label: "Deploy now", cls: "btn primary", attrs: `data-deploy="${esc(t.name)}"`, title: "Start the deploy now: the owner gets an alert, or the chosen agent opens to take it" },
+            { label: "Review and deploy", attrs: `data-deploy="${esc(t.name)}" data-review="1"`, title: "First one review of everything it ships (review steps per project), then the deploy" }])
         : '<span class="muted" style="font-size:12px">Nothing to deploy: ship items first (river ship &lt;id&gt;, or done --ship).</span>'}</div>
       <div class="st" style="margin-top:6px"><b>Deploys</b></div>
       ${(t.history || []).map(h => `<div class="st" style="margin-top:4px"><span class="link" data-open="${h.id}">#${h.id}</span> ${ago(h.closed_at)}${h.done_by ? " by " + esc(h.done_by) : ""}${h.output ? ": " + esc(clip(h.output, 200)) : ""}<div class="muted" style="font-size:12px">shipped ${shipList(h.ships)}</div></div>`).join("") || '<div class="st muted">Never deployed.</div>'}`)).join("") || `<div class="muted">No deploy targets. Add one: river target add &lt;name&gt; --description "how it deploys"</div>`;
@@ -191,13 +193,16 @@ function renderStrip() {
   const blocked = S.items.filter(i => i.blocked_reason && !["done", "dropped"].includes(i.status)).length;
   const T = (S.takeovers || []).length, slots = S.capacity ? S.capacity.spare_slots : 0;
   const b = (n, label, go, cls) => `<button data-strip="${go}" class="${n ? cls : ""}"><b>${n}</b>${label}</button>`;
-  const LA = S.launch_agents || [], pick = LA.includes(store("river.launch.agent")) ? store("river.launch.agent") : LA[0];
-  const agentPick = LA.length > 1 ? `<select id="launchAgent" title="Which agent the Start button opens">${LA.map(a => `<option ${a === pick ? "selected" : ""}>${esc(a)}</option>`).join("")}</select>` : "";
   const html = b(NY.length, "need you", "needs", "hum") + (T ? b(T, "taken off your list", "takeovers", "hum") : "")
     + b(ready, "ready for agents", "ready", "good") + b(running, "in progress", "work", "")
     + b(blocked, "blocked outside", "blocked", "bad") + b(slots, "open agent slots", "capacity", "good")
-    + (ready ? agentPick + `<button data-launch="1" class="primary" title="Open a new terminal tab (a console window on Windows) in the folder of the most important ready item and start ${esc(pick || "an agent")} there (setting launch_agents)"><b>▶</b>Start ${LA.length > 1 ? "" : "an agent"}</button>` : "");
+    + (ready ? agentStart(S.launch_agents, { label: "Start an agent", cls: "primary", attrs: 'data-launch="1"',
+        title: "Open a new terminal tab (a console window on Windows) in the folder of the most important ready item and start the chosen agent there" }) : "");
   if ($("#strip").dataset.sig !== html) { $("#strip").innerHTML = html; $("#strip").dataset.sig = html; }
+  // The other fixed places that start an agent: Needs you > Open agent, and Claim next with an agent.
+  const put = (el, h) => { if (el.dataset.sig !== h) { el.innerHTML = h; el.dataset.sig = h; } };
+  put($("#agentAllSlot"), agentStart(S.launch_agents, { label: "Open agent", attrs: 'id="agentAll"', title: "Open an agent session that walks you through all of these, with the same prompt" }));
+  put($("#claimAgentPick"), agentPick(S.launch_agents));
 }
 
 // Work column: one row per project; a click opens its open items (ready first).
@@ -429,7 +434,7 @@ async function drawerAction(what) {
     if (what === "replanned") await act("replanned", { id });
     if (what === "msg") { const body = $("#dMsgBody").value.trim(); if (!body) return; if (!actor()) return toast("Choose your name in 'You are' first", true); await act("send", { kind: $("#dMsgKind").value, body, item: id }); toast("Sent"); }
     if (what === "agent") {
-      const r = await act("open_agent_on", { id, person: actor() || undefined, agent: $("#launchAgent") ? $("#launchAgent").value : undefined });
+      const r = await act("open_agent_on", { id, person: actor() || undefined, agent: pickedAgent(S.launch_agents) });
       toast(r.pushed_to ? `Gave #${id} to ${r.pushed_to}, which was waiting for work`
         : `Started ${r.agent} in ${r.project}` + (r.focus && r.focus.startsWith("help") ? `, to do #${id} with you` : r.focus ? `, to unblock #${id}` : `, for #${id}`));
     }
@@ -572,7 +577,7 @@ function renderNeedsYou() {
     const isItem = e.kind === "item";
     const detail = isItem ? (e.item_context || e.item_notes) : e.body;
     const buttons = isItem
-      ? `<button class="btn" data-open="${e.item_id}">Open</button><button class="btn" data-ny="claim" data-id="${e.item_id}">Claim</button><button class="btn" data-copy-prompt="${e.item_id}" title="A prompt for an agent that explains this and helps you do it">Copy prompt</button><button class="btn" data-agent-help="${e.item_id}" title="Open an agent session with that prompt, in the project folder">Open agent</button><button class="btn primary" data-ny="done" data-id="${e.item_id}">Done</button>`
+      ? `<button class="btn" data-open="${e.item_id}">Open</button><button class="btn" data-ny="claim" data-id="${e.item_id}">Claim</button><button class="btn" data-copy-prompt="${e.item_id}" title="A prompt for an agent that explains this and helps you do it">Copy prompt</button>${agentStart(S && S.launch_agents, { label: "Open agent", attrs: `data-agent-help="${e.item_id}"`, title: "Open an agent session with that prompt, in the project folder" })}<button class="btn primary" data-ny="done" data-id="${e.item_id}">Done</button>`
       : (e.message_kind === "question"
           ? `<button class="btn primary" data-ny="answer" data-msg="${e.message_id}">Answer</button>`
           : `<button class="btn" data-ny="read" data-msg="${e.message_id}">Mark read</button>`)
@@ -644,7 +649,7 @@ document.addEventListener("click", async (e) => {
     return; }
   const la = t.closest("[data-launch]"); if (la) {
     if (la.dataset.busy) return; la.dataset.busy = "1"; setTimeout(() => delete la.dataset.busy, 4000);
-    const agent = $("#launchAgent") ? $("#launchAgent").value : undefined;
+    const agent = pickedAgent(S.launch_agents);
     try { const r = await act("launch_agent", { agent });
       toast(r.pushed_to ? `Gave #${r.item.id} ${clip(r.item.title, 60)} to ${r.pushed_to}, which was waiting for work`
                         : `Started ${r.agent} in ${r.project}, for #${r.item.id} ${clip(r.item.title, 60)}`); } catch (e) { /* toast shown */ }
@@ -675,7 +680,7 @@ document.addEventListener("click", async (e) => {
   if (t.dataset.deploy) {
     if (t.dataset.busy) return; t.dataset.busy = "1"; setTimeout(() => delete t.dataset.busy, 4000);
     try {
-      const r = await act("deploy_now", { target: t.dataset.deploy, review: !!t.dataset.review, agent: $("#launchAgent") ? $("#launchAgent").value : undefined });
+      const r = await act("deploy_now", { target: t.dataset.deploy, review: !!t.dataset.review, agent: pickedAgent(S.launch_agents) });
       const what = `#${r.start.id} ${clip(r.start.title, 50)}`;
       toast(!r.ready ? `${what} waits on ${r.waits_on.map(w => "#" + w.id).join(", ")}; it starts when they are done`
         : r.alerted ? `${what} is ready; alerted the owner ${r.alerted}`
@@ -685,7 +690,7 @@ document.addEventListener("click", async (e) => {
   }
   if (t.id === "agentAll" || t.dataset.agentHelp) {
     if (t.dataset.busy) return; t.dataset.busy = "1"; setTimeout(() => delete t.dataset.busy, 4000);
-    const opts = { person: actor() || undefined, agent: $("#launchAgent") ? $("#launchAgent").value : undefined };
+    const opts = { person: actor() || undefined, agent: pickedAgent(S.launch_agents) };
     try {
       const r = t.id === "agentAll" ? await act("open_needs_you", opts) : await act("open_agent_on", { ...opts, id: +t.dataset.agentHelp });
       toast(`Started ${r.agent} in ${r.project}` + (t.id === "agentAll" ? ", to go through what needs you" : `, to do #${t.dataset.agentHelp} with you`));
@@ -707,7 +712,7 @@ document.addEventListener("click", async (e) => {
 });
 
 $("#actor").addEventListener("change", () => { store("river.actor", $("#actor").value); inboxGen++; pollInbox().catch(() => {}); });
-document.addEventListener("change", (e) => { if (e.target.id === "launchAgent") store("river.launch.agent", e.target.value); });
+wireAgentPicks();
 $("#inboxAll").addEventListener("change", () => { inboxGen++; pollInbox().catch(() => {}); });
 async function sendForm() {
   if (!actor()) return toast("Choose your name in 'You are' first", true);
@@ -770,7 +775,7 @@ $("#claimNext").addEventListener("click", async () => {
   const person = (S.agents || []).some(a => a.name === actor() && a.kind === "human");
   if (!person || !$("#claimAgent").checked) return toast(`Claimed #${id}`);
   try {
-    const r = await act("open_agent_on", { id, person: actor(), agent: $("#launchAgent") ? $("#launchAgent").value : undefined });
+    const r = await act("open_agent_on", { id, person: actor(), agent: pickedAgent(S.launch_agents) });
     toast(`Claimed #${id}; started ${r.agent} in ${r.project} to do it with you`);
   } catch (e) { toast(`Claimed #${id}; no agent opened`, true); }
 });
@@ -847,12 +852,12 @@ function openReady() { readyDialog.open(); renderReady(); $("#readyClose").focus
 function renderReady() {
   if (!S || !readyDialog.isOpen()) return;
   const rows = S.items.filter(i => i.ready && i.doer !== "human" && !["deploy", "review"].includes(i.kind)).sort(itemOrder);
-  const LA = S.launch_agents || [], pick = $("#launchAgent") ? $("#launchAgent").value : (LA.includes(store("river.launch.agent")) ? store("river.launch.agent") : LA[0]);
   $("#readyList").innerHTML = rows.map(i => `<div class="rrow"><div>
       <div class="t"><span class="link" data-open="${i.id}">#${i.id} ${esc(i.title)}</span></div>
       <div class="sub">${projectChip(i.project)}${prioNumChip(i.effective_priority ?? i.priority, "priority")}${doerChip(i)}
         ${i.reserved_for ? `<span>reserved for ${esc(i.reserved_for)}${i.reserved_until ? ", " + left(i.reserved_until) + " left" : ""}</span>` : ""}</div></div>
-      ${i.reserved_for ? "" : `<button class="btn" data-dispatch="${i.id}" title="Give #${i.id} to a session that waits in ${esc(i.project)}, or start ${esc(pick || "an agent")} in its folder for this item">Dispatch</button>`}
+      ${i.reserved_for ? "" : agentStart(S.launch_agents, { label: "Dispatch", attrs: `data-dispatch="${i.id}"`,
+        title: `Give #${i.id} to a session that waits in ${i.project}, or start the chosen agent in its folder for this item` })}
     </div>`).join("") || `<div class="muted">Nothing is ready for an agent now.</div>`;
 }
 $("#readyClose").onclick = () => readyDialog.close();
@@ -861,7 +866,7 @@ $("#readyDlg").addEventListener("click", async (e) => {
   if (e.target.closest("[data-open]")) return readyDialog.close();  // the item opens in the drawer
   const b = e.target.closest("[data-dispatch]"); if (!b || b.disabled) return;
   b.disabled = true;
-  const agent = $("#launchAgent") ? $("#launchAgent").value : undefined;
+  const agent = pickedAgent(S.launch_agents);
   try {
     const r = await act("dispatch_item", { id: +b.dataset.dispatch, agent });
     toast(r.pushed_to ? `Gave #${r.item.id} ${clip(r.item.title, 60)} to ${r.pushed_to}, which was waiting for work`

@@ -212,6 +212,11 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; padding
 .strip button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .strip button.primary b { color: var(--accent-ink); }
 .strip select { align-self: stretch; }
+/* Start an agent (components/agentStart.js): the agent picker next to its button(s), everywhere. */
+.agentStart { display: inline-flex; gap: 4px; align-items: center; flex-wrap: nowrap; }
+.agentStart select.agentPick { font-size: 12px; font-weight: 400; text-transform: none; letter-spacing: normal; max-width: 12em; }
+.agentStart button { white-space: nowrap; }
+.strip .agentStart { align-items: stretch; }
 .dash { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr) minmax(0, .8fr); gap: 16px; align-items: start; }
 .dash .col { max-height: calc(100vh - 150px); overflow-y: auto; padding-right: 2px; }
 .dash .col .panel:last-child { margin-bottom: 0; }
@@ -262,3 +267,4 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; padding
 .tabulator-popup-container.tabulator-edit-list { background: var(--panel); color: var(--ink); border: 1px solid var(--line); font-size: 13px; }
 .tabulator-edit-list .tabulator-edit-list-item { color: var(--ink); }
 .tabulator-edit-list .tabulator-edit-list-item.active, .tabulator-edit-list .tabulator-edit-list-item.focused { background: var(--accent); color: var(--accent-ink); outline: 0; }
+#needsYouPanel h2 { flex-wrap: wrap; row-gap: 4px; }

@@ -324,6 +324,10 @@ class SetupGuide(unittest.TestCase):
         server.setup_agent_add(self.c, "Codex")
         labels = server.setup_agent_add(self.c, "Codex")
         self.assertEqual(labels, ["Claude Code", "Codex"])
+        # Codex's sandbox writes only in the project folder: the command lets it write the queue too.
+        codex = dict(core.parse_launch_agents(core.setting(self.c, "launch_agents")))["Codex"]
+        self.assertIn("--add-dir " + str(core.db_path().resolve().parent), codex)
+        self.assertNotIn("{river_dir}", codex)
         with self.assertRaises(RiverError):
             server.setup_agent_add(self.c, "nope")
 
