@@ -100,7 +100,7 @@ river goal edit <name> [--outcome] [--done-when] [--rename]
 river goal own <name> / river goal release <name> / river goal give <name> --to <agent>
 river goal done <name> --result "<one line>" [--drop-open]   # refused while its items are open
 river goal reopen <name>
-river add "<title>" --goal <name>         # repeatable; default: the goal you own
+river add "<title>" --goal <name>         # repeatable; default: the goal you own in that project
 river add "<title>" --no-goal             # no tag, even when you own a goal
 river edit <id> --goal <name> / --untag <name>
 river list --goal <name>

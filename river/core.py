@@ -1090,9 +1090,11 @@ def item_add(conn, project, title, priority=2, notes="", doer="any", after=(), a
              check or "", iso(now())))
         iid = cur.lastrowid
         _event(conn, iid, actor, f"added to {project} at P{priority}")
-        # Goal tags: the ones named, else the goal the actor owns (if any). goals=[] means no goal.
+        # Goal tags: the ones named, else the goal the actor owns in this item's project (if any).
+        # goals=[] means no goal.
         names = list(goals) if goals is not None else [r["name"] for r in conn.execute(
-            "SELECT name FROM goals WHERE owner=? AND status='open' ORDER BY rank, id LIMIT 1", (actor,))] if actor else []
+            "SELECT name FROM goals WHERE owner=? AND status='open' AND project_id=? ORDER BY rank, id LIMIT 1",
+            (actor, p["id"]))] if actor else []
         for g in names:
             _tag(conn, iid, g, actor)
         if due:

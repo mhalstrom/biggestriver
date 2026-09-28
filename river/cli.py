@@ -332,7 +332,7 @@ def build_parser():
     x.add_argument("--from", dest="plan_file", metavar="FILE",
                    help="add every line of a plan file (an outline) as an item; a line waits on the lines indented under it")
     x.add_argument("--dry-run", action="store_true", help="with --from: show what would be added")
-    x.add_argument("--goal", action="append", help="goal this item works toward (repeatable; default: the goal you own)")
+    x.add_argument("--goal", action="append", help="goal this item works toward (repeatable; default: the goal you own in the item's project)")
     x.add_argument("--no-goal", action="store_true", help="no goal tag, even when you own a goal (a fix found in passing)")
     x.add_argument("--priority", "-p", type=int, default=2, help="0 highest .. 4 lowest (default 2)")
     x.add_argument("--after", type=int, nargs="*", default=[], help="items this one waits on")

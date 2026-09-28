@@ -75,7 +75,7 @@ without a goal stay in the normal queue.
   and who holds what blocks them. Then go gives you, in order: a ready item of
   the goal; an item outside the goal that unblocks it; or, when the goal has
   no open items, the question whether done-when holds.
-- Plan as you go: `river add "<title>"` tags the item with the goal you own.
+- Plan as you go: `river add "<title>"` tags the item with the goal you own, when the item is in that goal's project.
   Add `--no-goal` for a fix you find in passing that serves no goal, or
   `--goal <name>` (repeatable) to name the goals.
 - Coordinate with other owners: `river note|ask|alert --goal <name> "<text>"`

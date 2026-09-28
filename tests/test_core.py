@@ -915,6 +915,15 @@ class Goals(Base):
         ann = core.annotate(self.c)
         self.assertEqual((ann[a]["goals"], ann[b]["goals"]), ([], ["g1"]))
 
+    def test_owner_goal_tags_only_items_in_its_project(self):
+        core.project_add(self.c, "blog")
+        core.goal_add(self.c, "shop", "g1", actor="t")
+        core.goal_own(self.c, "g1", "ag")
+        a = core.item_add(self.c, "blog", "other project", actor="ag")["id"]
+        b = core.item_add(self.c, "blog", "named goal", actor="ag", goals=["g1"])["id"]
+        ann = core.annotate(self.c)
+        self.assertEqual((ann[a]["goals"], ann[b]["goals"]), ([], ["g1"]))
+
     def test_owner_lease_expires_with_notice(self):
         core.goal_add(self.c, "shop", "g1", actor="t")
         core.goal_own(self.c, "g1", "ag")
