@@ -1362,12 +1362,20 @@ class Ntfy(Base):
 
         with mock.patch("urllib.request.urlopen", fake):
             notify.ADAPTERS["ntfy"](self.c)("Überweisung fällig", "body ✓", "http://127.0.0.1:8765/#item-3")
-        (req,) = seen
+            notify.ADAPTERS["ntfy"](self.c)("t", "b", "https://claude.ai/code/session_01Abc")
+            core.config_set(self.c, "ntfy_click", "https://example.org/river")
+            notify.ADAPTERS["ntfy"](self.c)("t", "b", None)
+        req, session, fallback = seen
+        # A phone cannot open the local page: it gets ntfy_click. A session link goes through as it is.
+        self.assertEqual(session.get_header("Click"), "https://claude.ai/code/session_01Abc")
+        self.assertEqual(fallback.get_header("Click"), "https://example.org/river")
+        with self.assertRaises(RiverError):
+            core.config_set(self.c, "ntfy_click", "claude.ai")
         self.assertEqual(req.full_url, f"https://ntfy.sh/{topic}")
         self.assertEqual(req.get_method(), "POST")
         self.assertEqual(req.data, "body ✓".encode())
         self.assertTrue(req.get_header("Title").startswith("=?UTF-8?B?"))
-        self.assertEqual(req.get_header("Click"), "http://127.0.0.1:8765/#item-3")
+        self.assertEqual(req.get_header("Click"), "https://claude.ai/code")
         self.assertEqual(req.get_header("Authorization"), "Bearer tk_secret_123")
 
     def test_no_topic_and_bad_values(self):
@@ -1774,6 +1782,8 @@ class SessionLinks(Base):
         self.assertEqual(notify.compose(self.c, [row(step)])[2], "https://claude.ai/code/session_01Abc")
         self.assertTrue(notify.compose(self.c, [row(other)])[2].endswith(f"#item-{other}"))  # falls back to the page
         self.assertTrue(notify.compose(self.c, [row(step), row(other)])[2].startswith("http://127.0.0.1:"))
+        # A batch from one session opens that session.
+        self.assertEqual(notify.compose(self.c, [row(step), row(other, q["id"])])[2], "https://claude.ai/code/session_01Abc")
 
 
 if __name__ == "__main__":

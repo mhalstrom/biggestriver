@@ -33,7 +33,7 @@ def _applescript_str(s):
 
 def launch_agent(conn, project=None, runner=None, agent=None):
     """Open a Terminal window in the project folder of the most important ready agent item and run
-    the command of the chosen launch_agents entry there (default `claude go`), so one click starts one
+    the command of the chosen launch_agents entry there (default `claude go --remote-control`), so one click starts one
     agent session. macOS only."""
     import shlex
     import subprocess
@@ -69,7 +69,7 @@ def launch_agent(conn, project=None, runner=None, agent=None):
 # Agent CLIs the setup guide offers for the Start button. Each gets an explicit first prompt, so it works
 # even where the agent does not read the project's instruction file.
 KNOWN_AGENTS = [
-    ("Claude Code", "claude", "claude go"),
+    ("Claude Code", "claude", "claude go --remote-control"),
     ("Codex", "codex", 'codex "run river go in this folder and follow the briefing"'),
     ("Grok", "grok", 'grok "run river go in this folder and follow the briefing"'),
     ("OpenCode", "opencode", 'opencode --prompt "run river go in this folder and follow the briefing"'),

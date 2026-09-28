@@ -351,7 +351,7 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
       <h2>Settings</h2>
       <div class="muted" style="font-size:12px;margin-bottom:8px">The most specific value wins: item, then agent, then project, then global, then the built-in default.<br>
         <b>launch_agents</b> lists the agents the Start button offers, as <code>Label=command</code> entries separated by <code>;</code>. The first is the default. Agents other than Claude Code do not read CLAUDE.md, so tell them what to do, for example:
-        <code>Claude Code=claude go; Codex=codex "run river go in this folder and follow the briefing"; Grok=grok "run river go in this folder and follow the briefing"</code></div>
+        <code>Claude Code=claude go --remote-control; Codex=codex "run river go in this folder and follow the briefing"; Grok=grok "run river go in this folder and follow the briefing"</code></div>
       <div style="margin-bottom:8px"><button class="btn" id="openSetup">Open setup guide</button></div>
       <table class="settings" id="settingsTable"></table>
       <div class="form" style="margin-top:12px;max-width:640px">

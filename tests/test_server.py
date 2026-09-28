@@ -129,7 +129,7 @@ class LaunchAgent(unittest.TestCase):
         x = core.item_add(self.c, "shop", "agent step", priority=1)["id"]
         sent = []
         t = server.launch_agent(self.c, runner=sent.append)
-        self.assertEqual((t["project"], t["item"]["id"], t["command"]), ("shop", x, "claude go"))
+        self.assertEqual((t["project"], t["item"]["id"], t["command"]), ("shop", x, "claude go --remote-control"))
         self.assertIn('tell application "Terminal"', sent[0])
         self.assertIn('keystroke "t" using command down', sent[0])  # a new tab by default
         core.config_set(self.c, "launch_in", "window")

@@ -48,6 +48,8 @@ DEFAULT_SETTINGS = {
     "notify_interval": "30s",
     "notify_batch_window": "60s",
     "ntfy_url": "https://ntfy.sh",
+    # Where a phone notification opens when river knows no session link for it (a local page cannot open there).
+    "ntfy_click": "https://claude.ai/code",
     "ntfy_topic": "",
     "ntfy_token": "",
     "email_to": "",
@@ -60,7 +62,8 @@ DEFAULT_SETTINGS = {
     "auto_continue": "on",
     "due_warn_before": "3d",
     # Agents the page can start, as "Label=command" entries separated by ";". The first is the default.
-    "launch_agents": "Claude Code=claude go",
+    # Claude Code starts with Remote Control, so the session has a web link that notifications open.
+    "launch_agents": "Claude Code=claude go --remote-control",
     "launch_in": "tab",
     "setup_done": "off",
     # Review before release: with review on, each deploy item waits on a review item that waits on
@@ -574,6 +577,8 @@ def config_set(conn, key, value, project=None, item=None, agent=None, actor=None
     elif key in ("email_to", "email_from") and value and not all(
             re.match(r"^[^@\s,]+@[^@\s,]+\.[^@\s,]+$", x.strip()) for x in value.split(",")):
         raise RiverError(f"{key} is an email address" + (" (a comma list is fine)" if key == "email_to" else ""))
+    elif key == "ntfy_click" and value and not re.match(r"^https?://[^\s/]+", value):
+        raise RiverError("ntfy_click is a web link, for example https://claude.ai/code")
     elif key == "ntfy_url" and not re.match(r"^https?://[^\s/]+", value):
         raise RiverError("ntfy_url is the server address, for example https://ntfy.sh")
     elif key == "ntfy_topic" and value and not re.match(r"^[A-Za-z0-9_-]{1,64}$", value):

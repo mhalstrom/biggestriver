@@ -57,6 +57,8 @@ def _ntfy_channel(conn):
 
     def send(title, body, url):
         headers = {"Title": _header(title), "Tags": "bell", "Content-Type": "text/plain; charset=utf-8"}
+        if not url or _is_local(url):
+            url = core.setting(conn, "ntfy_click")
         if url:
             headers["Click"] = url
         if token:
@@ -173,6 +175,12 @@ def setup_ntfy(conn, url=None, token=None, actor=None):
     ]}
 
 
+def _is_local(url):
+    """A link that only works on this computer, such as the river page."""
+    import urllib.parse
+    return (urllib.parse.urlparse(url).hostname or "") in ("127.0.0.1", "localhost", "::1")
+
+
 def page_url(conn, item_id=None):
     base = f"http://127.0.0.1:{SERVE_PORT['port'] or core.setting(conn, 'serve_port')}/"
     return base + (f"#item-{item_id}" if item_id else "")
@@ -188,7 +196,10 @@ def compose(conn, rows):
     lines = [f"- {r['summary']}" for r in rows[:10]]
     if len(rows) > 10:
         lines.append(f"- and {len(rows) - 10} more")
-    return f"River: {len(rows)} things need you", "\n".join(lines), page_url(conn)
+    # One session behind every row: open it; else the page (phones get ntfy_click instead).
+    urls = {core.origin_session_url(conn, r["item_id"], r["message_id"]) for r in rows}
+    url = urls.pop() if len(urls) == 1 and None not in urls else page_url(conn)
+    return f"River: {len(rows)} things need you", "\n".join(lines), url
 
 
 def _adapter(conn, channel):
@@ -233,7 +244,8 @@ def run(conn, now_=False):
 def test(conn, channel):
     """Send a test message on one channel now, outside the outbox."""
     try:
-        _adapter(conn, channel)("River: test", "This is a test notification from river notify test.", page_url(conn))
+        _adapter(conn, channel)("River: test", "This is a test notification from river notify test.",
+                                  core.session_url_from_env() or page_url(conn))
     except RiverError:
         raise
     except Exception as e:
