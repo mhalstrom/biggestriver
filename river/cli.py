@@ -50,13 +50,27 @@ When the user says "go" (or asks you to take work from the queue), run
 `river go` in this folder and follow the briefing it prints: it names you,
 gives you a role and an item, and says what to run when you finish.
 Keep going: after each `river done`, run `river go` again at once and take the
-next item. Stop only when go gives you no item or you need the user, then
-report everything you finished.
+next item. When go gives you no item, run `river wait` as the briefing says:
+it returns when work comes, and ends the session after a while without work.
+Stop when wait says END or you need the user, then report everything you
+finished.
 When the user says "plan", run `river plan` instead and ask the user what
 outcome they want before you add items.
 """
 
 # Earlier versions of the block, longest first; river init replaces them with AGENT_SNIPPET.
+_KEEP_GOING_BLOCK = """## Work queue
+
+This project uses Biggest River (`river`) to track work and who is doing it.
+When the user says "go" (or asks you to take work from the queue), run
+`river go` in this folder and follow the briefing it prints: it names you,
+gives you a role and an item, and says what to run when you finish.
+Keep going: after each `river done`, run `river go` again at once and take the
+next item. Stop only when go gives you no item or you need the user, then
+report everything you finished.
+When the user says "plan", run `river plan` instead and ask the user what
+outcome they want before you add items.
+"""
 _PLAN_BLOCK = """## Work queue
 
 This project uses Biggest River (`river`) to track work and who is doing it.
@@ -66,7 +80,7 @@ gives you a role and an item, and says what to run when you finish.
 When the user says "plan", run `river plan` instead and ask the user what
 outcome they want before you add items.
 """
-OLD_SNIPPETS = [_PLAN_BLOCK, _PLAN_BLOCK.split('When the user says "plan"')[0]]
+OLD_SNIPPETS = [_KEEP_GOING_BLOCK, _PLAN_BLOCK, _PLAN_BLOCK.split('When the user says "plan"')[0]]
 
 SETUP = """Setting up agents to use river
 
@@ -449,6 +463,9 @@ def build_parser():
     x.add_argument("--ship", action="store_true", help="also ask for it to be deployed (river ship)")
     x.add_argument("--note", help="why an agent may close a person's item (required then; the user is told)")
     x.add_argument("--synced", action="store_true", help="you already posted the result to its tracker issues")
+    x = sub.add_parser("wait", help="no work now: block until a push, a ready item, or a message comes (up to wait_step)")
+    x.add_argument("--project", help="project name(s) to wait on (default: this folder's)")
+    x.add_argument("--step", help="return after this long (default: the wait_step setting)")
     x = sub.add_parser("cleanup", help="open items that may be done or stale: expired leases, commits that name them, ...")
     x.add_argument("--project"); x.add_argument("--no-git", action="store_true", help="skip the git log checks")
     x = sub.add_parser("check", help="record what a check of a suspect item found: done, partial, or open")
@@ -679,7 +696,8 @@ def _run(args, conn):
     else:
         render(args, res)
     sys.stdout.flush()
-    _footer(conn, res["agent"] if args.cmd in ("go", "plan") else actor)
+    if not (args.cmd in ("wait", "unregister") and conn.execute("SELECT 1 FROM agents WHERE name=?", (actor,)).fetchone() is None):
+        _footer(conn, res["agent"] if args.cmd in ("go", "plan") else actor)
     if not args.quiet and not args.json:
         h = _hint(args, res, actor)
         if h:
@@ -903,6 +921,8 @@ def dispatch(conn, a, actor):
         return core.synced(conn, a.id, a.ref, actor)
     if c == "cleanup":
         return core.cleanup(conn, a.project, not a.no_git)
+    if c == "wait":
+        return core.wait(conn, os.getcwd(), actor, a.project, a.step)
     if c == "check":
         return core.check(conn, a.id, a.result, a.note, actor)
     if c == "ship":
@@ -1278,10 +1298,11 @@ def render_go(b):
             out.append(f"  #{h['id']} {h['title']}  (held by {h['assignee']})")
         out += [
             "",
-            "Tell the user this session has no work here. Options:",
-            f"  - stop this session (it frees nothing, it holds nothing), or",
-            f"  - work elsewhere: river project list, then {r} go --project <name>, or",
-            f"  - check again later: {r} go",
+            f"Wait for work: {r} wait",
+            "  It returns when work is pushed to you, an item gets ready here, or a message comes (give the shell",
+            "  command a 10-minute time limit). Then do what it prints: WORK: run go. No work yet: run wait again.",
+            "  END: no work came within wait_max; stop, and tell the user this session has ended.",
+            f"  To work in another project instead: river project list, then {r} go --project <name>.",
         ]
     msg = _unread_text(b.get("messages") or {"unread": 0, "questions": 0}, me)
     if msg:
@@ -1325,8 +1346,22 @@ def render_cleanup(rows, r="river"):
     print(f"Record it: {r} check <id> done --note \"<commits or files>\"   |   partial --note \"<what is left>\"   |   open")
 
 
+def render_wait(res):
+    r = f"river --as {res['agent']}"
+    if res["result"] == "work":
+        print(f"WORK: {res['why']}. Run now: {r} go")
+    elif res["result"] == "again":
+        print(f"No work yet. Run again at once: {r} wait   (this session ends by itself in {res['left']} without work)")
+    else:
+        print(f"END: no work came in {res['waited']}. River "
+              + ("kept your registration: " + res["kept"] if res.get("kept") else "released your goals and unregistered you")
+              + ". Stop now, and tell the user this session has ended and its tab can be closed.")
+
+
 def render(a, res):
     c = a.cmd
+    if c == "wait":
+        return render_wait(res)
     if c == "cleanup":
         return render_cleanup(res, f"river --as {a.actor}" if a.actor else "river")
     if c == "done" and isinstance(res, dict) and res.get("refs"):

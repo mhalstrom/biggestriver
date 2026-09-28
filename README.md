@@ -207,7 +207,9 @@ blocker trees, the agent registry, capacity, settings, and the web page.
   `river go --role owner` takes the next free goal. The page shows goal cards
   with owner and progress, and filters by goal.
 - `river go` roles: owner, worker, unblocker, planner, deployer, idle. After
-  `done`, an agent takes the next item at once (`auto_continue`).
+  `done`, an agent takes the next item at once (`auto_continue`). With no
+  item, it runs `river wait`, which returns when work is pushed to it or gets
+  ready, and ends the session after `wait_max` (30m) without work.
 - Per-item context fields (context, files it touches, check command), so a
   new agent can start without searching.
 - Keep or release a claimed item when a prerequisite appears, and a

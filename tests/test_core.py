@@ -2038,3 +2038,47 @@ class Cleanup(Base):
         core.config_set(self.c, "stale_after", "14d")
         core.check(self.c, i, "open", None, "t")  # still wanted: the check restarts the clock
         self.assertEqual(core.cleanup(self.c, git=False), [])
+
+
+class Wait(Base):
+    def setUp(self):
+        super().setUp()
+        core.project_add(self.c, "a", path=self.dir.name)
+        core.project_add(self.c, "b")
+        core.register(self.c, "w")
+
+    def wait(self, **kw):
+        return core.wait(self.c, self.dir.name, "w", step=kw.pop("step", "0s"), sleep=lambda s: None, **kw)
+
+    def test_again_then_work_from_a_push_or_ready_item(self):
+        self.assertEqual(self.wait()["result"], "again")
+        self.assertEqual(core.agent_status(self.c, "w")["role"], "waiting")
+        cap = core.capacity(self.c)
+        self.assertEqual((cap["agents_waiting"], [x["kind"] for x in cap["advice"]]), (["w"], ["waiting"]))
+        other = self.add("b", "elsewhere")  # not in the folder's project: no wake
+        self.assertEqual(self.wait()["result"], "again")
+        core.push(self.c, other, "w", None, "t")
+        res = self.wait()
+        self.assertEqual((res["result"], res["why"]), ("work", f"#{other} was pushed to you"))
+        core.decline(self.c, other, None, "w")
+        i = self.add("a", "here")
+        self.assertIn(f"#{i} is ready", self.wait()["why"])
+        core.go(self.c, self.dir.name, "w")
+        self.assertIsNone(core.agent_status(self.c, "w")["waiting_since"])  # work ends the wait
+        with self.assertRaises(RiverError):
+            self.wait()  # it holds an item now
+
+    def test_end_after_wait_max_releases_goals_and_unregisters(self):
+        core.goal_add(self.c, "a", "g")
+        core.goal_own(self.c, "g", "w")
+        core.config_set(self.c, "wait_max", "0s")
+        self.assertEqual(self.wait()["result"], "end")
+        self.assertIsNone(self.c.execute("SELECT 1 FROM agents WHERE name='w'").fetchone())
+        self.assertIsNone(core.goal_show(self.c, "g")["owner"])
+
+    def test_capacity_still_warns_about_idle_sessions_that_do_not_wait(self):
+        core.register(self.c, "idle1")
+        self.wait()
+        kinds = {x["kind"]: x["text"] for x in core.capacity(self.c)["advice"]}
+        self.assertIn("waiting", kinds)
+        self.assertIn("1 session(s) have no work", kinds["too_many"])

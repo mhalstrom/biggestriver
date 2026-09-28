@@ -18,10 +18,12 @@ every later command. When the briefing asks, record your Claude Code session
 name once (`river --as <your-name> session <name> --ref <ref>`; ListAgents
 prints `This session is <name> [<ref>]`, and names can repeat, so keep the ref), so
 people and agents can message your session directly. After `river done`, run `river --as <your-name> go` again
-at once, in the same turn: do not stop to report between items. Stop only when
-go gives you no item (role IDLE, or PLANNER and the goal needs the user) or
-you need the user; then report everything you finished. A person turns this
-off with `river config set auto_continue off`.
+at once, in the same turn: do not stop to report between items. When go gives
+you no item (role IDLE), run `river --as <your-name> wait` (give the shell
+command a 10-minute limit). It prints WORK (run go), no work yet (run wait
+again), or END: no work came within `wait_max` (30m), river unregistered you,
+and you stop. Stop also when you need the user; then report everything you
+finished. A person turns this off with `river config set auto_continue off`.
 
 ## Identity (by hand)
 

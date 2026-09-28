@@ -74,6 +74,10 @@ DEFAULT_SETTINGS = {
     # what tool, e.g. "github owner/shop via gh" or "jira PROJ via the Jira MCP server". Set it per
     # project (river project tracker). River has no tracker API code: agents use their own tools.
     "tracker": "",
+    # A session with no work runs river wait: it takes new work when it comes, and ends after wait_max
+    # without any (0: end at once). One river wait call returns after wait_step, below a shell time limit.
+    "wait_max": "30m",
+    "wait_step": "9m",
     # river cleanup lists a ready item that nobody claimed for this long.
     "stale_after": "14d",
     "review": "off",
@@ -475,6 +479,8 @@ def _migrate(conn):
         conn.execute("ALTER TABLE agents ADD COLUMN session TEXT")
     if "session_ref" not in acols:
         conn.execute("ALTER TABLE agents ADD COLUMN session_ref TEXT")
+    if "waiting_since" not in acols:
+        conn.execute("ALTER TABLE agents ADD COLUMN waiting_since TEXT")
     if "session_url" not in acols:
         conn.execute("ALTER TABLE agents ADD COLUMN session_url TEXT")
     if "auto" not in {r["name"] for r in conn.execute("PRAGMA table_info(deps)")}:
@@ -579,7 +585,7 @@ def _scope(conn, project=None, item=None, agent=None) -> str:
 def config_set(conn, key, value, project=None, item=None, agent=None, actor=None):
     if key not in DEFAULT_SETTINGS:
         raise RiverError(f"unknown setting {key!r}; known: {', '.join(sorted(DEFAULT_SETTINGS))}")
-    if key.endswith(("_ttl", "_after", "_before", "_interval", "_window")):
+    if key.endswith(("_ttl", "_after", "_before", "_interval", "_window")) or key in ("wait_max", "wait_step"):
         parse_duration(value)
     elif key in ("keep_prereq_limit", "replan_threshold", "max_leases", "serve_port", "smtp_port"):
         if not value.isdigit():
@@ -3327,6 +3333,8 @@ def capacity(conn, ann=None):
     ai_active = [a for a in agents if a["kind"] == "ai" and a["state"] == "active" and a.get("role") != "planner"]
     ai_busy = [a for a in ai_active if a["holds"]]
     ai_idle = [a for a in ai_active if not a["holds"]]
+    # Waiting sessions (river wait) take new work by themselves within seconds, and end after wait_max.
+    ai_waiting = [a for a in ai_idle if a.get("role") == "waiting"]
     in_progress = [a for a in live if a["status"] in ("in_progress", "held")]
 
     # Width by depth: how many open items could run at each step if every earlier step finished.
@@ -3342,10 +3350,15 @@ def capacity(conn, ann=None):
     if spare > 0:
         advice.append({"kind": "launch", "text": f"{spare} ready item(s) for agents can run and have nobody on them: "
                        f"you can start up to {spare} more agent session(s)."})
-    if spare < 0:
+    stuck_idle = max(-spare - len(ai_waiting), 0)
+    if spare < 0 and ai_waiting:
+        advice.append({"kind": "waiting", "text": f"{len(ai_waiting)} session(s) wait for work: they take the next "
+                       f"ready item by themselves, or one you push to them, and end after "
+                       f"{setting(conn, 'wait_max')} without work."})
+    if stuck_idle:
         advice.append({"kind": "too_many", "text": f"{len(ai_idle)} active agent session(s) hold nothing, "
                        f"but only {runnable} ready item(s) can run for them now. "
-                       f"{-spare} session(s) have no work; stop them or give them other work."})
+                       f"{stuck_idle} session(s) have no work; stop them or give them other work."})
     if ready_human:
         advice.append({"kind": "human", "text": f"{len(ready_human)} ready item(s) wait on a human."})
     if not ready and any(a["status"] == "open" for a in live) and not in_progress:
@@ -3358,6 +3371,7 @@ def capacity(conn, ann=None):
         "agents_active": len(ai_active),
         "agents_busy": len(ai_busy),
         "agents_idle": [a["name"] for a in ai_idle],
+        "agents_waiting": [a["name"] for a in ai_waiting],
         "spare_slots": max(spare, 0),
         "excess_sessions": max(-spare, 0),
         "layers": layer_list,
@@ -3915,7 +3929,71 @@ def _deploy_brief(conn, item):
 def _set_role_note(conn, actor, role, item_id):
     note = f"role: {role}" + (f" on #{item_id}" if item_id else "")
     with tx(conn):
-        conn.execute("UPDATE agents SET note=?, role=? WHERE name=?", (note, role, actor))
+        # A role with work ends a wait; idle keeps the wait clock, so wait_max counts from the first wait.
+        conn.execute("UPDATE agents SET note=?, role=?, waiting_since=CASE WHEN ? THEN waiting_since END "
+                     "WHERE name=?", (note, role, role in ("idle", "waiting"), actor))
+
+
+def _work_for(conn, actor, names):
+    """Why this agent has something to do now, or None: a push to it, ready work it can take, or messages."""
+    pushed = conn.execute("SELECT id FROM items WHERE reserved_for=? AND reserved_until IS NOT NULL "
+                          "AND status='open'", (actor,)).fetchone()
+    if pushed:
+        return f"#{pushed['id']} was pushed to you"
+    try:
+        nxt = next_item(conn, ",".join(names) if names else None, None, False, actor, 1)
+    except RiverError:
+        nxt = []
+    if nxt:
+        return f"#{nxt[0]['id']} is ready: {nxt[0]['title']}"
+    u = unread(conn, actor)
+    if u["unread"] or u["questions"]:
+        return "you have messages (river inbox)"
+    return None
+
+
+def wait(conn, cwd, actor, project=None, step=None, sleep=None, poll=3.0):
+    """Block until this agent has work (a push, a ready item in its projects, a message), for at most wait_step.
+
+    Returns result work (run go), again (run wait again), or end: no work came within wait_max since the
+    first wait, so river released the agent's goals and unregistered it, and the session should stop."""
+    import time
+    sleep = sleep or time.sleep
+    if not actor:
+        raise RiverError("waiting needs an agent name: pass --as <name>")
+    _agent(conn, actor)
+    names = [n.strip() for n in project.split(",") if n.strip()] if project else projects_for_dir(conn, cwd)
+    with tx(conn):
+        held = conn.execute("SELECT id FROM items WHERE assignee=? AND status IN ('in_progress','held')",
+                            (actor,)).fetchall()
+        if held:
+            raise RiverError(f"{actor} holds {', '.join('#' + str(r['id']) for r in held)}; finish or release it "
+                             f"before you wait: river --as {actor} go")
+        conn.execute("UPDATE agents SET waiting_since=COALESCE(waiting_since, ?), role='waiting', "
+                     "note='waiting for work (river wait)' WHERE name=?", (iso(now()), actor))
+    since = parse_iso(_agent(conn, actor)["waiting_since"])
+    limit = parse_duration(setting(conn, "wait_max", agent=actor))
+    step = parse_duration(step or setting(conn, "wait_step", agent=actor))
+    deadline = min(now() + step, since + limit)
+    while True:
+        why = _work_for(conn, actor, names)
+        if why:
+            return {"result": "work", "why": why, "agent": actor}
+        if now() >= deadline:
+            break
+        activity(conn, actor)  # a waiting session is active: it takes work within seconds
+        sleep(poll)
+    if now() < since + limit:
+        return {"result": "again", "agent": actor, "left": _short(since + limit - now())}
+    with tx(conn):
+        for g in conn.execute("SELECT name FROM goals WHERE owner=?", (actor,)).fetchall():
+            conn.execute("UPDATE goals SET owner=NULL, owner_expires_at=NULL WHERE name=?", (g["name"],))
+            _event(conn, None, "river", f"goal {g['name']} released: {actor} ended after waiting")
+    try:
+        unregister(conn, actor, "river")
+    except RiverError as e:  # it owns a deploy target: keep it registered, and say so
+        return {"result": "end", "agent": actor, "waited": _short(limit), "kept": str(e)}
+    return {"result": "end", "agent": actor, "waited": _short(limit)}
 
 
 def plan(conn, cwd, actor=None, project=None):
