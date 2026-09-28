@@ -1735,6 +1735,16 @@ def _question_nudges(conn):
               f"and has not answered your question #{r['id']}. Ask someone else"
               + (f": river ask --holder-of {r['item_id']} \"...\", or river who" if r["item_id"] else ": river who"),
               to=r["from_agent"], item_id=r["item_id"], reply_to=r["id"])
+    # Other messages (alerts, notes, offers) that a gone agent never read: tell the sender once.
+    for r in conn.execute("SELECT m.id, m.kind, m.from_agent, m.to_agent, m.item_id, a.last_seen FROM messages m "
+                          "JOIN agents a ON a.name=m.to_agent WHERE m.kind IN ('alert','note','offer') "
+                          "AND m.read_at IS NULL AND m.nudged_at IS NULL AND m.from_agent<>'river'").fetchall():
+        if _agent_state(conn, {"name": r["to_agent"], "last_seen": r["last_seen"]}) != "gone":
+            continue
+        conn.execute("UPDATE messages SET nudged_at=? WHERE id=?", (iso(now()), r["id"]))
+        _send(conn, "notice", "river", f"{r['to_agent']} is gone (last seen {r['last_seen'][:16].replace('T', ' ')} UTC) "
+              f"and never read your {r['kind']} #{r['id']}. Send it to someone else if it still matters (river who)",
+              to=r["from_agent"], item_id=r["item_id"], reply_to=r["id"])
 
 
 def activity(conn, actor):

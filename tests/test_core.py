@@ -358,6 +358,18 @@ class Messages(Base):
         self.assertEqual(len(notes), 1)
         self.assertTrue(notes[0].startswith("alice is away"))
 
+    def test_unread_message_to_gone_agent_tells_sender_once(self):
+        m = core.send(self.c, "alert", "look at this", to="alice", actor="bob")
+        self.c.execute("UPDATE agents SET last_seen=? WHERE name='alice'", (core.iso(core.now() - timedelta(hours=2)),))
+        core.activity(self.c, "bob")  # away is not gone
+        self.assertEqual([x for x in core.inbox(self.c, "bob") if x["kind"] == "notice"], [])
+        self.c.execute("UPDATE agents SET last_seen=? WHERE name='alice'", (core.iso(core.now() - timedelta(days=2)),))
+        core.activity(self.c, "bob")
+        core.activity(self.c, "bob")
+        notes = [x["body"] for x in core.inbox(self.c, "bob") if x["kind"] == "notice"]
+        self.assertEqual(len(notes), 1)
+        self.assertIn(f"never read your alert #{m['id']}", notes[0])
+
     def test_question_to_item_reaches_next_holder_and_answer_closes_it(self):
         q = core.send(self.c, "question", "why?", item=self.x, actor="bob")
         self.assertIsNone(q["to_agent"])
