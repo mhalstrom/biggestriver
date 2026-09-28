@@ -1485,8 +1485,9 @@ class Email(Base):
             self.notify.ADAPTERS["email"](self.c)  # user set, no password
         self.pw.write_text("x")
         self.pw.chmod(0o644)
-        with self.assertRaises(RiverError):
-            self.notify.smtp_password()
+        if os.name != "nt":  # Windows has no POSIX modes: river skips this check there
+            with self.assertRaises(RiverError):
+                self.notify.smtp_password()
         os.environ["RIVER_SMTP_PASSWORD"] = "from-env"
         self.assertEqual(self.notify.smtp_password(), "from-env")
         self.assertNotIn("from-env", str(core.config_list(self.c)))
