@@ -495,7 +495,14 @@ async function renderLog(force) {
   }).join("") || `<div class="muted">No items.</div>`;
 }
 
-let graphDefaulted = false;
+let graphDefaulted = false, elkReady = null;
+// ELK routes edges around boxes; the default layout can run an edge behind an unrelated box, which
+// reads as a dependency that does not exist. If ELK does not load, edges are drawn above the boxes.
+function loadElk() {
+  if (elkReady === null) elkReady = import("https://cdn.jsdelivr.net/npm/@mermaid-js/layout-elk@0.2.3/dist/mermaid-layout-elk.esm.min.mjs")
+    .then(m => { mermaid.registerLayoutLoaders(m.default); return true; }).catch(() => false);
+  return elkReady;
+}
 async function renderGraph(force) {
   if (tab !== "graph" || !window.mermaid) return;
   // A big queue draws as an unreadable wall: the first time, show only the project of the top ready item.
@@ -530,8 +537,10 @@ async function renderGraph(force) {
     g += `click N${i.id} call riverOpen(${i.id})\n`;
   }
   try {
-    const { svg, bindFunctions } = await mermaid.render("g" + Date.now(), g);
+    const elk = await loadElk();
+    const { svg, bindFunctions } = await mermaid.render("g" + Date.now(), (elk ? "---\nconfig:\n  layout: elk\n---\n" : "") + g);
     $("#graph").innerHTML = svg; bindFunctions && bindFunctions($("#graph"));
+    $("#graph").querySelectorAll(".edgePaths").forEach(e => e.parentNode.appendChild(e));
   } catch (e) { $("#graph").innerHTML = `<div class="muted">Graph failed to draw: ${esc(e.message || e)}</div>`; }
 }
 window.riverOpen = (id) => openDrawer(id);
