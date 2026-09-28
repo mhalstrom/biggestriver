@@ -7,6 +7,7 @@ import { makeTable } from "./components/table.js";
 import { makeDrawer, itemDrawerHtml, msgLine } from "./components/drawer.js";
 import { makeDialog } from "./components/dialog.js";
 import { agentStart, agentPick, pickedAgent, wireAgentPicks } from "./components/agentStart.js";
+import { makePanZoom } from "./components/panZoom.js";
 hooks.refresh = refresh;
 let S = null, openItem = null, tab = "board", graphSig = "";
 const drawer = makeDrawer($("#drawer"));
@@ -356,6 +357,7 @@ function renderGraphSide(withDone) {
   if (on && sideShown !== graphProj) side.scrollTo({ left: on.offsetLeft - side.offsetLeft - 10, top: side.scrollHeight > side.clientHeight ? on.offsetTop - side.offsetTop - 40 : 0 });
   sideShown = graphProj;
 }
+const graphView = makePanZoom($("#graph"));
 async function renderGraph(force) {
   if (tab !== "graph" || !window.mermaid) return;
   // A big queue draws as an unreadable wall: the first time, show only the project of the top ready item.
@@ -397,9 +399,11 @@ async function renderGraph(force) {
   try {
     const elk = await loadElk();
     const { svg, bindFunctions } = await mermaid.render("g" + Date.now(), (elk ? "---\nconfig:\n  layout: elk\n---\n" : "") + g);
-    $("#graph").innerHTML = svg; bindFunctions && bindFunctions($("#graph"));
-    $("#graph").querySelectorAll(".edgePaths").forEach(e => e.parentNode.appendChild(e));
-  } catch (e) { $("#graph").innerHTML = `<div class="muted">Graph failed to draw: ${esc(e.message || e)}</div>`; }
+    // The same project, goal and done choice keeps the zoom and position across refreshes.
+    const stage = graphView.show(svg, JSON.stringify([proj, G, withDone]));
+    bindFunctions && bindFunctions(stage);
+    stage.querySelectorAll(".edgePaths").forEach(e => e.parentNode.appendChild(e));
+  } catch (e) { graphView.show(`<div class="muted">Graph failed to draw: ${esc(e.message || e)}</div>`, null); }
 }
 window.riverOpen = (id) => openDrawer(id);
 // Closing takes the item out of the URL: Back when this page added it, else the URL is rewritten.
