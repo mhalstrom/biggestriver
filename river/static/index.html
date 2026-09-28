@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Biggest River</title>
+<link rel="stylesheet" href="vendor/tabulator/tabulator.min.css">
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
@@ -204,6 +205,7 @@
   d.style.cssText = "position:fixed;left:0;right:0;top:0;z-index:99;padding:14px 18px;background:#fde7e6;color:#b42318;font:14px system-ui,sans-serif";
   d.textContent = "The page could not load its code (app.js). The river serve that runs this page is older than the page: stop it (Ctrl-C in its terminal) and start it again with river serve.";
   document.body.prepend(d); }</script>
+<script src="vendor/tabulator/tabulator.min.js"></script>
 <script type="module" src="app.js" onerror="riverLoadFailed()"></script>
 </body>
 </html>

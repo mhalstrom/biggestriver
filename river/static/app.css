@@ -216,3 +216,25 @@ table.settings td, table.settings th { text-align: left; padding: 6px; border-to
 .wp-h .counts { color: var(--muted); font-size: 12px; margin-left: auto; white-space: nowrap; }
 .wp-items { padding: 0 0 6px 16px; }
 .hidden { display: none !important; }
+/* Tabulator tables (components/table.js) take the page's colors, in light and dark. */
+.tabulator { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; font-size: 13px; color: var(--ink); }
+.tabulator .tabulator-header { background: var(--bg); border-bottom: 1px solid var(--line); color: var(--muted); font-weight: 600; }
+.tabulator .tabulator-header .tabulator-col { background: var(--bg); border-right: 1px solid var(--line); }
+.tabulator .tabulator-header .tabulator-col .tabulator-col-content { padding: 6px 8px; }
+.tabulator .tabulator-header .tabulator-col .tabulator-header-filter input,
+.tabulator .tabulator-header .tabulator-col .tabulator-header-filter select { background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 3px 6px; font-weight: normal; }
+.tabulator .tabulator-header .tabulator-col.tabulator-sortable[aria-sort=none] .tabulator-col-content .tabulator-col-sorter .tabulator-arrow { border-bottom-color: var(--muted); opacity: .5; }
+.tabulator .tabulator-header .tabulator-col.tabulator-sortable[aria-sort=ascending] .tabulator-col-content .tabulator-col-sorter .tabulator-arrow { border-bottom-color: var(--accent); }
+.tabulator .tabulator-header .tabulator-col.tabulator-sortable[aria-sort=descending] .tabulator-col-content .tabulator-col-sorter .tabulator-arrow { border-top-color: var(--accent); }
+.tabulator .tabulator-tableholder, .tabulator .tabulator-tableholder .tabulator-table { background: var(--panel); color: var(--ink); }
+.tabulator .tabulator-row, .tabulator .tabulator-row.tabulator-row-even { background: var(--panel); border-bottom: 1px solid var(--line); }
+.tabulator .tabulator-row .tabulator-cell { border-right: 0; padding: 6px 8px; }
+.tabulator .tabulator-row.tabulator-selected { background: var(--wait-bg); }
+@media (hover: hover) and (pointer: fine) {
+  .tabulator .tabulator-header .tabulator-col.tabulator-sortable.tabulator-col-sorter-element:hover { background: var(--wait-bg); }
+  .tabulator .tabulator-row.tabulator-selectable:hover { background: var(--bg); cursor: pointer; }
+}
+.tabulator .tabulator-placeholder .tabulator-placeholder-contents { color: var(--muted); font-size: 13px; font-weight: normal; }
+.tabulator-popup-container.tabulator-edit-list { background: var(--panel); color: var(--ink); border: 1px solid var(--line); font-size: 13px; }
+.tabulator-edit-list .tabulator-edit-list-item { color: var(--ink); }
+.tabulator-edit-list .tabulator-edit-list-item.active, .tabulator-edit-list .tabulator-edit-list-item.focused { background: var(--accent); color: var(--accent-ink); outline: 0; }
