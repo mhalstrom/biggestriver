@@ -49,7 +49,10 @@ def static_file(path, root=None):
 
 
 def _watched():
-    return sorted(PKG.glob("*.py")) + sorted(STATIC.glob("*"))
+    """The server's code and every page file, in subfolders too (components/); vendor/ never changes by hand."""
+    return sorted(PKG.glob("*.py")) + sorted(
+        f for f in STATIC.rglob("*") if f.is_file() and "vendor" not in f.relative_to(STATIC).parts[:1]
+        and not any(part.startswith(".") for part in f.relative_to(STATIC).parts))
 
 
 def _build_id():

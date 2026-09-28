@@ -171,6 +171,25 @@ class LaunchAgent(unittest.TestCase):
         self.assertEqual(s.count("do script"), 3)  # the tab, the fallback window, and the no-window case
 
 
+class Watched(unittest.TestCase):
+    def test_dev_reload_sees_subfolders_but_not_vendor(self):
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as d:
+            static = Path(d)
+            for f in ("app.js", "components/chip.js", "vendor/lib/big.js", ".hidden/x.js"):
+                (static / f).parent.mkdir(parents=True, exist_ok=True)
+                (static / f).write_text("x")
+            old, server.STATIC = server.STATIC, static
+            try:
+                names = [str(f.relative_to(static)) for f in server._watched() if f.suffix == ".js"]
+                before = server._build_id()
+                os.utime(static / "components/chip.js", ns=(1, 2 ** 62))
+                self.assertNotEqual(server._build_id(), before)
+            finally:
+                server.STATIC = old
+        self.assertEqual(names, ["app.js", "components/chip.js"])
+
+
 if __name__ == "__main__":
     unittest.main()
 
