@@ -764,8 +764,18 @@ $("#claimNext").addEventListener("click", async () => {
   if (!actor()) return toast("Choose your name in 'You are' first", true);
   const area = $("#area").value;
   const res = await act("next_claim", area === "__mine" ? { mine: true } : { project: area || undefined }).catch(() => null);
-  if (res && res.length) { toast(`Claimed #${res[0].id}`); openDrawer(res[0].id); } else if (res) toast("Nothing is ready in that area");
+  if (!(res && res.length)) { if (res) toast("Nothing is ready in that area"); return; }
+  const id = res[0].id;
+  openDrawer(id);
+  const person = (S.agents || []).some(a => a.name === actor() && a.kind === "human");
+  if (!person || !$("#claimAgent").checked) return toast(`Claimed #${id}`);
+  try {
+    const r = await act("open_agent_on", { id, person: actor(), agent: $("#launchAgent") ? $("#launchAgent").value : undefined });
+    toast(`Claimed #${id}; started ${r.agent} in ${r.project} to do it with you`);
+  } catch (e) { toast(`Claimed #${id}; no agent opened`, true); }
 });
+try { if (store("river.claim.agent") === "off") $("#claimAgent").checked = false; } catch (e) { /* no storage */ }
+$("#claimAgent").addEventListener("change", (e) => store("river.claim.agent", e.target.checked ? "on" : "off"));
 $("#addGo").addEventListener("click", async () => {
   const title = $("#addTitle").value.trim(); if (!title) return toast("Title is empty", true);
   const ids = (el) => $(el).value.split(/[\s,]+/).filter(Boolean).map(Number);

@@ -184,6 +184,20 @@ class LaunchAgent(unittest.TestCase):
         b = core.go(self.c, self.dir.name, None, focus=r["focus"])
         self.assertEqual((b["role"], b["item"]["id"]), ("deployer", r["deploy"]["id"]))
 
+    def test_claim_next_by_a_person_opens_an_agent_that_helps(self):
+        core.project_add(self.c, "shop", path=self.dir.name)
+        core.register(self.c, "mark", human=True)
+        x = core.item_add(self.c, "shop", "write the copy")["id"]  # anyone can do it
+        core.claim(self.c, x, "mark")
+        sent = []
+        t = server.open_agent_on(self.c, x, runner=sent.append, person="mark")
+        self.assertIn(f"RIVER_FOCUS=help:{x}@mark claude go", sent[-1])
+        b = core.go(self.c, self.dir.name, None, focus=t["focus"])
+        self.assertEqual(b["role"], "helper")
+        self.assertIn("mark took it to do themselves", b["help_prompt"])
+        with self.assertRaisesRegex(RiverError, "in progress by mark"):
+            server.open_agent_on(self.c, x, runner=sent.append, person="someone-else")
+
     def test_windows_opens_a_console_window_with_the_env_set(self):
         core.project_add(self.c, "shop", path=self.dir.name)
         x = core.item_add(self.c, "shop", "work")["id"]

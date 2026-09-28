@@ -3774,7 +3774,8 @@ def prompt_for(conn, item_id, person=None):
     person = _person(conn, person)
     a = ann[iid]
     head = (f"You are helping {person} with one step in their work queue (Biggest River, the `river` command). "
-            f"It is marked for a person to do or decide.")
+            + ("It is marked for a person to do or decide." if a["doer"] == "human"
+               else f"{person} took it to do themselves, with your help."))
     return "\n\n".join([head, _item_prompt_section(conn, a, ann, person), PROMPT_STEPS.format(person=person)])
 
 
@@ -4042,7 +4043,7 @@ def go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None)
         return brief
     if role is None and fid.isdigit() and int(fid) in annotate(conn):
         f = item_show(conn, int(fid))
-        if f["status"] in OPEN_STATES and kind == "help" and f["doer"] == "human":
+        if f["status"] in OPEN_STATES and kind == "help" and (f["doer"] == "human" or (person and f["assignee"] == person)):
             person = _person(conn, person or None)
             brief.update(role="helper", item=None, help_prompt=prompt_for(conn, f["id"], person),
                          why=f"the page opened this session to do #{f['id']} together with {person}")

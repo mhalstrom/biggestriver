@@ -127,9 +127,10 @@ def open_agent_on(conn, item_id, runner=None, agent=None, person=None):
     it = core.item_show(conn, item_id)
     if it["status"] not in core.OPEN_STATES:
         raise RiverError(f"#{item_id} is {it['status']}; there is nothing to open an agent on")
-    if it["status"] == "in_progress":
+    mine = person and it["assignee"] == person  # a person claimed it (Claim next): help them do it
+    if it["status"] == "in_progress" and not mine:
         raise RiverError(f"#{item_id} is in progress by {it['assignee']}; message them instead")
-    if it["doer"] == "human":
+    if it["doer"] == "human" or mine:
         focus = f"help:{it['id']}" + (f"@{person}" if person else "")
     elif it["ready"]:
         return dispatch_item(conn, it["id"], runner, agent)
