@@ -762,6 +762,40 @@ class Plan(Base):
             core.plan(self.c, self.dir.name, "ag")
 
 
+class DueDates(Base):
+    def test_due_inherits_warns_once_per_stage_and_never_reorders(self):
+        core.project_add(self.c, "a")
+        core.register(self.c, "mark", human=True)
+        pre = self.add("a", "prerequisite", p=3)
+        other = self.add("a", "other", p=2)
+        goal = core.item_add(self.c, "a", "outcome", 3, after=[pre], due="2099-01-01 UTC")["id"]
+        ann = core.annotate(self.c)
+        self.assertEqual((ann[pre]["effective_due"], ann[pre]["due_from"]), ("2099-01-01T23:59:00Z", goal))
+        self.assertIsNone(ann[pre]["due_state"])
+        self.assertEqual([x["id"] for x in core.ready_list(self.c)], [other, pre])  # order unchanged
+        core.item_edit(self.c, goal, due=core.iso(core.now() + timedelta(days=1)))  # inside due_warn_before
+        core.activity(self.c, "mark")
+        core.activity(self.c, "mark")
+        alerts = [m["body"] for m in core.inbox(self.c, "mark") if m["kind"] == "alert"]
+        self.assertEqual(len(alerts), 1)
+        self.assertIn(f"#{goal} outcome is due soon", alerts[0])
+        self.assertIn(f"Still open before it: #{pre}", alerts[0])
+        self.assertEqual(core.annotate(self.c)[pre]["due_state"], "soon")
+        self.c.execute("UPDATE items SET due=? WHERE id=?", (core.iso(core.now() - timedelta(minutes=1)), goal))
+        core.activity(self.c, "mark")
+        alerts = [m["body"] for m in core.inbox(self.c, "mark") if m["kind"] == "alert"]
+        self.assertEqual(len(alerts), 1)
+        self.assertIn("is past its due date", alerts[0])
+        self.assertEqual(core.status(self.c)["due"][0]["due_state"], "overdue")
+        core.item_edit(self.c, goal, due="none")
+        self.assertIsNone(core._item(self.c, goal)["due"])
+
+    def test_parse_due(self):
+        self.assertEqual(core.parse_due("2026-10-15 UTC"), "2026-10-15T23:59:00Z")
+        self.assertEqual(core.parse_due("2026-10-15 17:00 UTC"), "2026-10-15T17:00:00Z")
+        self.assertIsNone(core.parse_due("none"))
+
+
 class Sessions(Base):
     def test_session_name_recorded_and_shown(self):
         core.project_add(self.c, "a", path=self.dir.name)

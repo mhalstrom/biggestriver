@@ -55,6 +55,7 @@ DEFAULT_SETTINGS = {
     "email_batch_window": "10m",
     "timezone": "",
     "auto_continue": "on",
+    "due_warn_before": "3d",
 }
 
 SCHEMA = """
@@ -107,6 +108,8 @@ CREATE TABLE IF NOT EXISTS items (
   hold_expires_at   TEXT,
   replan            INTEGER NOT NULL DEFAULT 0,
   late_prereqs      INTEGER NOT NULL DEFAULT 0,
+  due               TEXT,
+  due_warned        INTEGER NOT NULL DEFAULT 0,
   found_during      INTEGER REFERENCES items(id),
   takeover_by       TEXT,
   takeover_kind     TEXT,
@@ -313,6 +316,16 @@ def parse_when(s: str, zone: str = "", start: datetime | None = None) -> datetim
     return t.astimezone(timezone.utc)
 
 
+def parse_due(s: str | None, zone: str = "") -> str | None:
+    """A due date as stored (UTC ISO), or None for 'none' / ''. A date alone means the end of that day."""
+    if s is None or s.strip().lower() in ("", "none"):
+        return None
+    words = s.split()
+    if words and re.match(r"^\d{4}-\d{2}-\d{2}$", words[0]) and not any(_CLOCK.match(w.lower()) for w in words[1:]):
+        words.insert(1, "23:59")  # "due 2026-10-15" means by the end of that day
+    return iso(parse_when(" ".join(words), zone))
+
+
 def show_time(iso_s: str | None, zone: str = "") -> str:
     """'Mon 7:00 EDT' for a stored UTC time, in the zone; the date too when it is more than six days away."""
     if not iso_s:
@@ -372,6 +385,9 @@ def _migrate(conn):
             conn.execute(f"ALTER TABLE items ADD COLUMN {col} {typ}")
     if "found_during" not in icols:
         conn.execute("ALTER TABLE items ADD COLUMN found_during INTEGER REFERENCES items(id)")
+    if "due" not in icols:
+        conn.execute("ALTER TABLE items ADD COLUMN due TEXT")
+        conn.execute("ALTER TABLE items ADD COLUMN due_warned INTEGER NOT NULL DEFAULT 0")
     if "late_prereqs" not in icols:
         conn.execute("ALTER TABLE items ADD COLUMN late_prereqs INTEGER NOT NULL DEFAULT 0")
     for col in ("blocked_at", "blocked_until", "blocked_set_by"):
@@ -448,7 +464,7 @@ def _scope(conn, project=None, item=None, agent=None) -> str:
 def config_set(conn, key, value, project=None, item=None, agent=None, actor=None):
     if key not in DEFAULT_SETTINGS:
         raise RiverError(f"unknown setting {key!r}; known: {', '.join(sorted(DEFAULT_SETTINGS))}")
-    if key.endswith(("_ttl", "_after", "_interval", "_window")):
+    if key.endswith(("_ttl", "_after", "_before", "_interval", "_window")):
         parse_duration(value)
     elif key in ("keep_prereq_limit", "replan_threshold", "max_leases", "serve_port", "smtp_port"):
         if not value.isdigit():
@@ -771,7 +787,7 @@ def touches_list(text):
 
 
 def item_add(conn, project, title, priority=2, notes="", doer="any", after=(), actor=None,
-             context="", touches=None, check="", blocks=None, mode=None, found_during=None, feeds=()):
+             context="", touches=None, check="", blocks=None, mode=None, found_during=None, feeds=(), due=None):
     """Add an item. `after`: items it waits on. `feeds`: items it waits on and whose output it reads."""
     if doer not in DOERS:
         raise RiverError(f"doer is one of {', '.join(DOERS)}")
@@ -789,6 +805,10 @@ def item_add(conn, project, title, priority=2, notes="", doer="any", after=(), a
              check or "", iso(now())))
         iid = cur.lastrowid
         _event(conn, iid, actor, f"added to {project} at P{priority}")
+        if due:
+            t = parse_due(due, setting(conn, "timezone"))
+            conn.execute("UPDATE items SET due=? WHERE id=?", (t, iid))
+            _event(conn, iid, actor, f"due {show_time(t, setting(conn, 'timezone'))}")
         if found_during is not None:
             conn.execute("UPDATE items SET found_during=? WHERE id=?", (int(found_during), iid))
             _event(conn, iid, actor, f"found during #{found_during}")
@@ -822,9 +842,15 @@ def _project_name(conn, pid):
 
 
 def item_edit(conn, item_id, title=None, notes=None, doer=None, project=None, actor=None,
-              context=None, touches=None, check=None):
+              context=None, touches=None, check=None, due=None):
     with tx(conn):
         it = _item(conn, item_id)
+        if due is not None:
+            zone = setting(conn, "timezone")
+            t = parse_due(due, zone)
+            if t != it["due"]:
+                conn.execute("UPDATE items SET due=?, due_warned=0 WHERE id=?", (t, it["id"]))
+                _event(conn, it["id"], actor, f"due {show_time(t, zone)}" if t else "due date removed")
         if title is not None:
             conn.execute("UPDATE items SET title=? WHERE id=?", (title, it["id"]))
             _event(conn, it["id"], actor, "title changed")
@@ -1420,6 +1446,8 @@ def annotate(conn):
     projects, items, waits_on, waited_by, conflicts, feeds = _load_graph(conn)
     is_open = {i: items[i]["status"] in OPEN_STATES for i in items}
     zone = setting(conn, "timezone")
+    now_s = iso(now())
+    soon_s = iso(now() + parse_duration(setting(conn, "due_warn_before")))
 
     # Open dependents, transitive, of each open item.
     memo: dict[int, frozenset] = {}
@@ -1475,6 +1503,15 @@ def annotate(conn):
             ready=ready,
             depth=depth(i) if is_open[i] else None,
         )
+        due, due_from = it["due"], None
+        for d in deps_i:
+            if items[d]["due"] and (due is None or items[d]["due"] < due):
+                due, due_from = items[d]["due"], d
+        a["effective_due"], a["due_from"] = (due, due_from) if is_open[i] else (it["due"], None)
+        a["due_text"] = show_time(a["effective_due"], zone)
+        a["due_state"] = (None if not is_open[i] or not a["effective_due"]
+                          else "overdue" if a["effective_due"] <= now_s
+                          else "soon" if a["effective_due"] <= soon_s else None)
         a["blocked_until_text"] = show_time(it["blocked_until"], zone)
         a["blocked_text"] = ("" if not it["blocked_reason"] else "blocked" + (
             f" until {a['blocked_until_text']}" if it["blocked_until"] else "") + f": {it['blocked_reason']}")
@@ -1638,6 +1675,7 @@ def _sweep(conn):
         if r["blocked_set_by"] and r["doer"] != "human":
             _send(conn, "notice", "river", f"the wait on #{r['id']} {r['title']} ended "
                   f"({r['blocked_reason']}); it can start now", to=r["blocked_set_by"], item_id=r["id"])
+    _due_warnings(conn, t)
     for r in conn.execute("SELECT id, assignee FROM items WHERE status='held' AND hold_expires_at < ?", (t,)).fetchall():
         _unhold(conn, r["id"], "river", f"hold expired (was {r['assignee']}); released")
         _send(conn, "notice", "river", f"your hold on #{r['id']} expired, so it is open to every agent now, and its "
@@ -1650,6 +1688,27 @@ def _sweep(conn):
         _send(conn, "notice", "river", f"your ownership of target {r['name']} expired; nobody owns it now. "
               f"Take it again if you still deploy there: river target own {r['name']}", to=r["owner"])
     return [r["id"] for r in expired]
+
+
+def _due_warnings(conn, t):
+    """Warn every person once when an open item's own due date comes close (due_warn_before), and
+    once more when it passes. The warning is an alert, so it shows in Needs you and notifies."""
+    zone = setting(conn, "timezone")
+    humans = [r["name"] for r in conn.execute("SELECT name FROM agents WHERE kind='human' ORDER BY name")]
+    for r in conn.execute(f"SELECT id, title, due, due_warned FROM items WHERE due IS NOT NULL "
+                          f"AND status IN {OPEN_STATES} AND due_warned < 2").fetchall():
+        soon = iso(parse_iso(r["due"]) - parse_duration(setting(conn, "due_warn_before", item_id=r["id"])))
+        stage = 2 if r["due"] <= t else 1 if soon <= t else 0
+        if stage <= r["due_warned"]:
+            continue
+        conn.execute("UPDATE items SET due_warned=? WHERE id=?", (stage, r["id"]))
+        left_ = _open_prereqs(conn, r["id"])
+        text = (f"#{r['id']} {r['title']} " + ("is past its due date" if stage == 2 else "is due soon")
+                + f" ({show_time(r['due'], zone)}). "
+                + (f"Still open before it: {', '.join('#' + str(x) for x in left_)}." if left_ else "Nothing waits before it."))
+        _event(conn, r["id"], "river", "overdue" if stage == 2 else "due soon")
+        for h in humans:
+            _send(conn, "alert", "river", text, to=h)
 
 
 def activity(conn, actor):
@@ -2556,6 +2615,9 @@ def status(conn, recent=10):
         "human_waiting": [{"id": a["id"], "title": a["title"], "project": a["project"]}
                           for a in sorted(ann.values(), key=lambda a: a["sort_key"])
                           if a["ready"] and a["doer"] == "human" and not a["project_archived"]],
+        "due": [{"id": a["id"], "title": a["title"], "project": a["project"], "due_text": a["due_text"],
+                 "due_state": a["due_state"]} for a in sorted(ann.values(), key=lambda a: a["due"] or "")
+                if a["due"] and a["status"] in OPEN_STATES and not a["project_archived"]],
         "spare_slots": cap["spare_slots"],
         "excess_sessions": cap["excess_sessions"],
         "advice": cap["advice"],
@@ -2896,5 +2958,8 @@ def plan(conn, cwd, actor=None, project=None):
             "human_waiting": [brief_item(a) for a in focus if a["ready"] and a["doer"] == "human"],
             "stuck": stuck,
             "replan": [dict(brief_item(a), late_prereqs=a["late_prereqs"]) for a in focus if a["replan"]],
+            "due": [dict(brief_item(a), due_text=a["due_text"], due_state=a["due_state"],
+                         open_before=len(a["open_blockers"])) for a in sorted(
+                        (a for a in focus if a["due"]), key=lambda a: a["due"])],
         },
     }

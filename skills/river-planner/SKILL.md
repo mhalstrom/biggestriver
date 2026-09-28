@@ -13,9 +13,11 @@ overview and the open questions. Then talk with the user before you add
 anything:
 
 1. **Ask for the outcome first.** "What must be true when this is done, and by
-   when?" One or two sentences. Do not add items until you have it. River has
-   no due-date field: put the date in the outcome item's title ("... by Oct 15")
-   and tell the user that river does not warn when the date comes close.
+   when?" One or two sentences. Do not add items until you have it. Put the
+   date on the outcome item: `--due 2026-10-15` (end of that day) or
+   `--due "fri 17:00 America/New_York"`. Its prerequisites show the date too.
+   A due date does not change the order; river warns each person when it is
+   `due_warn_before` (3d) away and again when it passes.
 2. **Ask only what changes the plan.** Scope, deadline, who does which steps
    (agents or the user), what already exists, and what must not change. Take
    the open questions from the briefing that bear on this outcome; skip the
@@ -85,7 +87,7 @@ river dep <id> --on <id> --kind conflicts  # no order, never in progress togethe
 river undep <id> --on <id> ...
 river prio <id> <0-4>               # 0 is most important
 river move <id> --before|--after <id>   # manual order inside a project
-river edit <id> [--title] [--notes] [--doer] [--project] [--context] [--touches ...] [--check]
+river edit <id> [--title] [--notes] [--doer] [--project] [--context] [--touches ...] [--check] [--due <date>|none]
 river blocked <id> --reason "..." [--until "mon 07:00 America/New_York"] / river unblock <id>
 river drop <id> / river reopen <id>
 river replanned <id> [--note "..."]   # clear the replan mark after you split or re-scope the item

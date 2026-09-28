@@ -329,13 +329,19 @@ function prioChip(it) {
   const inh = it.priority_from != null ? ` ← #${it.priority_from}` : "";
   return `<span class="chip ${it.effective_priority === 0 ? "c-p0" : "c-p"}" title="own priority P${it.priority}">P${it.effective_priority}${inh}</span>`;
 }
+function dueChip(it) {
+  if (!it.effective_due || ["done", "dropped"].includes(it.status)) return "";
+  const cls = it.due_state === "overdue" ? "c-p0" : it.due_state === "soon" ? "c-blocked" : "c-p";
+  const word = it.due_state === "overdue" ? "overdue" : "due " + left(it.effective_due);
+  return `<span class="chip ${cls}" title="due ${esc(it.due_text)}${it.due_from ? " (from #" + it.due_from + ")" : ""}">${word}</span>`;
+}
 function doerChip(it) { return it.doer === "any" ? "" : `<span class="chip c-${it.doer}">${it.doer === "human" ? "human" : "agent"}</span>`; }
 
 function rowHtml(it, why) {
   return `<div class="row" data-id="${it.id}"${it.status === "open" ? ' draggable="true"' : ""}>
     <div class="id">#${it.id}</div>
     <div class="t"><div class="title">${esc(it.title)}</div>${it.blocked_reason && it.status === "open" ? `<div class="blk">${esc(it.blocked_text)}</div>` : ""}${why ? `<div class="why">${esc(why)}</div>` : ""}</div>
-    <div class="chips">${prioChip(it)}${doerChip(it)}${it.replan && !["done", "dropped"].includes(it.status) ? `<span class="chip c-blocked" title="${it.late_prereqs} prerequisites added while claimed: plan it again">replan</span>` : ""}${statusChip(it)}</div></div>`;
+    <div class="chips">${prioChip(it)}${dueChip(it)}${doerChip(it)}${it.replan && !["done", "dropped"].includes(it.status) ? `<span class="chip c-blocked" title="${it.late_prereqs} prerequisites added while claimed: plan it again">replan</span>` : ""}${statusChip(it)}</div></div>`;
 }
 
 function renderCapacity() {
@@ -556,6 +562,7 @@ async function openDrawer(id) {
       <label>Context<textarea id="dContext" rows="2" placeholder="what a new agent must know to start">${esc(it.context)}</textarea></label>
       <label>Touches<input id="dTouches" placeholder="files it changes, comma separated" value="${esc((it.touches || []).join(", "))}"></label>
       <label>Check<input id="dCheck" placeholder="command that shows it works" value="${esc(it.check)}"></label>
+      <label>Due${it.due ? ` <span class="muted">(${esc(it.due_text)})</span>` : it.due_from ? ` <span class="muted">(from #${it.due_from}: ${esc(it.due_text)})</span>` : ""}<input id="dDue" placeholder="2026-10-15, fri 17:00, or none" value=""></label>
       <div class="two">
         <label>Priority (own)<select id="dPrio">${[0,1,2,3,4].map(p => `<option ${p === it.priority ? "selected" : ""}>${p}</option>`).join("")}</select></label>
         <label>Who can do it<select id="dDoer">${["any","ai","human"].map(x => `<option value="${x}" ${x === it.doer ? "selected" : ""}>${x === "any" ? "anyone" : x === "ai" ? "agent" : "human"}</option>`).join("")}</select></label>
@@ -607,7 +614,7 @@ async function drawerAction(what) {
     if (what === "block") { const r = $("#dBlock").value.trim(), u = $("#dUntil").value.trim(); if (r || u) await act("block", { id, reason: r || undefined, until: u || undefined }); }
     if (what === "dep") { const on = $("#dDep").value.split(/[\s,]+/).filter(Boolean).map(Number); if (on.length) await act("dep_add", { id, on }); }
     if (what === "save") {
-      await act("item_edit", { id, title: $("#dTitle").value, notes: $("#dNotes").value, context: $("#dContext").value, touches: $("#dTouches").value, check: $("#dCheck").value, doer: $("#dDoer").value, project: $("#dProject").value !== it.project ? $("#dProject").value : undefined });
+      await act("item_edit", { id, title: $("#dTitle").value, notes: $("#dNotes").value, context: $("#dContext").value, touches: $("#dTouches").value, check: $("#dCheck").value, due: $("#dDue").value.trim() || undefined, doer: $("#dDoer").value, project: $("#dProject").value !== it.project ? $("#dProject").value : undefined });
       if (+$("#dPrio").value !== it.priority) await act("prio", { id, priority: +$("#dPrio").value });
       toast("Saved");
     }

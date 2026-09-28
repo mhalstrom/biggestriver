@@ -105,6 +105,9 @@ def _fmt_item(a, show_reason=True):
         flags.append(f"pushed to {a['reserved_for']}" if a.get("reserved_until") else f"reserved for {a['reserved_for']}")
     if a.get("replan"):
         flags.append("replan")
+    if a.get("effective_due") and a["status"] in core.OPEN_STATES:
+        flags.append(("OVERDUE " if a["due_state"] == "overdue" else "due soon " if a["due_state"] == "soon" else "due ")
+                     + a["due_text"] + (f" (from #{a['due_from']})" if a.get("due_from") else ""))
     if a.get("same_project"):
         flags.append("same project as your earlier work")
     elif a.get("distance") is not None:
@@ -295,6 +298,7 @@ def build_parser():
     x.add_argument("--priority", "-p", type=int, default=2, help="0 highest .. 4 lowest (default 2)")
     x.add_argument("--after", type=int, nargs="*", default=[], help="items this one waits on")
     x.add_argument("--feeds", type=int, nargs="*", default=[], help="items this one waits on and whose output it reads")
+    x.add_argument("--due", help="due date: 2026-10-15 (end of day), 'fri 17:00 America/New_York'; warns, does not reorder")
     x.add_argument("--notes", default="")
     x.add_argument("--doer", default="any", choices=core.DOERS, help="who can do it (default any)")
     x.add_argument("--context", default="", help="what a new agent must know to start: why, where, decisions made")
@@ -314,6 +318,7 @@ def build_parser():
     x.add_argument("--doer", choices=core.DOERS); x.add_argument("--project")
     x.add_argument("--context"); x.add_argument("--touches", nargs="*", help="replaces the list; give none to clear it")
     x.add_argument("--check")
+    x.add_argument("--due", help="due date (2026-10-15, 'fri 17:00'), or none to remove it")
 
     x = sub.add_parser("list", help="list items (open by default)")
     x.add_argument("--project"); x.add_argument("--status"); x.add_argument("--all", action="store_true")
@@ -640,9 +645,10 @@ def dispatch(conn, a, actor):
             title = a.words[0]
             project = core.project_for_add(conn, os.getcwd(), a.blocks if a.blocks is not None else a.found_during)
         return core.item_add(conn, project, title, a.priority, a.notes, a.doer, a.after, actor,
-                             a.context, a.touches, a.check, a.blocks, a.mode, a.found_during, a.feeds)
+                             a.context, a.touches, a.check, a.blocks, a.mode, a.found_during, a.feeds, a.due)
     if c == "edit":
-        return core.item_edit(conn, a.id, a.title, a.notes, a.doer, a.project, actor, a.context, a.touches, a.check)
+        return core.item_edit(conn, a.id, a.title, a.notes, a.doer, a.project, actor, a.context, a.touches, a.check,
+                              a.due)
     if c == "list":
         return core.item_list(conn, a.project, a.status, a.all)
     if c == "show":
@@ -804,6 +810,12 @@ def render_status(res):
         holds = ", ".join(f"#{h['id']} {_cut(h['title'], 60)}" for h in ag["holds"]) or "nothing"
         owns = f"; owns {', '.join(ag['owns'])}" if ag["owns"] else ""
         print(f"  {ag['name']} ({ag['kind']}, {ag['state']}): {holds}{owns}")
+    if res.get("due"):
+        print()
+        print("Due dates:")
+        for d in res["due"]:
+            tag = "OVERDUE " if d["due_state"] == "overdue" else "soon " if d["due_state"] == "soon" else ""
+            print(f"  #{d['id']:<4} [{d['project']}] {_cut(d['title'])}  {tag}{d['due_text']}")
     if res["human_waiting"]:
         print()
         print("Waiting on a human:")
@@ -859,6 +871,9 @@ def render_plan(b):
     section("Marked replan: work grew after an agent started (split, re-scope, then river replanned <id>)",
             q["replan"], lambda x: f"#{x['id']:<4} [{x['project']}] {_cut(x['title'], 60)}  "
                                    f"({x['late_prereqs']} prerequisites added while claimed)")
+    section("Due dates", q.get("due", []), lambda x: f"#{x['id']:<4} [{x['project']}] {_cut(x['title'], 60)}  "
+            f"({'OVERDUE' if x['due_state'] == 'overdue' else 'due soon' if x['due_state'] == 'soon' else 'due'} "
+            f"{x['due_text']}; {x['open_before']} open before it)")
     section("Waiting on a human", q["human_waiting"], lambda x: f"#{x['id']:<4} [{x['project']}] {_cut(x['title'])}")
     section("Items with no notes or context", q["items_without_notes"],
             lambda x: f"#{x['id']:<4} [{x['project']}] {_cut(x['title'])}")
