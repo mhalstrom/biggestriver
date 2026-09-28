@@ -160,6 +160,16 @@ CREATE TABLE IF NOT EXISTS item_goals (
   PRIMARY KEY (item_id, goal_id)
 );
 
+-- Links to issues in outside trackers (Jira, GitHub Issues, Linear...). River stores the link only;
+-- agents read and update the tracker with their own tools.
+CREATE TABLE IF NOT EXISTS item_refs (
+  item_id     INTEGER NOT NULL REFERENCES items(id),
+  ref         TEXT NOT NULL,
+  url         TEXT,
+  created_at  TEXT NOT NULL,
+  PRIMARY KEY (item_id, ref)
+);
+
 CREATE TABLE IF NOT EXISTS deps (
   item_id     INTEGER NOT NULL REFERENCES items(id),
   blocked_by  INTEGER NOT NULL REFERENCES items(id),
@@ -1092,7 +1102,7 @@ def touches_list(text):
 
 def item_add(conn, project, title, priority=2, notes="", doer="any", after=(), actor=None,
              context="", touches=None, check="", blocks=None, mode=None, found_during=None, feeds=(), due=None,
-             goals=None):
+             goals=None, refs=None):
     """Add an item. `after`: items it waits on. `feeds`: items it waits on and whose output it reads."""
     if doer not in DOERS:
         raise RiverError(f"doer is one of {', '.join(DOERS)}")
@@ -1117,6 +1127,8 @@ def item_add(conn, project, title, priority=2, notes="", doer="any", after=(), a
             (actor, p["id"]))] if actor else []
         for g in names:
             _tag(conn, iid, g, actor)
+        if refs:
+            _add_refs(conn, iid, refs, actor)
         if due:
             t = parse_due(due, setting(conn, "timezone"))
             conn.execute("UPDATE items SET due=? WHERE id=?", (t, iid))
@@ -1134,6 +1146,52 @@ def item_add(conn, project, title, priority=2, notes="", doer="any", after=(), a
             _dep_add(conn, int(blocks), iid, actor)
             _prereq_mode(conn, int(blocks), [iid], actor, mode)
     return item_show(conn, iid)
+
+
+REF_RE = re.compile(r"^[a-z][a-z0-9_.-]*:\S+$")
+
+
+def ref_url(ref):
+    """The web link a ref implies without settings: GitHub issues only."""
+    m = re.match(r"^github:([\w.-]+/[\w.-]+)#(\d+)$", ref)
+    return f"https://github.com/{m.group(1)}/issues/{m.group(2)}" if m else None
+
+
+def parse_refs(refs, urls=()):
+    """Pair --ref values with --ref-url values by position; check the form <tracker>:<key>."""
+    refs, urls = [r.strip() for r in refs or ()], [u.strip() for u in urls or ()]
+    if len(urls) > len(refs):
+        raise RiverError("more --ref-url than --ref: give each URL after the ref it belongs to")
+    out = []
+    for i, r in enumerate(refs):
+        if not REF_RE.match(r):
+            raise RiverError(f"ref {r!r} is not <tracker>:<key>, for example jira:PROJ-123, github:owner/repo#12, "
+                             f"linear:ENG-42")
+        u = urls[i] if i < len(urls) and urls[i] else ref_url(r)
+        if u and not re.match(r"^https?://\S+$", u):
+            raise RiverError(f"ref URL {u!r} is not a web link")
+        out.append((r, u))
+    return out
+
+
+def _add_refs(conn, item_id, pairs, actor):
+    """Link refs to an item. Refused when an open item in the same project already has the ref."""
+    it = _item(conn, item_id)
+    for ref, url in pairs:
+        other = conn.execute(f"SELECT i.id, i.title FROM item_refs r JOIN items i ON i.id=r.item_id WHERE r.ref=? "
+                             f"AND i.id<>? AND i.project_id=? AND i.status IN {OPEN_STATES}",
+                             (ref, it["id"], it["project_id"])).fetchone()
+        if other:
+            raise RiverError(f"{ref} is already linked to #{other['id']} {other['title']}, which is open in the "
+                             f"same project: river show {other['id']}")
+        old = conn.execute("SELECT url FROM item_refs WHERE item_id=? AND ref=?", (it["id"], ref)).fetchone()
+        if old is None:
+            conn.execute("INSERT INTO item_refs(item_id, ref, url, created_at) VALUES (?,?,?,?)",
+                         (it["id"], ref, url, iso(now())))
+            _event(conn, it["id"], actor, f"linked {ref}")
+        elif url and url != old["url"]:
+            conn.execute("UPDATE item_refs SET url=? WHERE item_id=? AND ref=?", (url, it["id"], ref))
+            _event(conn, it["id"], actor, f"link {ref} URL changed")
 
 
 def project_for_add(conn, cwd, related=None):
@@ -1210,9 +1268,15 @@ def add_plan(conn, project, text, actor=None, priority=2, doer="any", dry_run=Fa
 
 
 def item_edit(conn, item_id, title=None, notes=None, doer=None, project=None, actor=None,
-              context=None, touches=None, check=None, due=None, goals=None, untag=None):
+              context=None, touches=None, check=None, due=None, goals=None, untag=None, refs=None, unref=None):
     with tx(conn):
         it = _item(conn, item_id)
+        if refs:
+            _add_refs(conn, it["id"], refs, actor)
+        for r in unref or ():
+            if not conn.execute("DELETE FROM item_refs WHERE item_id=? AND ref=?", (it["id"], r.strip())).rowcount:
+                raise RiverError(f"#{it['id']} has no link {r}")
+            _event(conn, it["id"], actor, f"unlinked {r.strip()}")
         for g in goals or ():
             _tag(conn, it["id"], g, actor)
         for g in untag or ():
@@ -1828,6 +1892,9 @@ def annotate(conn):
     for r in conn.execute("SELECT ig.item_id, g.name FROM item_goals ig JOIN goals g ON g.id=ig.goal_id "
                           "ORDER BY g.rank, g.id"):
         tags.setdefault(r["item_id"], []).append(r["name"])
+    refs: dict[int, list] = {}
+    for r in conn.execute("SELECT item_id, ref, url FROM item_refs ORDER BY created_at, ref"):
+        refs.setdefault(r["item_id"], []).append({"ref": r["ref"], "url": r["url"]})
     now_s = iso(now())
     soon_s = iso(now() + parse_duration(setting(conn, "due_warn_before")))
 
@@ -1891,6 +1958,7 @@ def annotate(conn):
                 due, due_from = items[d]["due"], d
         a["effective_due"], a["due_from"] = (due, due_from) if is_open[i] else (it["due"], None)
         a["goals"] = tags.get(i, [])
+        a["refs"] = refs.get(i, [])
         a["due_text"] = show_time(a["effective_due"], zone)
         a["due_state"] = (None if not is_open[i] or not a["effective_due"]
                           else "overdue" if a["effective_due"] <= now_s
@@ -2859,9 +2927,13 @@ def item_show(conn, item_id, ann=None):
     return a
 
 
-def item_list(conn, project=None, status=None, include_closed=False, goal=None):
+def item_list(conn, project=None, status=None, include_closed=False, goal=None, ref=None):
+    """Items in order. With ref: the items linked to that tracker issue, closed ones too (an import checks it)."""
     ann = annotate(conn)
     rows = [a for a in ann.values() if not a["project_archived"]]
+    if ref is not None:
+        rows = [a for a in rows if any(r["ref"] == ref.strip() for r in a["refs"])]
+        include_closed = True
     if goal is not None:
         _goal(conn, goal)
         rows = [a for a in rows if goal in a["goals"]]

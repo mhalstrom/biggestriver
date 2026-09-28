@@ -128,6 +128,8 @@ def _fmt_item(a, show_reason=True):
         flags.append("replan")
     if a.get("goals"):
         flags.append("goal " + ",".join(a["goals"]))
+    if a.get("refs"):
+        flags.append(" ".join(r["ref"] for r in a["refs"]))
     if a.get("effective_due") and a["status"] in core.OPEN_STATES:
         flags.append(("OVERDUE " if a["due_state"] == "overdue" else "due soon " if a["due_state"] == "soon" else "due ")
                      + a["due_text"] + (f" (from #{a['due_from']})" if a.get("due_from") else ""))
@@ -141,6 +143,13 @@ def _fmt_item(a, show_reason=True):
     return line
 
 
+def _ref_args(x):
+    x.add_argument("--ref", action="append", default=[],
+                   help="link an outside tracker issue: <tracker>:<key>, e.g. jira:PROJ-123, github:owner/repo#12 (repeatable)")
+    x.add_argument("--ref-url", action="append", default=[], dest="ref_url",
+                   help="web link of the --ref at the same position (github: refs get one by themselves)")
+
+
 def _context_lines(a, indent="  "):
     """What a new agent needs to start: why and where (context), the files (touches), how to know it works (check)."""
     out = []
@@ -152,6 +161,8 @@ def _context_lines(a, indent="  "):
         out.append(f"{indent}touches: {', '.join(a['touches'])}")
     if a.get("check"):
         out.append(f"{indent}check:   {a['check']}")
+    for r in a.get("refs", []):
+        out.append(f"{indent}tracker: {r['ref']}" + (f"  {r['url']}" if r["url"] else ""))
     for f in a.get("fed_by_detail", []):
         if f["output"]:
             out.append(f"{indent}from #{f['id']}: {f['output']}")
@@ -362,6 +373,7 @@ def build_parser():
     x.add_argument("--blocks", type=int, help="item that must wait on this new one (usually the one you hold)")
     x.add_argument("--found-during", type=int, dest="found_during",
                    help="the item you were working on when you found this (links them; not a dependency)")
+    _ref_args(x)
     g = x.add_mutually_exclusive_group()
     g.add_argument("--keep", dest="mode", action="store_const", const="keep",
                    help="with --blocks: keep holding that item and do this one yourself now")
@@ -376,10 +388,13 @@ def build_parser():
     x.add_argument("--due", help="due date (2026-10-15, 'fri 17:00'), or none to remove it")
     x.add_argument("--goal", action="append", help="tag the item with a goal (repeatable)")
     x.add_argument("--untag", action="append", help="remove a goal tag (repeatable)")
+    _ref_args(x)
+    x.add_argument("--unref", action="append", help="remove a tracker link (repeatable)")
 
     x = sub.add_parser("list", help="list items (open by default)")
     x.add_argument("--project"); x.add_argument("--status"); x.add_argument("--all", action="store_true")
     x.add_argument("--goal", help="only items tagged with this goal")
+    x.add_argument("--ref", help="only items linked to this tracker issue, closed ones too (jira:PROJ-123)")
 
     x = sub.add_parser("show", help="one item with its links and history"); x.add_argument("id", type=int)
     nt = sub.add_parser("notify", help="send needs-you notifications: run, test a channel, status")
@@ -813,12 +828,12 @@ def dispatch(conn, a, actor):
             project = core.project_for_add(conn, os.getcwd(), a.blocks if a.blocks is not None else a.found_during)
         return core.item_add(conn, project, title, a.priority, a.notes, a.doer, a.after, actor,
                              a.context, a.touches, a.check, a.blocks, a.mode, a.found_during, a.feeds, a.due,
-                             [] if a.no_goal else a.goal)
+                             [] if a.no_goal else a.goal, core.parse_refs(a.ref, a.ref_url))
     if c == "edit":
         return core.item_edit(conn, a.id, a.title, a.notes, a.doer, a.project, actor, a.context, a.touches, a.check,
-                              a.due, a.goal, a.untag)
+                              a.due, a.goal, a.untag, core.parse_refs(a.ref, a.ref_url), a.unref)
     if c == "list":
-        return core.item_list(conn, a.project, a.status, a.all, a.goal)
+        return core.item_list(conn, a.project, a.status, a.all, a.goal, a.ref)
     if c == "show":
         return core.item_show(conn, a.id)
     if c == "status":

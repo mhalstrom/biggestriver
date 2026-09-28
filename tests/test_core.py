@@ -1884,3 +1884,40 @@ class ReleaseReview(Base):
         d = core.ship(self.c, c, "dev")
         self.assertEqual(d["id"], self.deploy)
         self.assertEqual([i for i in core.item_show(self.c, c)["unblocks"]], [self.deploy])
+
+
+class TrackerRefs(Base):
+    def setUp(self):
+        super().setUp()
+        core.project_add(self.c, "a")
+        core.project_add(self.c, "b")
+
+    def test_refs_link_show_and_refuse_duplicates_in_a_project(self):
+        refs = core.parse_refs(["github:o/r#12", "jira:PROJ-1"], ["", "https://x.atlassian.net/browse/PROJ-1"])
+        i = core.item_add(self.c, "a", "fix it", actor="t", refs=refs)
+        self.assertEqual(i["refs"], [{"ref": "github:o/r#12", "url": "https://github.com/o/r/issues/12"},
+                                     {"ref": "jira:PROJ-1", "url": "https://x.atlassian.net/browse/PROJ-1"}])
+        with self.assertRaises(RiverError) as e:
+            core.item_add(self.c, "a", "again", actor="t", refs=core.parse_refs(["jira:PROJ-1"]))
+        self.assertIn(f"#{i['id']}", str(e.exception))
+        self.assertEqual(len(core.item_list(self.c, "a")), 1)  # the refused add left nothing behind
+        core.item_add(self.c, "b", "other project", actor="t", refs=core.parse_refs(["jira:PROJ-1"]))
+        core.done(self.c, i["id"], "ok", "t")
+        core.item_add(self.c, "a", "reopened upstream", actor="t", refs=core.parse_refs(["jira:PROJ-1"]))
+        self.assertEqual(len(core.item_list(self.c, ref="jira:PROJ-1")), 3)  # closed ones too
+
+    def test_edit_adds_and_removes_refs_and_bad_forms_are_refused(self):
+        i = self.add("a", "x")
+        core.item_edit(self.c, i, refs=core.parse_refs(["linear:ENG-42"]), actor="t")
+        self.assertEqual([r["ref"] for r in core.item_show(self.c, i)["refs"]], ["linear:ENG-42"])
+        core.item_edit(self.c, i, unref=["linear:ENG-42"], actor="t")
+        self.assertEqual(core.item_show(self.c, i)["refs"], [])
+        with self.assertRaises(RiverError):
+            core.item_edit(self.c, i, unref=["linear:ENG-42"], actor="t")
+        for bad in (["PROJ-1"], ["jira: x"], ["Jira:X"]):
+            with self.assertRaises(RiverError):
+                core.parse_refs(bad)
+        with self.assertRaises(RiverError):
+            core.parse_refs(["jira:X"], ["https://a", "https://b"])
+        with self.assertRaises(RiverError):
+            core.parse_refs(["jira:X"], ["javascript:alert(1)"])
