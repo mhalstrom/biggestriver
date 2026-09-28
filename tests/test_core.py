@@ -1778,3 +1778,19 @@ class SessionLinks(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AgentBlock(unittest.TestCase):
+    def test_block_is_added_upgraded_and_not_repeated(self):
+        from pathlib import Path
+        from river import cli
+        with tempfile.TemporaryDirectory() as d:
+            new, old = Path(d, "AGENTS.md"), Path(d, "CLAUDE.md")
+            self.assertIn("added", cli._append_block(new))  # created
+            old.write_text("# Notes\n\n" + cli._PLAN_BLOCK)
+            self.assertIn("updated", cli._append_block(old))
+            text = old.read_text()
+            self.assertIn("Keep going", text)
+            self.assertEqual(text.count("## Work queue"), 1)
+            self.assertIn("already", cli._append_block(old))
+            self.assertEqual(new.read_text(), cli.AGENT_SNIPPET)

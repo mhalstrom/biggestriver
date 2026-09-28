@@ -49,12 +49,24 @@ This project uses Biggest River (`river`) to track work and who is doing it.
 When the user says "go" (or asks you to take work from the queue), run
 `river go` in this folder and follow the briefing it prints: it names you,
 gives you a role and an item, and says what to run when you finish.
+Keep going: after each `river done`, run `river go` again at once and take the
+next item. Stop only when go gives you no item or you need the user, then
+report everything you finished.
 When the user says "plan", run `river plan` instead and ask the user what
 outcome they want before you add items.
 """
 
-# The block before plan mode; river init replaces it with AGENT_SNIPPET.
-OLD_SNIPPETS = [AGENT_SNIPPET.split('When the user says "plan"')[0]]
+# Earlier versions of the block, longest first; river init replaces them with AGENT_SNIPPET.
+_PLAN_BLOCK = """## Work queue
+
+This project uses Biggest River (`river`) to track work and who is doing it.
+When the user says "go" (or asks you to take work from the queue), run
+`river go` in this folder and follow the briefing it prints: it names you,
+gives you a role and an item, and says what to run when you finish.
+When the user says "plan", run `river plan` instead and ask the user what
+outcome they want before you add items.
+"""
+OLD_SNIPPETS = [_PLAN_BLOCK, _PLAN_BLOCK.split('When the user says "plan"')[0]]
 
 SETUP = """Setting up agents to use river
 
@@ -397,7 +409,7 @@ def build_parser():
     x = sub.add_parser("init", help="set up the current folder: link or create its project, add the agent block")
     x.add_argument("--project", help="project name (default: the folder name)")
     x.add_argument("--description", default="", help="what the project covers, for agents")
-    x.add_argument("--file", action="append", help="instructions file to add the block to (default CLAUDE.md, plus AGENTS.md if present)")
+    x.add_argument("--file", action="append", help="instructions file to add the block to (default CLAUDE.md and AGENTS.md)")
 
     x = sub.add_parser("go", help="start or continue an agent session: name, role, item, briefing")
     x.add_argument("--project", help="project name(s) when this folder is not linked")
@@ -673,7 +685,7 @@ def _append_block(f):
         for prev in OLD_SNIPPETS:
             if prev in old and AGENT_SNIPPET not in old:
                 f.write_text(old.replace(prev, AGENT_SNIPPET, 1))
-                return f"{f.name}: updated the work queue block (adds: say plan, run river plan)"
+                return f"{f.name}: updated the work queue block to the current text"
         return f"{f.name}: already has the work queue block"
     f.write_text(old + ("\n" if old and not old.endswith("\n") else "") + ("\n" if old else "") + AGENT_SNIPPET)
     return f"{f.name}: added the work queue block"
@@ -703,7 +715,8 @@ def init_folder(args):
             lines.append(f"project {name}: created and linked to {here}")
         if args.description and exists:
             core.project_describe(conn, name, args.description, args.actor)
-    files = [Path(f) for f in (args.file or [])] or [here / "CLAUDE.md"] + ([here / "AGENTS.md"] if (here / "AGENTS.md").exists() else [])
+    # CLAUDE.md for Claude Code; AGENTS.md for Codex, OpenCode, and the other agents that read it.
+    files = [Path(f) for f in (args.file or [])] or [here / "CLAUDE.md", here / "AGENTS.md"]
     for f in files:
         lines.append(_append_block(f))
     shown = name or linked_here[0]

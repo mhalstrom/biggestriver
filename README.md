@@ -68,8 +68,9 @@ river init --description "what this project covers and what context helps"
 ```
 
 This creates the project (named after the folder), links it to the folder, and
-adds a short block to `CLAUDE.md` (and `AGENTS.md` if present) that tells
-agents to run `river go` when you say "go". Then add work and start agents:
+adds a short block to `CLAUDE.md` (Claude Code) and `AGENTS.md` (Codex,
+OpenCode, and other agents) that tells agents to run `river go` when you say
+"go". Running `river init` again updates an older block. Then add work and start agents:
 
 ```sh
 river add <project> "first item" --doer ai
