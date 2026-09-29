@@ -23,11 +23,29 @@ export function startable(S) {
     && !i.reserved_for && !i.project_archived);
 }
 
+// A model as the ladder names it: a CLI id from the model_ids settings (gpt-6-astra) becomes its name (astra).
+export function ladderName(ids, m) {
+  for (const byName of Object.values(ids || {}))
+    for (const [name, id] of Object.entries(byName)) if (id.toLowerCase() === String(m || "").toLowerCase()) return name;
+  return m;
+}
+
+// The agent to preselect for an item: the first of the item's agent type, else of its model's family.
+export function pickAgent(opts, it, ladder, ids) {
+  if (!it) return null;
+  if (it.agent) { const o = opts.find(o => o.agent_type === it.agent); if (o) return o.label; }
+  const m = ladderName(ids, it.model);
+  const fam = m && Object.keys(ladder || {}).find(f => ladder[f].includes(m));
+  const o = fam && opts.find(o => o.family === fam);
+  return o ? o.label : null;
+}
+
 // The model to preselect for an agent option on an item: the item's recommendation, else the weakest its
 // limits allow, else the last choice here, else the agent's own default ("").
-export function pickModel(opt, it, ladder, last) {
+export function pickModel(opt, it, ladder, last, ids) {
   const ok = (m) => opt.models.some(x => x.name === m) && (!it || modelAllowed(ladder, m, it.min_model, it.max_model));
-  if (it && it.model && ok(it.model)) return it.model;
+  const rec = it && ladderName(ids, it.model);
+  if (rec && ok(rec)) return rec;
   if (it && (it.min_model || it.max_model)) {
     const first = opt.models.find(x => ok(x.name));
     if (first) return first.name;
@@ -103,16 +121,16 @@ function draw(prev) {
   const opts = S.launch_options || [];
   const work = prev ? prev.work : (ctx.work || "");
   const it = workItem(work);
-  // An item for one agent type (codex, claude-code) preselects the first agent of that type.
-  const typed = it && it.agent && opts.find(o => o.agent_type === it.agent);
+  // An item preselects the first agent of its agent type, else of its model's family; a choice here wins.
+  const typed = pickAgent(opts, it, S.model_ladder, S.model_ids);
   const agent = prev && prev.agent && opts.some(o => o.label === prev.agent) ? prev.agent
-    : typed ? typed.label
+    : typed ? typed
     : opts.some(o => o.label === store("river.launch.agent")) ? store("river.launch.agent") : (opts[0] || {}).label;
   const opt = opts.find(o => o.label === agent) || { models: [], efforts: [] };
   const fam = opt.family || "any";
   const ladder = S.model_ladder || {};
   const models = opt.models.filter(m => !it || modelAllowed(ladder, m.name, it.min_model, it.max_model));
-  const model = pickModel(opt, it, ladder, store("river.launch.model." + fam));
+  const model = pickModel(opt, it, ladder, store("river.launch.model." + fam), S.model_ids);
   const effort = pickEffort(opt, it, store("river.launch.effort." + fam));
   const where = (prev && prev.launch_in) || store("river.launch.in") || S.launch_in || "tab";
   const rows = startable(S), projects = [...new Set(rows.map(i => i.project))];

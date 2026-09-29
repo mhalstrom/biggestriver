@@ -1833,7 +1833,7 @@ def _set_models(conn, it, models, actor):
         if v.lower() in ("", "none"):
             new[f] = None
         elif f == "model":
-            new[f] = _check_model_name(v)
+            new[f] = ladder_name(conn, _check_model_name(v))
         elif f == "effort":
             new[f] = _check_effort(conn, v)
         elif f == "agent":
@@ -5175,6 +5175,26 @@ def parse_model_ids(value, platform="model_ids"):
     return out
 
 
+def model_ids(conn):
+    """{platform: {ladder name: CLI id}} from the <prefix>model_ids settings (global)."""
+    out = {}
+    for p, pl in LAUNCH_PLATFORMS.items():
+        try:
+            out[p] = parse_model_ids(setting(conn, pl["prefix"] + "model_ids"), p)
+        except RiverError:
+            out[p] = {}
+    return out
+
+
+def ladder_name(conn, model):
+    """A model as river names it: a CLI id from model_ids (gpt-6-astra) becomes its ladder name (astra)."""
+    for ids in model_ids(conn).values():
+        for name, mid in ids.items():
+            if mid.lower() == (model or "").lower():
+                return name
+    return model
+
+
 def model_id(conn, platform, model, project_id=None, inline=None):
     """The id a platform's CLI gets for a model_ladder name: its <prefix>model_ids entry, else the name."""
     if not model or platform not in LAUNCH_PLATFORMS:
@@ -5611,6 +5631,7 @@ def state(conn):
         "targets": targets_view(conn, ann),
         "launch_agents": [label for label, _ in parse_launch_agents(setting(conn, "launch_agents"))],
         "model_ladder": parse_ladder(setting(conn, "model_ladder")),
+        "model_ids": model_ids(conn),
         "launch_options": launch_options(conn),
         "launch_in": setting(conn, "launch_in"),
         "start_next": _start_next(conn),

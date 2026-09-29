@@ -781,6 +781,10 @@ class LaunchProfiles(unittest.TestCase):
         self.assertIn("-m gpt-6.1-sol ", core._launch_agent_cmd(self.c, None, "Codex", "sol")["command"])
         with self.assertRaisesRegex(RiverError, "name=id"):
             core.config_set(self.c, "codex_model_ids", "astra gpt-6-astra")
+        # An item that names a CLI id keeps the ladder name, so limits, the page, and the dialog know it.
+        x = core.item_add(self.c, "shop", "logo", models={"model": "gpt-6.1-sol"})["id"]
+        self.assertEqual(core.item_show(self.c, x)["model"], "sol")
+        self.assertEqual(core.state(self.c)["model_ids"]["codex"]["sol"], "gpt-6.1-sol")
         # Effort: Codex levels, or the model's own when the Codex model cache lists it.
         with self.assertRaisesRegex(RiverError, "not minimal"):
             core._launch_agent_cmd(self.c, None, "Codex", "sol", "minimal")
