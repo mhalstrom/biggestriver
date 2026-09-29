@@ -195,6 +195,10 @@ preselected), the effort, the work, and a new tab or window. The launch_agents
 command takes the choice through `{model}` and `{effort}`
 (`claude --model {model} --effort {effort} go --remote-control`); with no
 choice, the flag before a placeholder drops out. The session gets `RIVER_MODEL`.
+Start with the work left at "Next" spreads sessions: first the project with
+ready agent work and no agent yet whose top item is most important, and only
+when every such project has an agent, the top item. Start names the new
+session and reserves its item for it, so two quick clicks go to two projects.
 
 An agent that waits on a person's item (`river add "..." --doer human --blocks
 <id> --keep`) holds its own item at most `human_wait_max` (30m; set it per

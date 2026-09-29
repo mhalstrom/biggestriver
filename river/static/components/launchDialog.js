@@ -87,7 +87,8 @@ function workItem(work) {
   const rows = startable(S);
   if (work.startsWith("i:")) return rows.find(i => i.id === +work.slice(2)) || null;
   if (work.startsWith("p:")) return rows.find(i => i.project === work.slice(2)) || null;
-  return rows[0] || null;
+  const nx = S.start_next;  // the server's choice: first a project with ready work and no agent yet
+  return (nx && rows.find(i => i.id === nx.id)) || rows[0] || null;
 }
 
 function draw(prev) {
@@ -114,7 +115,7 @@ function draw(prev) {
     </div>
     <div class="form" style="margin-top:10px">
       ${ctx.pickWork ? `<label>Work<select id="lWork">
-          <option value="">${rows[0] ? `The most important ready item: #${rows[0].id} ${esc(rows[0].title)}` : "Nothing is ready"}</option>
+          <option value="">${S.start_next ? `Next: #${S.start_next.id} ${esc(S.start_next.title)} (${esc(S.start_next.why || S.start_next.project)})` : "Nothing is ready"}</option>
           ${projects.length > 1 ? `<optgroup label="Project (its most important ready item)">${projects.map(p => `<option value="p:${esc(p)}" ${work === "p:" + p ? "selected" : ""}>${esc(p)}</option>`).join("")}</optgroup>` : ""}
           <optgroup label="Item">${rows.slice(0, 30).map(i => `<option value="i:${i.id}" ${work === "i:" + i.id ? "selected" : ""}>#${i.id} ${esc(i.title)}</option>`).join("")}</optgroup>
         </select></label>` : `<div><span class="muted">Work:</span> ${esc(ctx.what || "")}</div>`}

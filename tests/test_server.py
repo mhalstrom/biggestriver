@@ -144,7 +144,7 @@ class LaunchAgent(unittest.TestCase):
                 del os.environ["RIVER_DB"]
             else:
                 os.environ["RIVER_DB"] = old
-        self.assertRegex(sent[0], r"RIVER_DB=\S*q\.db'? claude go")  # the path is quoted when it needs it
+        self.assertRegex(sent[0], r"RIVER_DB=\S*q\.db'? RIVER_AGENT=\S+ claude go")  # the path is quoted when it needs it
 
     def test_dispatch_starts_a_named_session_for_one_item(self):
         core.project_add(self.c, "shop", path=self.dir.name)
@@ -230,9 +230,11 @@ class LaunchAgent(unittest.TestCase):
         self.assertEqual(t["command"], "claude --model opus --effort high go --remote-control")
         self.assertIn("RIVER_MODEL=opus claude --model opus --effort high go", sent[-1])
         self.assertNotIn("keystroke", sent[-1])  # launch_in window, although the setting says tab
+        x = core.item_add(self.c, "shop", "more work", models={"min_model": "opus"})["id"]  # Start reserved the first
         t = server.launch_agent(self.c, runner=sent.append)
         self.assertEqual(t["command"], "claude go --remote-control")  # no choice: the flags drop out
         self.assertNotIn("RIVER_MODEL", sent[-1])
+        x = core.item_add(self.c, "shop", "third", models={"min_model": "opus"})["id"]
         with self.assertRaisesRegex(RiverError, "needs at least opus"):
             server.dispatch_item(self.c, x, runner=sent.append, model="sonnet")
         # A session that waits for work gets the item only when its model is allowed.
@@ -279,6 +281,30 @@ class LaunchAgent(unittest.TestCase):
         self.assertIn("no river serve answers", got["error"])
         self.assertIn(f"RIVER_FOCUS=monitor:{m['id']} claude go", cli._monitor_lines(got)[0])
 
+    def test_start_spreads_sessions_across_projects(self):
+        os.makedirs(os.path.join(self.dir.name, "b"))
+        core.project_add(self.c, "a", path=self.dir.name)
+        core.project_add(self.c, "b", path=os.path.join(self.dir.name, "b"))
+        a = [core.item_add(self.c, "a", f"a{n}", priority=0)["id"] for n in range(3)]
+        b = [core.item_add(self.c, "b", f"b{n}", priority=3)["id"] for n in range(2)]
+        sent = []
+        self.assertEqual(core.state(self.c)["start_next"]["id"], a[0])
+        t1 = server.launch_agent(self.c, runner=sent.append)
+        self.assertEqual((t1["item"]["id"], t1["why"]), (a[0], "first agent for project a"))
+        self.assertEqual(core.state(self.c)["start_next"]["project"], "b")
+        t2 = server.launch_agent(self.c, runner=sent.append)
+        self.assertEqual((t2["item"]["id"], t2["why"]), (b[0], "first agent for project b; a already has one"))
+        t3 = server.launch_agent(self.c, runner=sent.append)
+        self.assertEqual(t3["item"]["id"], a[1])
+        self.assertIn("every project with ready work has an agent", t3["why"])
+        # A project whose only sessions are gone counts as uncovered again.
+        old = core.iso(core.now() - core.timedelta(days=3))
+        self.c.execute("UPDATE agents SET last_seen=? WHERE name IN (?,?)", (old, t1["session_name"], t3["session_name"]))
+        self.assertEqual(server.launch_agent(self.c, runner=sent.append)["item"]["id"], a[2])
+        # A named project keeps its choice.
+        t = server.launch_agent(self.c, "b", runner=sent.append)
+        self.assertEqual((t["project"], t["why"]), ("b", None))
+
     def test_launch_options_follow_each_agents_platform(self):
         old = server._login_shell_which
         server._login_shell_which = lambda names: {n: "/bin/" + n for n in names}
@@ -319,6 +345,8 @@ class LaunchAgent(unittest.TestCase):
         core.project_add(self.c, "nofolder")
         core.item_add(self.c, "shop", "person step", doer="human")
         x = core.item_add(self.c, "shop", "agent step", priority=1)["id"]
+        for n in range(6):  # each Start reserves one item for the session it opens
+            core.item_add(self.c, "shop", f"more work {n}")
         sent = []
         t = server.launch_agent(self.c, runner=sent.append)
         self.assertEqual((t["project"], t["item"]["id"], t["command"]), ("shop", x, "claude go --remote-control"))
@@ -525,7 +553,8 @@ class StartPushesToWaiting(unittest.TestCase):
 
     def test_waiting_session_gets_the_item_and_no_terminal_opens(self):
         core.wait(self.c, self.dir.name, "w", project="other", step="0s", sleep=lambda s: None)
-        x = core.item_add(self.c, "shop", "agent step")["id"]
+        core.item_add(self.c, "shop", "agent step")
+        x = core.item_add(self.c, "shop", "next step")["id"]
         sent = []
         t = server.launch_agent(self.c, runner=sent.append)  # w waits in another project: a new session
         self.assertNotIn("pushed_to", t)

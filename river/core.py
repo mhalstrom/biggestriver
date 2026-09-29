@@ -4363,10 +4363,32 @@ def waiting_agent_for(conn, project, item_id=None):
     return None
 
 
-def launch_target(conn, project=None, agent=None, item=None, model=None, effort=None, launch_in=None):
+def covered_projects(conn, ann=None):
+    """Projects that have an agent, with one of its sessions: a session that is not gone and holds an item
+    there, waits for work there (river wait), or has an item there pushed to it (a Start just opened it)."""
+    ann = ann if ann is not None else annotate(conn)
+    live = {r["name"] for r in conn.execute("SELECT * FROM agents WHERE kind='ai'") if _agent_state(conn, r) != "gone"}
+    covered = {}
+    for a in sorted(ann.values(), key=lambda a: a["id"]):
+        if a["status"] in ("in_progress", "held") and a["assignee"] in live:
+            covered.setdefault(a["project"], a["assignee"])
+        elif a["status"] == "open" and a["reserved_until"] and a["reserved_for"] in live:
+            covered.setdefault(a["project"], a["reserved_for"])
+    for r in conn.execute("SELECT name, waiting_in FROM agents WHERE role='waiting' AND kind='ai' ORDER BY name"):
+        if r["name"] in live:
+            for p in (r["waiting_in"] or "").split(","):
+                if p:
+                    covered.setdefault(p, r["name"])
+    return covered
+
+
+def launch_target(conn, project=None, agent=None, item=None, model=None, effort=None, launch_in=None, spread=False):
     """Where and how a new agent session should start: the folder of the project that holds the most
     important ready item an agent can take (or of the project named, or of the one item named), and the
-    command of the chosen launch_agents entry (the first when none is named). Refuses when nothing is ready there."""
+    command of the chosen launch_agents entry (the first when none is named). Refuses when nothing is ready there.
+
+    spread (Start with no project or item named): first a project with ready agent work and no agent yet,
+    the one whose top item is most important; when every such project has an agent, the top item."""
     ann = annotate(conn)
     pool = sorted((a for a in ann.values() if a["ready"] and a["doer"] != "human" and a["kind"] not in ("deploy", "review", "monitor")
                    and not a["reserved_for"] and not a["project_archived"]
@@ -4383,6 +4405,20 @@ def launch_target(conn, project=None, agent=None, item=None, model=None, effort=
                          + "; a new session would have no work")
     else:
         top = pool[0]
+    why = None
+    if spread and item is None and project is None:
+        covered = covered_projects(conn, ann)
+        firsts = {}
+        for a in pool:
+            firsts.setdefault(a["project"], a)
+        open_ = [a for p, a in firsts.items() if p not in covered]
+        have = [p for p in firsts if p in covered]
+        if open_:
+            top = open_[0]
+            why = f"first agent for project {top['project']}" + (
+                f"; {', '.join(have)} already {'has' if len(have) == 1 else 'have'} one" if have else "")
+        else:
+            why = "every project with ready work has an agent, so the most important ready item"
     p = _project(conn, top["project"])
     if not p["path"]:
         raise RiverError(f"project {p['name']} has no folder, so river cannot start a session there: "
@@ -4392,8 +4428,17 @@ def launch_target(conn, project=None, agent=None, item=None, model=None, effort=
         if not ok:
             raise RiverError(f"#{top['id']} {why}; pick another model")
     return {"project": p["name"], "path": p["path"], "item": {"id": top["id"], "title": top["title"]},
-            "ready": len(pool), **_launch_agent_cmd(conn, p["id"], agent, model, effort),
+            "ready": len(pool), "why": why, **_launch_agent_cmd(conn, p["id"], agent, model, effort),
             "launch_in": _launch_in(conn, p["id"], launch_in)}
+
+
+def _start_next(conn):
+    """What Start (work: top item) opens now, and why; None when nothing is ready."""
+    try:
+        t = launch_target(conn, spread=True)
+    except RiverError:
+        return None
+    return {**t["item"], "project": t["project"], "why": t["why"]}
 
 
 def _launch_in(conn, project_id, choice=None):
@@ -4485,6 +4530,7 @@ def state(conn):
         "model_ladder": parse_ladder(setting(conn, "model_ladder")),
         "launch_options": launch_options(conn),
         "launch_in": setting(conn, "launch_in"),
+        "start_next": _start_next(conn),
         "effort_levels": _levels(setting(conn, "effort_levels")),
         "settings": config_list(conn),
         "events": recent_events(conn),

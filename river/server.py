@@ -90,16 +90,21 @@ def launch_agent(conn, project=None, runner=None, agent=None, actor=None, model=
     """Open a Terminal window in the project folder of the most important ready agent item and run
     the command of the chosen launch_agents entry there (default `claude go --remote-control`), so one click starts one
     agent session. macOS and Windows."""
+    # With no project named, Start spreads sessions: first a project with ready work and no agent yet.
     # A session that waits for work in that project (river wait) gets the item: no new session needed.
-    top = core.launch_target(conn, project, agent, None, model, effort, launch_in)
-    waiting = core.waiting_agent_for(conn, top["project"], top["item"]["id"])
+    # Else the new session gets a name and the item is pushed to it, so the next Start sees the project covered.
+    import secrets
+    t = core.launch_target(conn, project, agent, None, model, effort, launch_in, spread=project is None)
+    waiting = core.waiting_agent_for(conn, t["project"], t["item"]["id"])
     if waiting:
-        core.push(conn, top["item"]["id"], waiting, "from the Start button: you were waiting for work", actor)
-        return {**top, "pushed_to": waiting}
+        core.push(conn, t["item"]["id"], waiting, "from the Start button: you were waiting for work", actor)
+        return {**t, "pushed_to": waiting}
     _can_open_terminal(runner, "cd <project folder> && claude go")
-    t = core.launch_target(conn, project, agent, None, model, effort, launch_in)
-    _open_terminal(t, t["env"], runner)
-    return t
+    name = f"{t['project']}-{secrets.token_hex(2)}"
+    core.register(conn, name, note=f"started from the page for #{t['item']['id']}")
+    core.push(conn, t["item"]["id"], name, "from the page: Start opened this session for it", actor)
+    _open_terminal(t, {"RIVER_AGENT": name, **t["env"]}, runner)
+    return {**t, "session_name": name}
 
 
 def dispatch_item(conn, item_id, runner=None, agent=None, actor=None, model=None, effort=None, launch_in=None):

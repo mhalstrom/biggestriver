@@ -675,7 +675,7 @@ document.addEventListener("click", async (e) => {
       const r = w.startsWith("i:") ? await act("dispatch_item", { id: +w.slice(2), ...launchArgs(ch) })
         : await act("launch_agent", { project: w.startsWith("p:") ? w.slice(2) : undefined, ...launchArgs(ch) });
       toast(r.pushed_to ? `Gave #${r.item.id} ${clip(r.item.title, 60)} to ${r.pushed_to}, which was waiting for work`
-                        : `Started ${r.agent} in ${r.project}, for #${r.item.id} ${clip(r.item.title, 60)}`); } catch (e) { /* toast shown */ }
+                        : `Started ${r.agent} in ${r.project}, for #${r.item.id} ${clip(r.item.title, 60)}` + (r.why ? ` (${r.why})` : "")); } catch (e) { /* toast shown */ }
     return; }
   const sb = t.closest("[data-strip]"); if (sb) { const go = sb.dataset.strip;
     if (go === "blocked") { await setTab("projects"); return $("#blockedPanel").scrollIntoView({ block: "start" }); }
