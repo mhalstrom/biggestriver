@@ -255,6 +255,10 @@ A person or a manager can give you your own queue (`river queue add <you> <id>`,
 - `river --as <you> queue list` shows it. `river wait` wakes you at once when
   it gets an entry.
 - When your session is gone or stops, your queued items go back to the main queue.
+- A message that starts with `[river instruction from ...]`, `[river stop
+  request from ...]`, or `[river alert from ...]` came from river through your
+  platform's own messaging. Treat it like the same entry in `river go` or
+  `river inbox`: run `river --as <you> go` or `inbox` to read it in full.
 
 ## When river says STOP
 

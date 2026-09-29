@@ -77,6 +77,17 @@ DEFAULT_SETTINGS = {
     # {model} and {effort} take the launch dialog's choices; with no choice the flag before them drops out.
     "launch_agents": "Claude Code=claude --model {model} --effort {effort} go --remote-control",
     "launch_in": "tab",
+    # How river reaches a running session through its own platform, so a working agent sees a queue
+    # instruction, a stop, or a message at once: "Label=ENV_VAR: command" entries separated by ";". river go
+    # records the platform whose ENV_VAR is set in the session's environment, and its value as the address;
+    # delivery runs the command with {address} and {message} filled in. The command "uds {address} {message}"
+    # is built in: river writes the message as one line to that Unix socket. Claude Code's session inbox
+    # (CLAUDE_CODE_MESSAGING_SOCKET, code.claude.com/docs/en/cross-session-messaging) takes such a connection,
+    # but its message format is not documented, and a probe did not see the line arrive, so Claude Code is
+    # not in the default: add "Claude Code=CLAUDE_CODE_MESSAGING_SOCKET: uds {address} {message}" to try it.
+    # A platform without an entry has no native path: the message waits in the queue and the inbox for the
+    # agent's next river command.
+    "native_message": "Codex=CODEX_THREAD_ID: codex queue --thread {address} --message {message}",
     "setup_done": "off",
     # Review before release: with review on, each deploy item waits on a review item that waits on
     # everything the release ships. review_prompt tells the reviewer what to do (your review process);
@@ -225,7 +236,8 @@ CREATE TABLE IF NOT EXISTS queue_entries (
   kind          TEXT NOT NULL DEFAULT 'item' CHECK (kind IN ('item','message','stop')),
   added_by      TEXT,
   created_at    TEXT NOT NULL,
-  delivered_at  TEXT
+  delivered_at  TEXT,
+  native_status TEXT                          -- native delivery: sent, failed: <why>, or no native channel
 );
 CREATE UNIQUE INDEX IF NOT EXISTS queue_item ON queue_entries(item_id) WHERE item_id IS NOT NULL;
 
@@ -255,6 +267,8 @@ CREATE TABLE IF NOT EXISTS agents (
   session_ref    TEXT,
   session_url    TEXT,                       -- web link to the agent's session (Claude Code Remote Control)
   model          TEXT,                       -- the model the session runs (RIVER_MODEL, river go --model)
+  platform       TEXT,                       -- the agent CLI (a native_message label) and the session's address in it
+  native_address TEXT,
   stop_at        TEXT,                       -- river stop: when, who, and why; the session ends after it
   stop_by        TEXT,
   stop_reason    TEXT,
@@ -284,7 +298,8 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at  TEXT NOT NULL,
   read_at     TEXT,
   closed_at   TEXT,
-  nudged_at   TEXT
+  nudged_at   TEXT,
+  native_status TEXT
 );
 
 -- Something needs a person: a human item became ready, or a question or alert went to a human.
@@ -563,7 +578,7 @@ def _migrate(conn):
         conn.execute("ALTER TABLE agents ADD COLUMN session_url TEXT")
     if "model" not in acols:
         conn.execute("ALTER TABLE agents ADD COLUMN model TEXT")
-    for col in ("stop_at", "stop_by", "stop_reason"):
+    for col in ("stop_at", "stop_by", "stop_reason", "platform", "native_address"):
         if col not in acols:
             conn.execute(f"ALTER TABLE agents ADD COLUMN {col} TEXT")
     if "auto" not in {r["name"] for r in conn.execute("PRAGMA table_info(deps)")}:
@@ -598,6 +613,10 @@ def _migrate(conn):
             conn.execute(f"ALTER TABLE items ADD COLUMN {col} TEXT")
     if "needs_check" not in icols:
         conn.execute("ALTER TABLE items ADD COLUMN needs_check INTEGER NOT NULL DEFAULT 0")
+    if "native_status" not in {r["name"] for r in conn.execute("PRAGMA table_info(queue_entries)")}:
+        conn.execute("ALTER TABLE queue_entries ADD COLUMN native_status TEXT")
+    if "native_status" not in {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}:
+        conn.execute("ALTER TABLE messages ADD COLUMN native_status TEXT")
     if "synced_at" not in {r["name"] for r in conn.execute("PRAGMA table_info(item_refs)")}:
         conn.execute("ALTER TABLE item_refs ADD COLUMN synced_at TEXT")
     if "reserved_for" not in icols:
@@ -694,6 +713,8 @@ def config_set(conn, key, value, project=None, item=None, agent=None, actor=None
         parse_launch_agents(value)
     elif key == "model_ladder":
         parse_ladder(value)
+    elif key == "native_message":
+        parse_native(value)
     elif key == "effort_levels":
         if not _levels(value):
             raise RiverError("effort_levels is a comma list, lowest first: low, medium, high, xhigh, max")
@@ -2737,16 +2758,21 @@ def queue_add(conn, agent, item=None, message=None, first=False, before=None, ac
         t = iso(now())
         if message is not None:
             k = kind or "message"
-            conn.execute("INSERT INTO queue_entries(agent,pos,body,kind,added_by,created_at) VALUES (?,?,?,?,?,?)",
-                         (agent, _queue_pos(conn, agent, first=True) if k == "stop" else _queue_pos(conn, agent),
-                          message, k, actor, t))
+            eid = conn.execute("INSERT INTO queue_entries(agent,pos,body,kind,added_by,created_at) VALUES (?,?,?,?,?,?)",
+                               (agent, _queue_pos(conn, agent, first=True) if k == "stop" else _queue_pos(conn, agent),
+                                message, k, actor, t)).lastrowid
             _event(conn, None, actor, f"queue {agent}: {k} added")
             _send(conn, "notice", actor or "river", f"new {'stop request' if k == 'stop' else 'instruction'} in your "
                   f"queue: {message}", to=agent)
-            return queue_list(conn, agent)
+    if message is not None:
+        _deliver_entry(conn, eid)
+        return queue_list(conn, agent)
+    with tx(conn):
         it = _item(conn, item)
         if it["status"] in CLOSED_STATES:
             raise RiverError(f"#{it['id']} is {it['status']}")
+        if ag["kind"] != "ai":
+            raise RiverError(f"{agent} is a person; a queue is for an agent session")
         if it["doer"] == "human":
             raise RiverError(f"#{it['id']} is for a person")
         q = conn.execute("SELECT agent FROM queue_entries WHERE item_id=?", (it["id"],)).fetchone()
@@ -2768,7 +2794,7 @@ def queue_list(conn, agent):
     out = []
     for r in _queue_rows(conn, agent):
         e = {"entry": r["id"], "kind": r["kind"], "added_by": r["added_by"], "created_at": r["created_at"],
-             "delivered_at": r["delivered_at"]}
+             "delivered_at": r["delivered_at"], "native_status": r["native_status"]}
         if r["item_id"] is not None and r["item_id"] in ann:
             a = ann[r["item_id"]]
             e.update(item=a["id"], title=a["title"], project=a["project"], ready=a["ready"], status=a["status"],
@@ -2861,6 +2887,98 @@ def _drop_queue(conn, agent, why, items_only=False):
     return [r["item_id"] for r in rows]
 
 
+# ---------------------------------------------------------------- native delivery
+
+NATIVE_RUNNER = None  # tests set a fake: f(args) -> (returncode, output)
+
+
+def parse_native(value):
+    """native_message: [(label, env_var, command template)]."""
+    out = []
+    for part in (value or "").split(";"):
+        if not part.strip():
+            continue
+        label, sep, rest = part.partition("=")
+        var, sep2, cmd = rest.partition(":")
+        if not sep or not sep2 or not label.strip() or not re.match(r"^[A-Z][A-Z0-9_]*$", var.strip()) \
+                or "{address}" not in cmd or "{message}" not in cmd:
+            raise RiverError(f"native_message entry {part.strip()!r} needs the form Label=ENV_VAR: command with "
+                             f"{{address}} and {{message}}, for example "
+                             f"'Codex=CODEX_THREAD_ID: codex queue --thread {{address}} --message {{message}}'")
+        out.append((label.strip(), var.strip(), cmd.strip()))
+    return out
+
+
+def native_from_env(conn, env):
+    """(platform, address) of a session from its environment, or (None, None)."""
+    for label, var, _ in parse_native(setting(conn, "native_message")):
+        if env.get(var):
+            return label, env[var]
+    return None, None
+
+
+def set_native(conn, name, platform, address):
+    with tx(conn):
+        if conn.execute("UPDATE agents SET platform=?, native_address=? WHERE name=? AND "
+                        "(platform IS NOT ? OR native_address IS NOT ?)",
+                        (platform, address, name, platform, address)).rowcount:
+            _event(conn, None, name, f"native channel {platform or 'none'}")
+
+
+def deliver_native(conn, agent, text):
+    """Send text into the agent's running session through its platform. Returns the status to record:
+    'sent', 'failed: <why>', or 'no native channel' (the queue and inbox still hold it)."""
+    import shlex
+    import subprocess
+    r = conn.execute("SELECT platform, native_address FROM agents WHERE name=?", (agent,)).fetchone()
+    if not r or not r["platform"] or not r["native_address"]:
+        return "no native channel"
+    entry = next((e for e in parse_native(setting(conn, "native_message")) if e[0] == r["platform"]), None)
+    if entry is None:
+        return f"no native channel ({r['platform']} has no native_message entry)"
+    text = " ".join(text.split())  # one line: the socket reads a message per line
+    args = [a.replace("{address}", r["native_address"]).replace("{message}", text) for a in shlex.split(entry[2])]
+    try:
+        if NATIVE_RUNNER is not None:
+            code, out = NATIVE_RUNNER(args)
+        elif args[0] == "uds":
+            code, out = _uds_send(args[1], args[2])
+        else:
+            p = subprocess.run(args, capture_output=True, text=True, timeout=15)
+            code, out = p.returncode, (p.stderr or p.stdout)
+    except (OSError, subprocess.SubprocessError) as e:
+        return f"failed: {e}"
+    return "sent" if code == 0 else f"failed: exit {code}: {(out or '').strip()[:200]}"
+
+
+def _uds_send(path, text, timeout=5):
+    """Write one line to a Unix socket (a Claude Code session's inbox). Returns (code, error text)."""
+    import socket
+    if not hasattr(socket, "AF_UNIX"):
+        return 1, "no Unix sockets on this system"
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sk:
+            sk.settimeout(timeout)
+            sk.connect(path)
+            sk.sendall((text + "\n").encode())
+    except OSError as e:
+        return 1, f"{path}: {e.strerror or e}"
+    return 0, ""
+
+
+def _native_text(kind, sender, body):
+    return f"[river {kind} from {sender}] {body} (river --as <you> inbox; river go shows your queue)"
+
+
+def _deliver_entry(conn, entry_id):
+    r = conn.execute("SELECT * FROM queue_entries WHERE id=?", (entry_id,)).fetchone()
+    st = deliver_native(conn, r["agent"], _native_text("stop request" if r["kind"] == "stop" else "instruction",
+                                                       r["added_by"] or "river", r["body"]))
+    with tx(conn):
+        conn.execute("UPDATE queue_entries SET native_status=? WHERE id=?", (st, entry_id))
+    return st
+
+
 def stop_agent(conn, agent, reason, actor=None):
     """river stop: a request, not a kill. A stop entry goes to the front of the agent's queue; a waiting agent
     ends at once (river wait returns STOP), a working one on its next river command, after it commits and
@@ -2879,8 +2997,8 @@ def stop_agent(conn, agent, reason, actor=None):
             raise RiverError(f"{agent} is already asked to stop (by {ag['stop_by']}: {ag['stop_reason']})")
         t = iso(now())
         conn.execute("UPDATE agents SET stop_at=?, stop_by=?, stop_reason=? WHERE name=?", (t, actor, reason.strip(), agent))
-        conn.execute("INSERT INTO queue_entries(agent,pos,body,kind,added_by,created_at) VALUES (?,?,?,'stop',?,?)",
-                     (agent, _queue_pos(conn, agent, first=True), reason.strip(), actor, t))
+        eid = conn.execute("INSERT INTO queue_entries(agent,pos,body,kind,added_by,created_at) VALUES (?,?,?,'stop',?,?)",
+                           (agent, _queue_pos(conn, agent, first=True), reason.strip(), actor, t)).lastrowid
         _event(conn, None, actor, f"stopped {agent} (by {actor}: {reason.strip()})")
         holds = [dict(r) for r in conn.execute(
             "SELECT id, title, status FROM items WHERE assignee=? AND status IN ('in_progress','held') ORDER BY id", (agent,))]
@@ -2889,7 +3007,8 @@ def stop_agent(conn, agent, reason, actor=None):
         _send(conn, "alert", actor or "river", f"STOP requested: {reason.strip()}. Commit finished work, release or "
               f"hand back your item with a note, then end this session.", to=agent)
     waiting = ag["role"] == "waiting" and not holds
-    return {"agent": agent, "reason": reason.strip(), "waiting": waiting, "holds": holds,
+    native = None if waiting else _deliver_entry(conn, eid)
+    return {"agent": agent, "reason": reason.strip(), "waiting": waiting, "holds": holds, "native": native,
             "ends": "now: river wait returns STOP within seconds" if waiting
             else "after its next river command, once it commits and releases its item"}
 
@@ -4281,6 +4400,11 @@ def send(conn, kind, body, to=None, item=None, reply_to=None, actor=None):
                 _mark_read(conn, [reply_to])
         if item is not None:
             _event(conn, item, actor, f"{kind} #{mid} to {to or 'the next holder'}")
+    if to is not None and conn.execute("SELECT 1 FROM agents WHERE name=? AND kind='ai' AND platform IS NOT NULL",
+                                       (to,)).fetchone():
+        st = deliver_native(conn, to, _native_text(kind, actor, body.strip()))
+        with tx(conn):
+            conn.execute("UPDATE messages SET native_status=? WHERE id=?", (st, mid))
     return message_show(conn, mid)
 
 

@@ -870,7 +870,8 @@ def _print_queue(res):
             print(f"  #{e['item']:<4} [{e['project']}] {e['title']}  ({st})")
         else:
             print(f"  e{e['entry']:<3} {'STOP REQUEST' if e['kind'] == 'stop' else 'instruction'}: {e['body']}"
-                  + ("" if e["delivered_at"] else "  (not read yet)"))
+                  + ("" if e["delivered_at"] else "  (not read yet)")
+                  + (f"  [native: {e['native_status']}]" if e.get("native_status") else ""))
 
 
 def _hint(a, res, actor):
@@ -1193,6 +1194,8 @@ def dispatch(conn, a, actor):
         return core.completed(conn, a.project, None if a.since == "all" else a.since)
     if c == "go":
         res = core.go(conn, os.getcwd(), actor, a.project, a.role, a.session, os.environ.get("RIVER_FOCUS"), a.model)
+        # The platform's own messaging reaches this session at once (native_message): record its address.
+        core.set_native(conn, res["agent"], *core.native_from_env(conn, os.environ))
         res["old_blocks"] = old_blocks(conn, os.getcwd())
         return res
     if c == "plan":
@@ -1853,6 +1856,7 @@ def render(a, res):
         return
     if c == "stop":
         print(f"asked {res['agent']} to stop ({res['reason']}); it ends {res['ends']}"
+              + (f"; native delivery: {res['native']}" if res.get("native") else "")
               + ("; it holds " + ", ".join(f"#{h['id']}" for h in res["holds"]) if res["holds"] else ""))
         return
     if c == "target":
@@ -1988,7 +1992,7 @@ def render(a, res):
     if c == "send" or (c in ("alert", "ask", "note") and isinstance(res, list)):
         for m in res if isinstance(res, list) else [res]:
             to = m["to_agent"] or f"the next holder of #{m['item_id']} (nobody holds it now)"
-            print(f"sent #{m['id']} {m['kind']} to {to}")
+            print(f"sent #{m['id']} {m['kind']} to {to}" + (f" (native: {m['native_status']})" if m.get("native_status") else ""))
         return
     if c == "accept" and a.message:
         print(f"accepted alert #{res['id']}" + (f"; see: river show {res['item_id']}" if res["item_id"] else "")

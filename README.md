@@ -288,6 +288,16 @@ blocker trees, the agent registry, capacity, settings, and the web page.
   accept, and keeps its items from other agents. Instructions show at the top
   of its `river go`. A person or a manager changes queues; when the session is
   gone or stops, its items go back to the main queue.
+- Native delivery: a queue instruction, a stop, and `river send`/`alert`/
+  `ask`/`note` to an agent also go out through the agent platform's own
+  messaging, so a working agent sees them at once. The `native_message`
+  setting lists each platform as `Label=ENV_VAR: command`: `river go` records
+  the platform whose variable is set in the session, and delivery runs the
+  command with `{address}` and `{message}`. Codex is built in (`codex queue
+  --thread`). For Claude Code, `uds {address} {message}` writes to the
+  session's inbox socket (`CLAUDE_CODE_MESSAGING_SOCKET`); it is not on by
+  default, because its message format is not documented yet. `river queue
+  list` and `send` show the delivery status.
 - Stop an agent: `river stop <agent> --reason "..."` puts a stop request at
   the front of its queue. A waiting agent ends at once; a working one sees it
   on its next river command, commits, releases its item, and ends. `river who`

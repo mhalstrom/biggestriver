@@ -2849,3 +2849,74 @@ class Stop(Base):
             core.queue_remove(self.c, "s1", "e%d" % core.queue_list(self.c, "s1")["entries"][0]["entry"], actor="s1")
         core.queue_remove(self.c, "s1", "e%d" % core.queue_list(self.c, "s1")["entries"][0]["entry"], actor="mark")
         self.assertIsNone(core.stop_request(self.c, "s1"))
+
+
+class NativeDelivery(Base):
+    """Queue instructions, stops, and messages also go through the agent platform's own messaging (#426)."""
+
+    def setUp(self):
+        super().setUp()
+        core.project_add(self.c, "a", path=self.dir.name)
+        for n in ("cx", "cc", "plain"):
+            core.register(self.c, n)
+        core.register(self.c, "mark", human=True)
+        self.sent = []
+        core.NATIVE_RUNNER = lambda args: (self.sent.append(args), (0, ""))[1]
+        self.addCleanup(setattr, core, "NATIVE_RUNNER", None)
+
+    def test_the_platform_comes_from_the_environment(self):
+        self.assertEqual(core.native_from_env(self.c, {"CODEX_THREAD_ID": "t-1"}), ("Codex", "t-1"))
+        self.assertEqual(core.native_from_env(self.c, {"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/x.sock"}), (None, None))
+        core.config_set(self.c, "native_message", core.setting(self.c, "native_message")
+                        + "; Claude Code=CLAUDE_CODE_MESSAGING_SOCKET: uds {address} {message}")
+        self.assertEqual(core.native_from_env(self.c, {"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/x.sock", "CLAUDECODE": "1"}),
+                         ("Claude Code", "/tmp/x.sock"))
+        self.assertEqual(core.native_from_env(self.c, {"PATH": "/bin"}), (None, None))
+        with self.assertRaisesRegex(RiverError, "Label=ENV_VAR: command"):
+            core.config_set(self.c, "native_message", "Mine=myagent send {message}")
+        core.config_set(self.c, "native_message", "Mine=MINE_ID: mine send {address} {message}")
+        self.assertEqual(core.native_from_env(self.c, {"MINE_ID": "7"}), ("Mine", "7"))
+
+    def test_instructions_stops_and_messages_go_out_natively(self):
+        core.set_native(self.c, "cx", "Codex", "thread-9")
+        core.queue_add(self.c, "cx", message="commit and take #3 next", actor="mark")
+        self.assertEqual(self.sent[-1][:4], ["codex", "queue", "--thread", "thread-9"])
+        self.assertIn("commit and take #3 next", self.sent[-1][-1])
+        self.assertEqual(core.queue_list(self.c, "cx")["entries"][0]["native_status"], "sent")
+        m = core.send(self.c, "alert", "the build is red", to="cx", actor="mark")
+        self.assertEqual(m["native_status"], "sent")
+        core.queue_add(self.c, "plain", message="hello", actor="mark")  # no platform: the queue path only
+        self.assertEqual(core.queue_list(self.c, "plain")["entries"][0]["native_status"], "no native channel")
+        core.NATIVE_RUNNER = lambda args: (1, "no such thread")
+        x = self.add("a", "x")
+        core.claim(self.c, x, "cx")
+        r = core.stop_agent(self.c, "cx", "plan changed", actor="mark")
+        self.assertEqual(r["native"], "failed: exit 1: no such thread")
+
+    def test_a_claude_code_session_inbox_gets_one_line(self):
+        import socket
+        import threading
+        d = tempfile.mkdtemp(dir="/tmp")
+        self.addCleanup(lambda: __import__("shutil").rmtree(d, ignore_errors=True))
+        path = os.path.join(d, "s.sock")
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        srv.bind(path)
+        srv.listen(1)
+        got = []
+
+        def serve():
+            conn, _ = srv.accept()
+            got.append(conn.recv(4096).decode())
+            conn.close()
+        t = threading.Thread(target=serve)
+        t.start()
+        core.NATIVE_RUNNER = None
+        core.config_set(self.c, "native_message", "Claude Code=CLAUDE_CODE_MESSAGING_SOCKET: uds {address} {message}")
+        core.set_native(self.c, "cc", "Claude Code", path)
+        core.queue_add(self.c, "cc", message="two\nlines", actor="mark")
+        t.join(5)
+        srv.close()
+        self.assertEqual(got[0], "[river instruction from mark] two lines (river --as <you> inbox; river go shows your queue)\n")
+        self.assertEqual(core.queue_list(self.c, "cc")["entries"][0]["native_status"], "sent")
+        core.set_native(self.c, "cc", "Claude Code", os.path.join(d, "gone.sock"))
+        self.assertTrue(core.deliver_native(self.c, "cc", "x").startswith("failed: exit 1:"))
