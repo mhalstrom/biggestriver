@@ -164,6 +164,8 @@ def _fmt_item(a, show_reason=True):
     if a.get("effective_due") and a["status"] in core.OPEN_STATES:
         flags.append(("OVERDUE " if a["due_state"] == "overdue" else "due soon " if a["due_state"] == "soon" else "due ")
                      + a["due_text"] + (f" (from #{a['due_from']})" if a.get("due_from") else ""))
+    if a.get("agent"):
+        flags.append(f"for {a['agent']}")
     if a.get("model") or a.get("effort") or a.get("min_model") or a.get("max_model"):
         flags.append("/".join(x for x in (a.get("model"), a.get("effort")) if x)
                      + (f" min {a['min_model']}" if a.get("min_model") else "")
@@ -193,6 +195,8 @@ def _model_args(x, edit=False):
                    help="weakest model allowed, one per family (opus or opus,sol); weaker sessions skip it" + clear)
     x.add_argument("--max-model", dest="max_model",
                    help="strongest model allowed, one per family (sonnet or sonnet,luna)" + clear)
+    x.add_argument("--agent", help="the agent type that takes it: codex or claude-code (or a launch_agents label); "
+                                   "sessions of another type skip it, and launch starts that type" + clear)
 
 
 def _models(a):
@@ -202,10 +206,10 @@ def _models(a):
 def _model_line(a):
     """fable; effort high; min opus, sol; max fable  (a default from settings says where it comes from)."""
     parts = []
-    for f, label in (("model", ""), ("effort", "effort "), ("min_model", "min "), ("max_model", "max ")):
+    for f, label in (("model", ""), ("effort", "effort "), ("min_model", "min "), ("max_model", "max "), ("agent", "agent ")):
         if a.get(f):
             src = a.get(f + "_from")
-            parts.append(f"{label}{a[f]}" + (f" ({src} default)" if src and src != "item" else ""))
+            parts.append(f"{label}{a[f]}" + (f" ({src})" if src == "agent_rules" else f" ({src} default)" if src and src != "item" else ""))
     return "; ".join(parts)
 
 
@@ -1402,7 +1406,7 @@ def dispatch(conn, a, actor):
         return core.completed(conn, a.project, None if a.since == "all" else a.since)
     if c == "go":
         res = core.go(conn, os.getcwd(), actor, a.project, a.role, a.session, os.environ.get("RIVER_FOCUS"), a.model,
-                      chat=a.chat)
+                      chat=a.chat, agent_type=core.agent_type_from_env(os.environ))
         # The platform's own messaging reaches this session at once (native_message): record its address.
         core.set_native(conn, res["agent"], *core.native_from_env(conn, os.environ))
         _record_process(conn, res["agent"])
@@ -1417,20 +1421,25 @@ def dispatch(conn, a, actor):
             return core.manage_watch(conn, actor, a.step)
         return {**core.manage(conn, os.getcwd(), actor, a.takeover), "chat": a.chat}
     if c == "next":
-        if a.model and actor and conn.execute("SELECT 1 FROM agents WHERE name=?", (actor,)).fetchone():
-            core.set_agent_model(conn, actor, a.model)
+        if actor and conn.execute("SELECT 1 FROM agents WHERE name=?", (actor,)).fetchone():
+            if a.model:
+                core.set_agent_model(conn, actor, a.model)
+            core.set_agent_type(conn, actor, core.agent_type_from_env(os.environ))
         skipped = []
         res = core.next_item(conn, a.project, a.unblocks, a.claim, actor, a.limit, a.near, a.mine, a.model, skipped)
         if skipped and not a.json:
-            print(f"skipped for your model {a.model or core.agent_model(conn, actor)} (min/max model limits):",
+            print(f"skipped for your model {a.model or core.agent_model(conn, actor)} or agent type "
+                  f"{core.session_type(conn, actor)} (min/max model limits, the item's agent):",
                   file=sys.stderr)
             for x in skipped[:5]:
                 print(f"  #{x['id']} {_cut(x['title'], 50)}: {x['why']}", file=sys.stderr)
         return res
     if c == "claim":
         m = os.environ.get("RIVER_MODEL")
-        if m and actor and conn.execute("SELECT 1 FROM agents WHERE name=?", (actor,)).fetchone():
-            core.set_agent_model(conn, actor, m)
+        if actor and conn.execute("SELECT 1 FROM agents WHERE name=?", (actor,)).fetchone():
+            if m:
+                core.set_agent_model(conn, actor, m)
+            core.set_agent_type(conn, actor, core.agent_type_from_env(os.environ))
         return core.claim(conn, a.id, actor)
     if c == "done":
         return core.done(conn, a.id, a.output, actor, a.ship, a.note, a.synced, a.force)
@@ -1632,8 +1641,11 @@ def _findings_lines(f, r):
                    + f", and ran no river command: its agent did not start or waits on a prompt in its terminal. "
                    f"Tell the user; then {r} stop {x['agent']} --reason \"did not start\" and launch again")
     for x in f["uncovered"]:
-        out.append(f"  NO AGENT in {x['project']}: {x['ready']} ready, top #{x['top']['id']} {_cut(x['top']['title'], 40)}."
-                   f"  {r} launch --project {x['project']}")
+        t = x.get("agent_type")
+        out.append(f"  NO {t.upper() + ' ' if t else ''}AGENT in {x['project']}: {x['ready']} ready"
+                   + (f" for {t}" if t else "") + f", top #{x['top']['id']} {_cut(x['top']['title'], 40)}."
+                   + (f"  {r} launch --item {x['top']['id']}" + (f" --agent \"{x['launch']}\"" if x.get("launch") else
+                      f"  (no launch_agents entry runs {t}: add one)") if t else f"  {r} launch --project {x['project']}"))
     for x in f["targets"]:
         out.append(f"  TARGET {x['target']}: owner {x['owner']} is {x['state']}.  {r} target give {x['target']} --to <agent>")
     for x in f["questions"]:

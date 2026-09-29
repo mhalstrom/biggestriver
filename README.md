@@ -188,6 +188,17 @@ There is no order across families: a limit applies only to sessions of its
 own family, so give one model per family to limit both (`--min-model opus,sol`).
 `effort_levels` lists the effort levels, lowest first.
 
+An item can need one agent type: `river add "Draw the logo" --agent codex`
+(or `claude-code`). A session of another type skips it; river reads a
+session's type from its CLI's environment (`CODEX_THREAD_ID`, `CLAUDECODE`,
+or `RIVER_AGENT_TYPE` by hand), else from its model's family. Start,
+Dispatch, and `river launch` start the item's type unless you pick an agent.
+`agent_rules` sets the type from the item (`codex: *.css, *.svg, image, logo`:
+a pattern with `*`, `?`, `/` or `.` matches a touched file, any other a word in
+the title), and `default_agent` is the fallback per project or kind. The
+manager's NO AGENT finding counts ready work per type. A person can still
+push an item to a session of another type.
+
 On the page, every button that starts an agent (Start, Dispatch, Open agent,
 Claim next with an agent, Deploy now) opens one dialog: the agent, the model
 (only the agent's family, inside the item's limits, the recommendation

@@ -48,6 +48,12 @@ export function modelChip(it) {
     + (lim ? ". Limits keep a session with another model off the item; the recommendation never blocks." : ". A recommendation; it never blocks.");
   return chip("c-p", (parts + lim).trim(), title);
 }
+// The agent type an item needs (codex, claude-code): sessions of another type skip it.
+export function agentChip(it) {
+  if (!it.agent) return "";
+  const from = it.agent_from && it.agent_from !== "item" ? ` (${it.agent_from === "agent_rules" ? "agent_rules" : it.agent_from + " default"})` : "";
+  return chip("c-ai", "for " + esc(it.agent), `agent type ${it.agent}${from}: sessions of another type skip it, and Start opens this type`);
+}
 export function goalChips(it) { return (it.goals || []).map(g => chip("c-goal", esc(g), "goal")).join(""); }
 export function projectChip(name) { return chip("c-p", esc(name)); }
 export function ownerChip(owner) { return owner ? chip("c-ai", "owner · " + esc(owner)) : chip("c-waiting", "no owner"); }

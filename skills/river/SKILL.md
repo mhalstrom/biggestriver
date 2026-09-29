@@ -40,7 +40,9 @@ Declare the model your session runs, once: `river --as <you> go --model <model>`
 (or `RIVER_MODEL=<model>`). River then gives you only items whose
 `--min-model`/`--max-model` limits allow your model, and says what it skipped.
 An item's recommended model and effort (`model:` in the briefing) are advice:
-work at that effort; a different model may still take it.
+work at that effort; a different model may still take it. An item for another
+agent type (`agent codex` while you run in Claude Code) is skipped; river reads
+your type from your CLI's environment.
 
 ## Work loop
 

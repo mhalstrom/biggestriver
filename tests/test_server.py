@@ -705,6 +705,59 @@ class LaunchProfiles(unittest.TestCase):
         self.assertEqual([o["setting"] for o in prof["options"]],
                          ["claude_remote_control", "claude_permission_mode", "claude_model_ids", "claude_args", "claude_prompt"])
 
+    def test_items_choose_an_agent_type(self):
+        c = self.c
+        core.config_set(c, "launch_agents", "Claude Code=@claude-code; Codex=@codex")
+        css = core.item_add(c, "shop", "restyle the header", touches=["web/site.css"])["id"]
+        logo = core.item_add(c, "shop", "draw a new logo")["id"]
+        own = core.item_add(c, "shop", "write the docs", models={"agent": "Codex"})["id"]  # a launch_agents label
+        plain = core.item_add(c, "shop", "fix the parser", priority=3)["id"]
+        self.assertEqual(core.item_show(c, own)["agent"], "codex")
+        with self.assertRaisesRegex(RiverError, "agent type is one of"):
+            core.item_edit(c, plain, models={"agent": "gemini"})
+        with self.assertRaisesRegex(RiverError, "runs openai models.*model opus is claude"):
+            core.item_edit(c, own, models={"model": "opus"})
+        # Rules pick a type from the files an item touches or a word in its title; default_agent is the fallback.
+        core.config_set(c, "agent_rules", "codex: *.css, logo")
+        with self.assertRaisesRegex(RiverError, "needs the form"):
+            core.config_set(c, "agent_rules", "gemini: *.css")
+        ann = core.annotate(c)
+        self.assertEqual([(ann[i]["agent"], ann[i]["agent_from"]) for i in (css, logo, own, plain)],
+                         [("codex", "agent_rules"), ("codex", "agent_rules"), ("codex", "item"), (None, None)])
+        core.config_set(c, "default_agent", "claude-code", project="shop")
+        self.assertEqual(core.annotate(c)[plain]["agent"], "claude-code")
+        # A session's type comes from its environment, else its model's family.
+        self.assertEqual([core.agent_type_from_env(e) for e in (
+            {"CODEX_THREAD_ID": "x", "CLAUDECODE": "1"}, {"CLAUDECODE": "1"}, {"RIVER_AGENT_TYPE": "codex", "CLAUDECODE": "1"}, {})],
+            ["codex", "claude-code", "codex", None])
+        core.register(c, "cl")
+        core.set_agent_type(c, "cl", "claude-code")
+        skipped = []
+        got = core.next_item(c, "shop", actor="cl", limit=9, skipped=skipped)
+        self.assertEqual([a["id"] for a in got], [plain])
+        self.assertEqual({x["id"] for x in skipped}, {css, logo, own})
+        self.assertIn("is for codex; this session runs claude-code", skipped[0]["why"])
+        with self.assertRaisesRegex(RiverError, "is for codex"):
+            core.claim(c, css, "cl")
+        core.register(c, "cx")
+        core.set_agent_model(c, "cx", "sol")  # no recorded type: sol is an OpenAI model, so Codex
+        self.assertEqual(core.session_type(c, "cx"), "codex")
+        self.assertEqual([a["id"] for a in core.next_item(c, "shop", actor="cx", limit=9)], [css, logo, own])
+        # A person pushes an item to a session of another type: the session takes it.
+        core.push(c, logo, "cl", "you do it", "mark")
+        self.assertEqual(core.claim(c, logo, "cl")["status"], "in_progress")
+        # Launch starts the item's type unless an agent is named; the manager counts ready work per type.
+        self.assertEqual(core.launch_target(c, item=css)["agent"], "Codex")
+        self.assertEqual(core.launch_target(c, item=css, agent="Claude Code")["agent"], "Claude Code")
+        self.assertEqual(core.launch_target(c, item=plain)["agent"], "Claude Code")
+        f = core.manager_findings(c)["uncovered"]
+        self.assertEqual([(x["agent_type"], x["launch"], x["ready"]) for x in f], [("codex", "Codex", 2)])
+        opts = {o["label"]: o["agent_type"] for o in core.state(c)["launch_options"]}
+        self.assertEqual(opts, {"Claude Code": "claude-code", "Codex": "codex"})
+        core.config_set(c, "launch_agents", "Claude Code=@claude-code")
+        with self.assertRaisesRegex(RiverError, "no launch_agents entry runs it"):
+            core.launch_target(c, item=css)
+
     def test_the_cli_gets_its_own_model_id_and_river_keeps_the_name(self):
         pid = core._project(self.c, "shop")["id"]
         rd = core.river_dir()

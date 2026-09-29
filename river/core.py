@@ -129,6 +129,12 @@ DEFAULT_SETTINGS = {
     "default_effort": "",
     "default_min_model": "",
     "default_max_model": "",
+    # The agent type an item needs, when it names none (river add --agent): a launch platform (codex,
+    # claude-code). agent_rules picks one from the item first: "codex: *.css, *.svg, image, logo" gives
+    # Codex the items that touch a .css or .svg file or have the word image or logo in the title.
+    # default_agent is the fallback; set it per project (--project) or kind (--kind).
+    "agent_rules": "",
+    "default_agent": "",
 }
 
 # Agent platforms river can start from a launch profile ("Label=@claude-code" in launch_agents). Each option
@@ -236,6 +242,7 @@ CREATE TABLE IF NOT EXISTS items (
   effort            TEXT,                     -- recommended effort level (NULL: default_effort)
   min_model         TEXT,                     -- hard limits, one model per family, comma list
   max_model         TEXT,
+  agent             TEXT,                     -- the agent type that takes it: a launch platform (codex, claude-code)
   created_at        TEXT NOT NULL,
   closed_at         TEXT
 );
@@ -317,6 +324,7 @@ CREATE TABLE IF NOT EXISTS agents (
   session_ref    TEXT,
   session_url    TEXT,                       -- web link to the agent's session (Claude Code Remote Control)
   model          TEXT,                       -- the model the session runs (RIVER_MODEL, river go --model)
+  agent_type     TEXT,                       -- the agent CLI it runs in (codex, claude-code), from its environment
   manage_seen    TEXT,                       -- the manager's findings it has seen (river manage --watch)
   pid            INTEGER,                    -- the agent CLI process that runs river, its host, and its command line
   host           TEXT,
@@ -633,6 +641,8 @@ def _migrate(conn):
         conn.execute("ALTER TABLE agents ADD COLUMN session_url TEXT")
     if "model" not in acols:
         conn.execute("ALTER TABLE agents ADD COLUMN model TEXT")
+    if "agent_type" not in acols:
+        conn.execute("ALTER TABLE agents ADD COLUMN agent_type TEXT")
     for col in ("stop_at", "stop_by", "stop_reason", "platform", "native_address", "host", "pid_cmd", "manage_seen"):
         if col not in acols:
             conn.execute(f"ALTER TABLE agents ADD COLUMN {col} TEXT")
@@ -665,7 +675,7 @@ def _migrate(conn):
     for col in ("blocked_at", "blocked_until", "blocked_set_by"):
         if col not in icols:
             conn.execute(f"ALTER TABLE items ADD COLUMN {col} TEXT")
-    for col in ("model", "effort", "min_model", "max_model"):
+    for col in ("model", "effort", "min_model", "max_model", "agent"):
         if col not in icols:
             conn.execute(f"ALTER TABLE items ADD COLUMN {col} TEXT")
     if "needs_check" not in icols:
@@ -776,6 +786,10 @@ def config_set(conn, key, value, project=None, item=None, agent=None, actor=None
         _check_option(*_platform_setting(key), value)
     elif key == "model_ladder":
         parse_ladder(value)
+    elif key == "agent_rules":
+        parse_agent_rules(value)
+    elif key == "default_agent" and value:
+        _check_agent_type(conn, value)
     elif key == "native_message":
         parse_native(value)
     elif key == "effort_levels":
@@ -843,7 +857,7 @@ def config_list(conn):
 
 # ---------------------------------------------------------------- models
 
-MODEL_FIELDS = ("model", "effort", "min_model", "max_model")
+MODEL_FIELDS = ("model", "effort", "min_model", "max_model", "agent")
 
 
 def parse_ladder(value):
@@ -862,6 +876,67 @@ def parse_ladder(value):
             seen.add(m)
         fams[name] = ms
     return fams
+
+
+def _agent_platform(value):
+    """A launch platform from an agent type: 'codex', 'claude-code' (or 'claude'); None when it is none of them."""
+    v = (value or "").strip().lower().replace(" ", "-")
+    v = {"claude": "claude-code"}.get(v, v)
+    return v if v in LAUNCH_PLATFORMS else None
+
+
+def _check_agent_type(conn, value):
+    """An item's agent type: a platform, or a launch_agents label that runs one (Codex, Claude Code)."""
+    p = _agent_platform(value)
+    if p is None:
+        for label, cmd in parse_launch_agents(setting(conn, "launch_agents")):
+            if label.lower() == value.strip().lower():
+                prof = parse_profile(cmd)
+                p = prof[0] if prof else _exe_platform(cmd)
+    if p is None:
+        raise RiverError(f"agent {value!r}: an agent type is one of {', '.join(LAUNCH_PLATFORMS)} "
+                         f"(or a launch_agents label that runs one)")
+    return p
+
+
+def _exe_platform(cmd):
+    """The platform a custom launch_agents command runs, by its program: claude or codex."""
+    exe = Path(cmd.split()[0]).name.lower() if cmd.split() else ""
+    return {"claude": "claude-code", "codex": "codex"}.get(exe)
+
+
+def parse_agent_rules(value):
+    """agent_rules: [(platform, [patterns])]. "codex: *.css, *.svg, image; claude-code: docs/*".
+    A pattern with '*', '?', '/' or '.' matches a file the item touches; any other is a word in its title."""
+    out = []
+    for part in (x.strip() for x in (value or "").split(";")):
+        if not part:
+            continue
+        name, sep, pats = part.partition(":")
+        p = _agent_platform(name)
+        if not sep or p is None:
+            raise RiverError(f"agent_rules: {part!r} needs the form <agent type>: pattern, pattern (agent type: "
+                             f"{', '.join(LAUNCH_PLATFORMS)}), for example \"codex: *.css, *.svg, image, logo\"")
+        ps = [x.strip() for x in pats.split(",") if x.strip()]
+        if not ps:
+            raise RiverError(f"agent_rules: {name.strip()} lists no patterns")
+        out.append((p, ps))
+    return out
+
+
+def _rule_agent(rules, it):
+    """The agent type the first matching agent_rules entry gives the item, or None."""
+    import fnmatch
+    files = [f for f in (it["touches"] or "").split(",") if f.strip()]
+    title = (it["title"] or "").lower()
+    for platform, pats in rules:
+        for pat in pats:
+            if re.search(r"[*?/.]", pat):
+                if any(fnmatch.fnmatch(f.strip(), pat) or fnmatch.fnmatch(Path(f.strip()).name, pat) for f in files):
+                    return platform
+            elif re.search(r"\b" + re.escape(pat.lower()) + r"\b", title):
+                return platform
+    return None
 
 
 def _levels(value):
@@ -950,8 +1025,12 @@ def _model_defaults(conn):
     """The default_* settings by scope, read once for annotate."""
     rows = {}
     for r in conn.execute("SELECT scope, key, value FROM settings WHERE key IN "
-                          "('default_model','default_effort','default_min_model','default_max_model')"):
+                          "('default_model','default_effort','default_min_model','default_max_model','default_agent')"):
         rows.setdefault(r["scope"], {})[r["key"]] = r["value"]
+    try:
+        rows["_rules"] = parse_agent_rules(setting(conn, "agent_rules"))
+    except RiverError:
+        rows["_rules"] = []
     return rows
 
 
@@ -965,11 +1044,16 @@ def _item_models(it, project, defaults, ladder_text=DEFAULT_SETTINGS["model_ladd
     scopes = [f"item:{it['id']}", f"kind:{it['kind']}", f"project:{project}", "global"]
     out = {}
     for f in MODEL_FIELDS:
-        own = it[f]
+        own = it[f] if f in it.keys() else None
         if own:
             out[f], out[f + "_from"] = own, "item"
             continue
         out[f], out[f + "_from"] = None, None
+        if f == "agent" and defaults.get("_rules"):
+            got = _rule_agent(defaults["_rules"], it)
+            if got:
+                out[f], out[f + "_from"] = got, "agent_rules"
+                continue
         for sc in scopes:
             v = defaults.get(sc, {}).get("default_" + f)
             if v is not None:
@@ -994,6 +1078,45 @@ def _item_models(it, project, defaults, ladder_text=DEFAULT_SETTINGS["model_ladd
 def agent_model(conn, name):
     r = conn.execute("SELECT model FROM agents WHERE name=?", (name,)).fetchone() if name else None
     return r["model"] if r else None
+
+
+def agent_type_from_env(env):
+    """The agent CLI a command runs in, from its environment: RIVER_AGENT_TYPE (to set it by hand), else
+    the CLI's own variables (Codex: CODEX_THREAD_ID; Claude Code: CLAUDECODE). Codex first: a Codex started
+    from a Claude Code shell keeps CLAUDECODE."""
+    t = _agent_platform(env.get("RIVER_AGENT_TYPE"))
+    if t:
+        return t
+    if env.get("CODEX_THREAD_ID") or env.get("CODEX_SANDBOX"):
+        return "codex"
+    if env.get("CLAUDECODE"):
+        return "claude-code"
+    return None
+
+
+def set_agent_type(conn, name, agent_type):
+    with tx(conn):
+        if agent_type and conn.execute("UPDATE agents SET agent_type=? WHERE name=? AND agent_type IS NOT ?",
+                                       (agent_type, name, agent_type)).rowcount:
+            _event(conn, None, name, f"agent type {agent_type}")
+
+
+def session_type(conn, name):
+    """The agent type of a session: recorded from its environment, else the platform of its model's family."""
+    r = conn.execute("SELECT agent_type, model FROM agents WHERE name=?", (name,)).fetchone() if name else None
+    if not r:
+        return None
+    if r["agent_type"]:
+        return r["agent_type"]
+    fam, _ = _family(parse_ladder(setting(conn, "model_ladder")), r["model"])
+    return next((p for p, pl in LAUNCH_PLATFORMS.items() if pl["family"] == fam), None) if fam else None
+
+
+def agent_type_check(session, item_agent):
+    """(allowed, reason): a session of one agent type does not take an item meant for another."""
+    if not item_agent or not session or session == item_agent:
+        return True, ""
+    return False, f"is for {item_agent}; this session runs {session}"
 
 
 def set_agent_model(conn, name, model):
@@ -1713,9 +1836,20 @@ def _set_models(conn, it, models, actor):
             new[f] = _check_model_name(v)
         elif f == "effort":
             new[f] = _check_effort(conn, v)
+        elif f == "agent":
+            new[f] = _check_agent_type(conn, v)
         else:
             new[f] = _limit_list(ladder, v, f.replace("_", " "))
     _check_limits(ladder, new["min_model"], new["max_model"])
+    if new["agent"]:
+        # Codex runs OpenAI models and Claude Code runs Claude models: the item's own model and limits must fit.
+        fam = LAUNCH_PLATFORMS[new["agent"]]["family"]
+        for f in ("model", "min_model", "max_model"):
+            for m in _levels(new[f]):
+                mf, _ = _family(ladder, m)
+                if mf and mf != fam and (f == "model" or len(_levels(new[f])) == 1):
+                    raise RiverError(f"#{it['id']} is for {new['agent']}, which runs {fam} models "
+                                     f"({', '.join(ladder.get(fam, []))}); its {f.replace('_', ' ')} {m} is {mf}")
     for f in MODEL_FIELDS:
         if new[f] != it[f]:
             conn.execute(f"UPDATE items SET {f}=? WHERE id=?", (new[f], it["id"]))
@@ -3725,10 +3859,13 @@ def _claim_row(conn, item_id, actor):
         raise RiverError(f"refused: {actor} already holds {held} {what} ({key} {limit}). "
                          f"Finish one (river done <id>), release one (river release <id>), "
                          f"or raise the limit (river config set {key} <n> --agent {actor})")
-    why = _model_refusal(conn, it0, actor)
+    # An item pushed to this session (Dispatch, river push): a person chose the session, so its agent type
+    # does not matter; model limits still do.
+    why = _model_refusal(conn, it0, actor, any_type=it0["reserved_for"] == actor)
     if why:
         raise RiverError(f"refused: #{item_id} {why}. Take other work (river go), or a session with an allowed "
-                         f"model takes it; a planner can change the limits: river edit {item_id} --min-model/--max-model")
+                         f"model or agent type takes it; a planner can change them: river edit {item_id} "
+                         f"--min-model/--max-model/--agent")
     it = _item(conn, item_id)
     if it["kind"] == "deploy":
         owner = conn.execute("SELECT owner FROM targets WHERE name=?", (it["target"],)).fetchone()
@@ -3756,14 +3893,16 @@ def _claim_row(conn, item_id, actor):
     return ag
 
 
-def _model_refusal(conn, it, actor):
-    """Why the actor's model may not take this item (its min/max limits), or None."""
-    model = agent_model(conn, actor)
-    if not model:
+def _model_refusal(conn, it, actor, any_type=False):
+    """Why the actor's model or agent type may not take this item (its min/max limits, its agent), or None."""
+    model, stype = agent_model(conn, actor), None if any_type else session_type(conn, actor)
+    if not (model or stype):
         return None
     ladder_text = setting(conn, "model_ladder")
     m = _item_models(it, _project_name(conn, it["project_id"]), _model_defaults(conn), ladder_text)
-    ok, why = model_check(parse_ladder(ladder_text), model, m["min_model"], m["max_model"])
+    ok, why = agent_type_check(stype, m["agent"])
+    if ok and model:
+        ok, why = model_check(parse_ladder(ladder_text), model, m["min_model"], m["max_model"])
     return None if ok else why
 
 
@@ -3776,6 +3915,7 @@ def next_item(conn, project=None, unblocks=None, claim=False, actor=None, limit=
     that need a folder are left out too (needs_folder)."""
     model = model or agent_model(conn, actor)
     ladder = parse_ladder(setting(conn, "model_ladder")) if model else None
+    stype = session_type(conn, actor)
     doer_for = None
     if actor:
         r = conn.execute("SELECT kind FROM agents WHERE name=?", (actor,)).fetchone()
@@ -3785,11 +3925,13 @@ def next_item(conn, project=None, unblocks=None, claim=False, actor=None, limit=
     who_mine = actor if mine else None
 
     def fits(pool):
-        if not model:
+        if not (model or stype):
             return pool
         out = []
         for a in pool:
-            ok, why = model_check(ladder, model, a["min_model"], a["max_model"])
+            ok, why = agent_type_check(None if actor and a["reserved_for"] == actor else stype, a["agent"])
+            if ok and model:
+                ok, why = model_check(ladder, model, a["min_model"], a["max_model"])
             if ok:
                 a["model_note"] = why
                 out.append(a)
@@ -5236,20 +5378,25 @@ def waiting_agent_for(conn, project, item_id=None):
 def covered_projects(conn, ann=None):
     """Projects that have an agent, with one of its sessions: a session that is not gone and holds an item
     there, waits for work there (river wait), or has an item there pushed to it (a Start just opened it)."""
+    return {p: names[0] for p, names in project_sessions(conn, ann).items()}
+
+
+def project_sessions(conn, ann=None):
+    """{project: [the sessions that cover it, as covered_projects counts them]}."""
     ann = ann if ann is not None else annotate(conn)
     live = {r["name"] for r in conn.execute("SELECT * FROM agents WHERE kind='ai'")
             if _agent_state(conn, r) not in ("gone", "stopped") and not not_connected(conn, r)}
     covered = {}
     for a in sorted(ann.values(), key=lambda a: a["id"]):
-        if a["status"] in ("in_progress", "held") and a["assignee"] in live:
-            covered.setdefault(a["project"], a["assignee"])
-        elif a["status"] == "open" and a["reserved_until"] and a["reserved_for"] in live:
-            covered.setdefault(a["project"], a["reserved_for"])
+        who = (a["assignee"] if a["status"] in ("in_progress", "held") else
+               a["reserved_for"] if a["status"] == "open" and a["reserved_until"] else None)
+        if who in live and who not in covered.get(a["project"], []):
+            covered.setdefault(a["project"], []).append(who)
     for r in conn.execute("SELECT name, waiting_in FROM agents WHERE role='waiting' AND kind='ai' ORDER BY name"):
         if r["name"] in live:
             for p in (r["waiting_in"] or "").split(","):
-                if p:
-                    covered.setdefault(p, r["name"])
+                if p and r["name"] not in covered.get(p, []):
+                    covered.setdefault(p, []).append(r["name"])
     return covered
 
 
@@ -5295,13 +5442,27 @@ def launch_target(conn, project=None, agent=None, item=None, model=None, effort=
     if not p["path"]:
         raise RiverError(f"project {p['name']} has no folder, so river cannot start a session there: "
                          f"river project path {p['name']} <folder>")
+    if agent is None and top["agent"]:
+        agent = agent_for_type(conn, top["agent"], p["id"])
+        if agent is None:
+            raise RiverError(f"#{top['id']} is for {top['agent']}, and no launch_agents entry runs it; add one: "
+                             f"river config set launch_agents \"...; {LAUNCH_PLATFORMS[top['agent']]['label']}=@{top['agent']}\"")
     if model:
         ok, why = model_check(parse_ladder(setting(conn, "model_ladder")), model, top["min_model"], top["max_model"])
         if not ok:
             raise RiverError(f"#{top['id']} {why}; pick another model")
-    return {"project": p["name"], "path": p["path"], "item": {"id": top["id"], "title": top["title"]},
+    return {"project": p["name"], "path": p["path"], "item": {"id": top["id"], "title": top["title"], "agent": top["agent"]},
             "ready": len(pool), "why": why, **_launch_agent_cmd(conn, p["id"], agent, model, effort, options),
             "launch_in": _launch_in(conn, p["id"], launch_in)}
+
+
+def agent_for_type(conn, agent_type, project_id=None):
+    """The first launch_agents entry that runs this agent type (a profile of it, or a custom command of its CLI)."""
+    for label, cmd in parse_launch_agents(setting(conn, "launch_agents", project_id=project_id)):
+        prof = parse_profile(cmd)
+        if (prof[0] if prof else _exe_platform(cmd)) == agent_type:
+            return label
+    return None
 
 
 def _start_next(conn):
@@ -5345,7 +5506,8 @@ def _launch_agent_cmd(conn, project_id, agent, model=None, effort=None, options=
     else:
         opts, cmd = {}, fill_launch_command(pick[1], mid, effort or None)
     return {"agent": pick[0], "command": cmd, "platform": prof[0] if prof else None, "options": opts,
-            "model": model, "model_id": mid, "effort": effort or None, "env": {"RIVER_MODEL": model} if model else {}}
+            "model": model, "model_id": mid, "effort": effort or None,
+            "env": {"RIVER_MODEL": model} if model else {}}
 
 
 def _check_codex_effort(mid, effort):
@@ -5400,6 +5562,7 @@ def launch_options(conn):
         fam = LAUNCH_PLATFORMS[prof[0]]["family"] if prof else AGENT_FAMILIES.get(Path(entry_exe(cmd)).name.lower())
         fam = fam if fam in ladder else None
         out.append({"label": label, "family": fam, "platform": prof[0] if prof else None,
+                    "agent_type": prof[0] if prof else _exe_platform(cmd),
                     "models": [{"name": m, "note": MODEL_NOTES.get(m, ""), "family": f}
                                for f, ms in ladder.items() if fam in (None, f) for m in ms],
                     "efforts": PLATFORM_EFFORTS.get(fam, levels),
@@ -5500,10 +5663,11 @@ def _goal_brief(conn, name, actor):
             "lease": _short(_goal_lease(conn, _goal(conn, name), actor))}
 
 
-def go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None, model=None, chat=False):
+def go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None, model=None, chat=False,
+       agent_type=None):
     """One call for a fresh agent session; see _go. A session that gets a monitor item has role monitor,
     and its brief says which deploy it follows and whom to alert."""
-    brief = _go(conn, cwd, actor, project, role, session, focus, model, chat)
+    brief = _go(conn, cwd, actor, project, role, session, focus, model, chat, agent_type)
     it = brief.get("item")
     if it and it["kind"] == "monitor":
         brief["role"] = "monitor"
@@ -5519,7 +5683,8 @@ def _monitor_brief(conn, it):
             "deployer": deployer, "target": it["target"], "person": _person(conn)}
 
 
-def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None, model=None, chat=False):
+def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None, model=None, chat=False,
+        agent_type=None):
     """One call for a fresh agent session: find the project, name the session, pick a role, and brief it.
 
     chat: a chat app session with no folder (river mcp from Claude desktop). With no project named and no
@@ -5572,6 +5737,8 @@ def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None
         set_session(conn, actor, session)
     if model:
         set_agent_model(conn, actor, model)
+    if agent_type:
+        set_agent_type(conn, actor, agent_type)
     with tx(conn):
         conn.execute("UPDATE agents SET role=NULL WHERE name=? AND role='planner'", (actor,))
 
@@ -6025,16 +6192,23 @@ def manager_findings(conn):
             it = next((x for x in ann.values() if x["reserved_for"] == r["name"] and x["status"] == "open"), None)
             unconnected.append({"agent": r["name"], "since": _short(t - parse_iso(r["registered_at"])),
                                 "item": {"id": it["id"], "title": it["title"]} if it else None})
-    covered = covered_projects(conn, ann)
+    sessions = project_sessions(conn, ann)
+    types = {n: session_type(conn, n) for ns in sessions.values() for n in ns}
     pool = sorted((x for x in ann.values() if x["ready"] and x["doer"] != "human" and not x["reserved_for"]
                    and x["kind"] not in ("deploy", "review", "monitor") and not x["project_archived"]),
                   key=lambda x: x["sort_key"])
+    # Ready work by project and agent type: work for Codex needs a Codex session, whatever else runs there.
+    # A session of no known type covers any work.
     uncovered, seen = [], set()
     for x in pool:
-        if x["project"] not in covered and x["project"] not in seen:
-            seen.add(x["project"])
-            uncovered.append({"project": x["project"], "top": {"id": x["id"], "title": x["title"]},
-                              "ready": sum(1 for y in pool if y["project"] == x["project"])})
+        key = (x["project"], x["agent"])
+        have = [n for n in sessions.get(x["project"], []) if not x["agent"] or types[n] in (None, x["agent"])]
+        if not have and key not in seen:
+            seen.add(key)
+            uncovered.append({"project": x["project"], "agent_type": x["agent"],
+                              "launch": agent_for_type(conn, x["agent"]) if x["agent"] else None,
+                              "top": {"id": x["id"], "title": x["title"]},
+                              "ready": sum(1 for y in pool if (y["project"], y["agent"]) == key)})
     states = {a["name"]: a["state"] for a in agents}
     targets = [{"target": r["name"], "owner": r["owner"], "state": states.get(r["owner"], "gone")}
                for r in conn.execute("SELECT name, owner FROM targets WHERE owner IS NOT NULL ORDER BY name")
@@ -6054,7 +6228,7 @@ def manager_findings(conn):
 def _finding_keys(f):
     return sorted({f"stuck:{x['agent']}" for x in f["stuck"]} | {f"lost:{x['id']}" for x in f["lost_leases"]}
                   | {f"waiting:{x['agent']}" for x in f["waiting_too_long"]}
-                  | {f"unconnected:{x['agent']}" for x in f.get("not_connected", [])} | {f"uncovered:{x['project']}" for x in f["uncovered"]}
+                  | {f"unconnected:{x['agent']}" for x in f.get("not_connected", [])} | {f"uncovered:{x['project']}" + (f":{x['agent_type']}" if x.get("agent_type") else "") for x in f["uncovered"]}
                   | {f"target:{x['target']}" for x in f["targets"]} | {f"question:{x['id']}" for x in f["questions"]}
                   | {f"human:{x['id']}" for x in f["human_ready"]})
 

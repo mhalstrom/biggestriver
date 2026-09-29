@@ -151,7 +151,7 @@ river list --goal <name>
 ```
 river add <project> "<title>" [-p 0-4] [--doer any|ai|human] [--after <id> ...] [--feeds <id> ...] [--notes "..."]
           [--context "..."] [--touches <file> ...] [--check "<command>"]
-          [--model <m>] [--effort <level>] [--min-model <m>] [--max-model <m>]
+          [--model <m>] [--effort <level>] [--min-model <m>] [--max-model <m>] [--agent codex|claude-code]
 river add [project] --from plan.md [--dry-run]   # one item per line of an outline: a line waits on
                                     # the lines indented under it; 'P0' at the start and '(human)' or
                                     # '(ai)' at the end set priority and doer; '[x]' lines are skipped
@@ -163,7 +163,7 @@ river undep <id> --on <id> ...
 river prio <id> <0-4>               # 0 is most important
 river move <id> --before|--after <id>   # manual order inside a project
 river edit <id> [--title] [--notes] [--doer] [--project] [--context] [--touches ...] [--check] [--due <date>|none]
-          [--model|--effort|--min-model|--max-model <value>|none]
+          [--model|--effort|--min-model|--max-model|--agent <value>|none]
 river blocked <id> --reason "..." [--until "mon 07:00 America/New_York"] / river unblock <id>
 river drop <id> / river reopen <id>
 river replanned <id> [--note "..."]   # clear the replan mark after you split or re-scope the item
@@ -227,6 +227,19 @@ Defaults come from settings: `default_model`, `default_effort`,
 `default_min_model`, `default_max_model`, per project (`--project`) or per
 item kind (`--kind deploy`). An item's own value wins. A session declares its
 model with `RIVER_MODEL=<model>` or `river go --model <model>`.
+
+## Agent type
+
+An item can need one agent type: `--agent codex` or `--agent claude-code` (a
+launch_agents label such as `Codex` works too). Sessions of another type skip
+it, and Start, Dispatch, and `river launch` start that type. Use it when one
+agent does the work better, for example Codex for images and CSS. Keep the
+item's models in that type's family (Codex: luna, terra, sol, astra; Claude
+Code: sonnet, opus, fable). Set rules once instead of on every item:
+`river config set agent_rules "codex: *.css, *.svg, image, logo"` (a pattern
+with `*`, `?`, `/` or `.` matches a file in `--touches`; any other is a word in
+the title). `default_agent` is the fallback, per project or kind. A person can
+still push an item to a session of another type.
 
 ## Settings
 

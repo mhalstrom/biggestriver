@@ -42,7 +42,11 @@ Stop when the user tells you to, and tell the user what you did.
   or stop it (`river stop <agent> --reason "no work"`) so it does not hold a slot.
 - **NO AGENT in a project** with ready work: `river launch --project <name>`
   (`--dry-run` first when unsure). Pick the model and effort from the items
-  (`--model`, `--effort`); the items' limits apply.
+  (`--model`, `--effort`); the items' limits apply. **NO CODEX AGENT** (or
+  another type): ready work there needs that agent type; run the launch line
+  it prints (`river launch --item <id> --agent Codex`).
+- **NOT CONNECTED**: a session river started ran no river command. Tell the
+  user (its terminal may wait on a prompt), stop it, and launch again.
 - **TARGET owner away or gone**: `river target give <target> --to <agent>`
   (an active agent in one of the target's projects).
 - **QUESTION** to the user or **WAITS ON THE USER**: tell the user in chat, one

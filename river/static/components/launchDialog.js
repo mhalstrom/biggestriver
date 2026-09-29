@@ -69,7 +69,8 @@ function el() {
     }
   });
   d.addEventListener("change", (e) => {
-    if (e.target.id === "lAgent" || e.target.id === "lWork") draw(values());
+    if (e.target.id === "lAgent") draw(values());
+    else if (e.target.id === "lWork") draw({ ...values(), agent: null });  // the new work's agent type picks again
     else if (e.target.dataset && e.target.dataset.lopt) e.target.dataset.changed = "1";
   });
   return d;
@@ -100,12 +101,15 @@ function workItem(work) {
 
 function draw(prev) {
   const opts = S.launch_options || [];
-  const agent = prev && opts.some(o => o.label === prev.agent) ? prev.agent
+  const work = prev ? prev.work : (ctx.work || "");
+  const it = workItem(work);
+  // An item for one agent type (codex, claude-code) preselects the first agent of that type.
+  const typed = it && it.agent && opts.find(o => o.agent_type === it.agent);
+  const agent = prev && prev.agent && opts.some(o => o.label === prev.agent) ? prev.agent
+    : typed ? typed.label
     : opts.some(o => o.label === store("river.launch.agent")) ? store("river.launch.agent") : (opts[0] || {}).label;
   const opt = opts.find(o => o.label === agent) || { models: [], efforts: [] };
   const fam = opt.family || "any";
-  const work = prev ? prev.work : (ctx.work || "");
-  const it = workItem(work);
   const ladder = S.model_ladder || {};
   const models = opt.models.filter(m => !it || modelAllowed(ladder, m.name, it.min_model, it.max_model));
   const model = pickModel(opt, it, ladder, store("river.launch.model." + fam));
@@ -113,6 +117,8 @@ function draw(prev) {
   const where = (prev && prev.launch_in) || store("river.launch.in") || S.launch_in || "tab";
   const rows = startable(S), projects = [...new Set(rows.map(i => i.project))];
   const limits = it && (it.min_model || it.max_model) ? `#${it.id} allows ${[it.min_model && "at least " + it.min_model, it.max_model && "at most " + it.max_model].filter(Boolean).join(" and ")}.` : "";
+  const other = it && it.agent && opt.agent_type && opt.agent_type !== it.agent
+    ? `#${it.id} is for ${it.agent}; ${agent} runs ${opt.agent_type}, and you start it anyway.` : "";
   const rec = it && (it.model || it.effort) ? `#${it.id} recommends ${[it.model, it.effort && it.effort + " effort"].filter(Boolean).join(", ")}.` : "";
   const box = $("#launchDlg .box");
   box.innerHTML = `
@@ -134,7 +140,7 @@ function draw(prev) {
           `<option ${e === effort ? "selected" : ""}>${esc(e)}</option>`).join("")}</select></label>
       </div>
       ${optionFields(opt)}
-      <div class="muted" style="font-size:12px">${esc([rec, limits].filter(Boolean).join(" "))}
+      <div class="muted" style="font-size:12px">${esc([other, rec, limits].filter(Boolean).join(" "))}
         ${!opt.takes_model || !opt.takes_effort ? ` The ${esc(agent)} command has no ${[!opt.takes_model && "{model}", !opt.takes_effort && "{effort}"].filter(Boolean).join(" or ")} placeholder, so the agent starts with its own ${!opt.takes_model ? "model" : "effort"} (river still records the model you pick). Add it in Settings: launch_agents, or use a profile (@claude-code, @codex).` : ""}</div>
       <div class="actions" style="align-items:center"><span class="muted" style="font-size:12px">Open in:</span>
         <label style="display:flex;gap:4px;align-items:center"><input type="radio" name="lIn" value="tab" ${where === "tab" ? "checked" : ""}>a new tab</label>

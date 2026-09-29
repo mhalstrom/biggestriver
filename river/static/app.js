@@ -463,7 +463,7 @@ async function drawerAction(what) {
     if (what === "dep") { const on = $("#dDep").value.split(/[\s,]+/).filter(Boolean).map(Number); if (on.length) await act("dep_add", { id, on }); }
     if (what === "save") {
       await act("item_edit", { id, title: $("#dTitle").value, notes: $("#dNotes").value, context: $("#dContext").value, touches: $("#dTouches").value, check: $("#dCheck").value, due: $("#dDue").value.trim() || undefined, doer: $("#dDoer").value, project: $("#dProject").value !== it.project ? $("#dProject").value : undefined,
-        models: Object.fromEntries([["model", "#dModel"], ["effort", "#dEffort"], ["min_model", "#dMinModel"], ["max_model", "#dMaxModel"]]
+        models: Object.fromEntries([["model", "#dModel"], ["effort", "#dEffort"], ["min_model", "#dMinModel"], ["max_model", "#dMaxModel"], ["agent", "#dAgent"]]
           .map(([f, sel]) => [f, $(sel).value.trim()]).filter(([f, v]) => v !== (it[f + "_from"] === "item" ? it[f] || "" : ""))
           .map(([f, v]) => [f, v || "none"])) });
       if (+$("#dPrio").value !== it.priority) await act("prio", { id, priority: +$("#dPrio").value });

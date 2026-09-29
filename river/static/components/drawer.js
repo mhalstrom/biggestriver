@@ -1,6 +1,6 @@
 // The item drawer: the panel on the right with one item's details, actions, and history.
 import { esc, ago, left, clip } from "../lib.js";
-import { chip, statusChip, prioChip, doerChip, modelChip } from "./chip.js";
+import { chip, statusChip, prioChip, doerChip, modelChip, agentChip } from "./chip.js";
 import { input, textarea, select, field, two, renderKeepingEdits } from "./form.js";
 import { agentStart } from "./agentStart.js";
 
@@ -71,7 +71,7 @@ export function itemDrawerHtml(it, { S, me }) {
   return `
     <div style="display:flex;align-items:center;gap:8px"><span class="muted">#${it.id} · ${esc(it.project)}</span><span class="spacer" style="flex:1"></span><button class="btn" id="dClose">Close</button></div>
     <h3>${esc(it.title)}</h3>
-    <div class="chips" style="justify-content:flex-start">${prioChip(it)}${doerChip(it)}${modelChip(it)}${statusChip(it)}</div>
+    <div class="chips" style="justify-content:flex-start">${prioChip(it)}${doerChip(it)}${agentChip(it)}${modelChip(it)}${statusChip(it)}</div>
     <div class="actions" style="margin-top:6px;align-items:center"><span class="muted" style="font-size:12px">Goals:</span>
       ${(it.goals || []).map(g => chip("c-goal", `${esc(g)} <span class="link" data-untag="${esc(g)}" title="remove this goal tag">×</span>`)).join("") || '<span class="muted" style="font-size:12px">none</span>'}
       ${(S.goals || []).some(g => g.status === "open" && !(it.goals || []).includes(g.name)) ? `<select id="dGoal">${(S.goals || []).filter(g => g.status === "open" && !(it.goals || []).includes(g.name)).sort((a, b) => (b.project === it.project) - (a.project === it.project)).map(g => `<option value="${esc(g.name)}">${esc(g.name)}${g.project !== it.project ? " (" + esc(g.project) + ")" : ""}</option>`).join("")}</select><button class="btn" data-do="tag">Add goal</button>` : ""}</div>
@@ -96,6 +96,7 @@ export function itemDrawerHtml(it, { S, me }) {
         field("Effort", modelInput(it, "effort", "dEffort", (S.effort_levels || []).join(", ") || "low … max")))}
       ${two(field("Min model", modelInput(it, "min_model", "dMinModel", "weakest allowed, e.g. opus")),
         field("Max model", modelInput(it, "max_model", "dMaxModel", "strongest allowed, e.g. sonnet")))}
+      ${field("Agent type", modelInput(it, "agent", "dAgent", "codex or claude-code; empty: any agent"))}
       ${two(field("Priority (own)", select({ id: "dPrio" }, [0, 1, 2, 3, 4], it.priority)),
         field("Who can do it", select({ id: "dDoer" }, [["any", "anyone"], ["ai", "agent"], ["human", "human"]], it.doer)))}
       ${two(field("Project", select({ id: "dProject" }, S.projects.map(p => p.name), it.project)),
