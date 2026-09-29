@@ -236,6 +236,80 @@ def _open_focused(conn, p, focus, runner, agent, model=None, effort=None, launch
     return t
 
 
+def manage_command(cmd):
+    """A launch_agents command that starts a manager instead of a worker: 'river go' (a first prompt) or the
+    word go (Claude Code's `claude go`) becomes manage."""
+    import re
+    if "river go" in cmd:
+        return cmd.replace("river go", "river manage")
+    out, n = re.subn(r"(?<=\s)go(?=\s|$)", "manage", cmd, count=1)
+    if not n:
+        raise RiverError(f"cannot make a manager from the command {cmd!r}: it has no 'go' or 'river go' to replace")
+    return out
+
+
+def start_manager(conn, runner=None, agent=None, actor=None, model=None, effort=None, launch_in=None):
+    """Start manager (the page's Manager section): the chosen agent with manage in place of go, in the folder
+    of the first project that has one. Refuses while a manager is active."""
+    import secrets
+    other = core.active_manager(conn)
+    if other:
+        raise RiverError(f"{other} is the active manager; open its chat instead")
+    p = next((core._project(conn, x["name"]) for x in core.project_list(conn) if x.get("path")), None)
+    if p is None:
+        raise RiverError("no project has a folder, so river cannot start a session: river project path <name> <folder>")
+    _can_open_terminal(runner, f"cd {p['path']} && claude manage")
+    t = {"project": p["name"], "path": p["path"], **core._launch_agent_cmd(conn, p["id"], agent, model, effort),
+         "launch_in": core._launch_in(conn, p["id"], launch_in)}
+    t["command"] = manage_command(t["command"])
+    name = f"manager-{secrets.token_hex(2)}"
+    core.register(conn, name, note="started from the page as the manager")
+    core._set_role_note(conn, name, "manager", None)  # the next Start manager sees it at once
+    _open_terminal(t, {"RIVER_AGENT": name, **t["env"]}, runner)
+    return {**t, "session_name": name}
+
+
+def open_chat(conn, agent, runner=None):
+    """Bring the person into an agent's chat: its web link when the session has one (Claude Code with
+    --remote-control); else, on macOS, the Terminal tab that runs its process (by the tty of the PID river
+    recorded); else a hint that says why and what to do."""
+    import subprocess
+    a = core.agent_status(conn, agent)
+    if a.get("session_url"):
+        return {"agent": agent, "url": a["session_url"]}
+    why = "it has no web link (start Claude Code with --remote-control for one)"
+    if a.get("pid") and a.get("host") == core.this_host() and core.pid_alive(a["pid"]):
+        try:
+            tty = subprocess.run(["ps", "-o", "tty=", "-p", str(a["pid"])], capture_output=True, text=True,
+                                 timeout=5).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            tty = ""
+        if tty and tty not in ("??", "?") and (PLATFORM == "darwin" or runner or TERMINAL_RUNNER):
+            dev = tty if tty.startswith("/dev/") else "/dev/" + tty
+            script = "\n".join([
+                'tell application "Terminal"',
+                '  repeat with w in windows',
+                '    repeat with t in tabs of w',
+                f'      if tty of t is {_applescript_str(dev)} then',
+                '        set selected of t to true', '        set index of w to 1', '        activate',
+                '        return "ok"', '      end if', '    end repeat', '  end repeat', 'end tell', 'return "none"'])
+            run = runner or TERMINAL_RUNNER or (lambda sc: subprocess.run(
+                ["osascript", "-e", sc], capture_output=True, text=True, timeout=10).stdout)
+            try:
+                got = run(script)
+            except (OSError, subprocess.SubprocessError) as e:
+                got = str(e)
+            if (got or "").strip() == "ok":
+                return {"agent": agent, "focused": True, "tty": dev}
+            why = f"no Terminal tab runs {dev} (it may run in another terminal app)"
+        else:
+            why = "its process has no terminal (a background session)"
+    elif a.get("pid"):
+        why = f"its process runs on {a.get('host')}, not here" if a.get("host") != core.this_host() else "its process has ended"
+    return {"agent": agent, "hint": f"No chat to open for {agent}: {why}."
+            + (f" Its Claude Code session: {a['session']}." if a.get("session") else "")}
+
+
 def _open_terminal(t, env, runner=None):
     """Run the agent command (t["command"]) in the project folder (t["path"]) with env set: in a new
     Terminal tab or window on macOS (launch_in), in a new console window on Windows. runner (tests) gets
@@ -672,6 +746,13 @@ OPS = {
     "deploy_now": lambda c, a, who: deploy_now(c, a["target"], bool(a.get("review")), agent=a.get("agent"), actor=who,
                                                **_launch_args(a)),
     "open_monitors": lambda c, a, who: open_monitors(c, db=a.get("db")),
+    "queue_add": lambda c, a, who: core.queue_add(c, a["agent"], a.get("id"), a.get("message"), bool(a.get("first")),
+                                                  a.get("before"), who),
+    "queue_remove": lambda c, a, who: core.queue_remove(c, a["agent"], str(a["ref"]), who),
+    "stop_agent": lambda c, a, who: core.stop_agent(c, a["agent"], a.get("reason", ""), who),
+    "kill_agent": lambda c, a, who: core.kill_agent(c, a["agent"], a.get("reason", ""), who),
+    "start_manager": lambda c, a, who: start_manager(c, agent=a.get("agent"), actor=who, **_launch_args(a)),
+    "open_chat": lambda c, a, who: open_chat(c, a["agent"]),
     "decline_message": lambda c, a, who: core.decline_message(c, int(a["msg"]), a.get("note"), who),
     "update": lambda c, a, who: _no_update_in_app() or update_apply(),
     "restart": lambda c, a, who: _no_update_in_app() or (_restart_soon(), {"restarting": True})[1],

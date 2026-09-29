@@ -2806,8 +2806,8 @@ def queue_add(conn, agent, item=None, message=None, first=False, before=None, ac
     return queue_list(conn, agent)
 
 
-def queue_list(conn, agent):
-    ann = annotate(conn)
+def queue_list(conn, agent, ann=None):
+    ann = ann or annotate(conn)
     out = []
     for r in _queue_rows(conn, agent):
         e = {"entry": r["id"], "kind": r["kind"], "added_by": r["added_by"], "created_at": r["created_at"],
@@ -3575,6 +3575,7 @@ def _agent_state(conn, a):
 def agent_status(conn, name):
     a = dict(_agent(conn, name))
     a["state"] = _agent_state(conn, a)
+    a["can_kill"] = bool(a.get("pid")) and a.get("host") == this_host() and a["state"] != "gone"
     a["holds"] = [dict(r) for r in conn.execute(
         "SELECT id, title, status, lease_expires_at, hold_expires_at FROM items WHERE assignee=? "
         "AND status IN ('in_progress','held') ORDER BY id",
@@ -5077,6 +5078,9 @@ def state(conn):
         "launch_options": launch_options(conn),
         "launch_in": setting(conn, "launch_in"),
         "start_next": _start_next(conn),
+        "queues": {r["agent"]: queue_list(conn, r["agent"], ann)["entries"]
+                   for r in conn.execute("SELECT DISTINCT agent FROM queue_entries ORDER BY agent")},
+        "manager": manager_view(conn),
         "effort_levels": _levels(setting(conn, "effort_levels")),
         "settings": config_list(conn),
         "events": recent_events(conn),
@@ -5646,6 +5650,23 @@ def _finding_keys(f):
                   | {f"waiting:{x['agent']}" for x in f["waiting_too_long"]} | {f"uncovered:{x['project']}" for x in f["uncovered"]}
                   | {f"target:{x['target']}" for x in f["targets"]} | {f"question:{x['id']}" for x in f["questions"]}
                   | {f"human:{x['id']}" for x in f["human_ready"]})
+
+
+def manager_view(conn):
+    """The page's Manager section: the active manager (or none), its last actions, what it asked people."""
+    name = active_manager(conn)
+    if name is None:
+        return None
+    a = agent_status(conn, name)
+    humans = [r["name"] for r in conn.execute("SELECT name FROM agents WHERE kind='human'")]
+    return {"name": name, "platform": a.get("platform"), "model": a.get("model"), "state": a["state"],
+            "session_url": a.get("session_url"), "pid": a.get("pid"), "can_kill": a["can_kill"],
+            "actions": [dict(r) for r in conn.execute(
+                "SELECT at, change, item_id FROM events WHERE actor=? AND change LIKE '%(by manager %' "
+                "ORDER BY id DESC LIMIT 6", (name,))],
+            "asked": [dict(r) for r in conn.execute(
+                f"SELECT id, body, to_agent, item_id FROM messages WHERE from_agent=? AND kind='question' AND state='open' "
+                f"AND to_agent IN ({','.join('?' * len(humans))}) ORDER BY id", (name, *humans))] if humans else []}
 
 
 def manage(conn, cwd, actor=None, takeover=None):

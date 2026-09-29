@@ -334,6 +334,34 @@ class LaunchAgent(unittest.TestCase):
         self.assertIn(f"for #{x} work", out)
         self.assertIn('keystroke "t"', sent[-1])
 
+    def test_manager_section_start_chat_queue_and_stop(self):
+        core.project_add(self.c, "shop", path=self.dir.name)
+        x = core.item_add(self.c, "shop", "work")["id"]
+        core.register(self.c, "mark", human=True)
+        core.register(self.c, "w1")
+        self.assertIsNone(core.state(self.c)["manager"])
+        sent = []
+        t = server.start_manager(self.c, runner=sent.append, model="opus")
+        self.assertEqual(t["command"], "claude --model opus manage --remote-control")
+        self.assertIn(f"RIVER_AGENT={t['session_name']} RIVER_MODEL=opus claude --model opus manage", sent[-1])
+        with self.assertRaisesRegex(RiverError, "is the active manager"):
+            server.start_manager(self.c, runner=sent.append)
+        self.assertEqual(server.manage_command('codex "run river go in this folder"'), 'codex "run river manage in this folder"')
+        m = t["session_name"]
+        core.queue_add(self.c, "w1", x, actor=m)
+        st = core.state(self.c)
+        self.assertEqual((st["manager"]["name"], st["manager"]["actions"][0]["change"][:9]), (m, "queued fo"))
+        self.assertEqual(st["queues"]["w1"][0]["item"], x)
+        # The page's ops: queue, stop, open chat.
+        OPS = server.OPS
+        OPS["queue_remove"](self.c, {"agent": "w1", "ref": str(x)}, "mark")
+        OPS["queue_add"](self.c, {"agent": "w1", "message": "commit first"}, "mark")
+        r = OPS["stop_agent"](self.c, {"agent": "w1", "reason": "done for today"}, "mark")
+        self.assertIn("ends", r)
+        self.assertEqual(OPS["open_chat"](self.c, {"agent": "w1"}, "mark")["hint"][:24], "No chat to open for w1: ")
+        core.record_session_url(self.c, "w1", "https://claude.ai/code/session_x")
+        self.assertEqual(OPS["open_chat"](self.c, {"agent": "w1"}, "mark")["url"], "https://claude.ai/code/session_x")
+
     def test_launch_options_follow_each_agents_platform(self):
         old = server._login_shell_which
         server._login_shell_which = lambda names: {n: "/bin/" + n for n in names}

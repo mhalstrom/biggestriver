@@ -8,6 +8,7 @@ import { makeDrawer, itemDrawerHtml, msgLine } from "./components/drawer.js";
 import { makeDialog } from "./components/dialog.js";
 import { agentStart } from "./components/agentStart.js";
 import { chooseLaunch, launchArgs } from "./components/launchDialog.js";
+import { managerHtml, queueHtml, agentButtons, chooseStop } from "./components/agentActions.js";
 import { makePanZoom } from "./components/panZoom.js";
 import { folderForm, wireFolderForms } from "./components/folderForm.js";
 hooks.refresh = refresh;
@@ -143,12 +144,17 @@ function renderAgents() {
     view: agentHolds(a),
   })));
 }
-// What an agent holds, owns, was pushed, or (while it waits) can be given.
+function renderManager() {
+  const h = managerHtml(S);
+  if ($("#manager").dataset.sig !== h) { $("#manager").innerHTML = h; $("#manager").dataset.sig = h; }
+}
+// What an agent holds, owns, was pushed, or (while it waits) can be given; its queue and its buttons.
 function agentHolds(a) {
   return `${a.role === "waiting" && !a.holds.length ? giveWork(a) : ""}
       ${(S.goals || []).filter(g => g.owner === a.name && g.status === "open").map(g => `<div class="st">owns goal <span class="link" data-goal="${esc(g.name)}">${esc(g.name)}</span>${g.owner_expires_at ? " · " + left(g.owner_expires_at) + " left" : ""}</div>`).join("")}
       ${a.holds.map(h => `<div class="st">holds <span class="link" data-open="${h.id}">#${h.id} ${esc(h.title)}</span>${h.lease_expires_at ? " · " + left(h.lease_expires_at) + " left" : ""}</div>`).join("") || '<div class="st">holds nothing</div>'}
-      ${S.items.filter(i => i.status === "open" && i.reserved_until && i.reserved_for === a.name).map(i => `<div class="st">pushed <span class="link" data-open="${i.id}">#${i.id} ${esc(i.title)}</span> · ${left(i.reserved_until)} left · <span class="link" data-unpush="${i.id}">cancel</span></div>`).join("")}`;
+      ${S.items.filter(i => i.status === "open" && i.reserved_until && i.reserved_for === a.name).map(i => `<div class="st">pushed <span class="link" data-open="${i.id}">#${i.id} ${esc(i.title)}</span> · ${left(i.reserved_until)} left · <span class="link" data-unpush="${i.id}">cancel</span></div>`).join("")}
+      ${queueHtml((S.queues || {})[a.name], a.name)}${agentButtons(a)}`;
 }
 function agentSession(a) {
   return `${a.model ? `<span class="chip c-p" title="the model this session runs (RIVER_MODEL)">${esc(a.model)}</span> ` : ""}${a.session ? `<span title="Claude Code session">${esc(a.session)}${a.session_ref ? " [" + esc(a.session_ref) + "]" : ""}</span>` : ""}${a.session_url ? ` <a class="link" href="${esc(a.session_url)}" target="_blank" rel="noopener">open</a>` : ""}`;
@@ -646,7 +652,7 @@ async function needsYouAction(t) {
 async function refresh() {
   const r = await fetch("/api/state"); S = await r.json();
   if (S.dev_build) { if (window._build && window._build !== S.dev_build) return location.reload(); window._build = S.dev_build; }
-  renderSelects(); renderCapacity(); renderNext(); renderProjects(); renderWork(); renderStrip(); renderReady(); renderAgents(); renderEvents(); renderSettings(); renderTakeovers(); renderBlocked(); renderTargets();
+  renderSelects(); renderCapacity(); renderNext(); renderProjects(); renderWork(); renderStrip(); renderReady(); renderAgents(); renderManager(); renderEvents(); renderSettings(); renderTakeovers(); renderBlocked(); renderTargets();
   renderGraph(false); renderLog(false); pollNeedsYou().catch(() => {}); pollInbox().catch(() => {});
   $("#stamp").textContent = "updated " + new Date().toLocaleTimeString();
   if (openItem != null && drawer.isOpen()) openDrawer(openItem);
@@ -667,6 +673,26 @@ document.addEventListener("click", async (e) => {
     if (sel && sel.value) await act("push", { id: +sel.value, to, note: "from the page: you were waiting for work" })
       .then(() => toast(`Gave #${sel.value} to ${to}`)).catch(() => {});
     return; }
+  if (t.dataset.startManager) {
+    const ch = await chooseLaunch(S, { title: "Start the manager", go: "Start manager",
+      what: "Manager: plans with you, starts agents, fills their queues, and stops stuck ones (river manage)" });
+    if (!ch) return;
+    try { const r = await act("start_manager", launchArgs(ch)); toast(`Started ${r.agent} as ${r.session_name}, the manager`); } catch (e) { /* toast shown */ }
+    return; }
+  if (t.dataset.chat) {
+    try { const r = await act("open_chat", { agent: t.dataset.chat });
+      if (r.url) window.open(r.url, "_blank", "noopener"); else if (r.focused) toast(`Opened the terminal tab of ${r.agent}`); else toast(r.hint, true);
+    } catch (e) { /* toast shown */ }
+    return; }
+  if (t.dataset.stopAgent) {
+    if (!actor()) return toast("Choose your name in 'You are' first", true);
+    const a = S.agents.find(x => x.name === t.dataset.stopAgent); if (!a) return;
+    const ch = await chooseStop(a); if (!ch) return;
+    try { const r = await act(ch.kill ? "kill_agent" : "stop_agent", { agent: a.name, reason: ch.reason });
+      toast(ch.kill ? `Killed ${a.name}; released ${r.released.length} item(s). Check its folder for uncommitted work.` : `Asked ${a.name} to stop: it ends ${r.ends}`);
+    } catch (e) { /* toast shown */ }
+    return; }
+  if (t.dataset.qremove) { await act("queue_remove", { agent: t.dataset.qremove, ref: t.dataset.ref }).catch(() => {}); return; }
   const la = t.closest("[data-launch]"); if (la) {
     if (la.dataset.busy) return; la.dataset.busy = "1"; setTimeout(() => delete la.dataset.busy, 4000);
     const ch = await chooseLaunch(S, { title: "Start an agent", go: "Start", pickWork: true });
@@ -855,7 +881,7 @@ document.addEventListener("drop", async (e) => {
   const a = e.target.closest && e.target.closest("[data-agent]"); if (!a) return;
   e.preventDefault(); a.classList.remove("drop");
   const id = +e.dataTransfer.getData("text/river-item"); if (!id) return;
-  await act("push", { id, to: a.dataset.agent }).then(() => toast(`Pushed #${id} to ${a.dataset.agent}`)).catch(() => {});
+  await act("queue_add", { agent: a.dataset.agent, id }).then(() => toast(`#${id} is in the queue of ${a.dataset.agent}`)).catch(() => {});
 });
 
 const TABS = ["board", "projects", "targets", "capacity", "graph", "done", "settings"];
