@@ -81,7 +81,12 @@ def _applescript_str(s):
 PLATFORM = sys.platform
 
 
+# Tests (and river launch tests) set this to a fake that receives what would open a terminal.
+TERMINAL_RUNNER = None
+
+
 def _can_open_terminal(runner, hint):
+    runner = runner or TERMINAL_RUNNER
     if PLATFORM not in ("darwin", "win32") and runner is None:
         raise RiverError(f"starting an agent from the page works on macOS and Windows only; start one yourself: {hint}")
 
@@ -238,6 +243,7 @@ def _open_terminal(t, env, runner=None):
     import os
     import shlex
     import subprocess
+    runner = runner or TERMINAL_RUNNER
     # The agent uses the same queue as this page: a page on a RIVER_DB queue starts agents on it too.
     if os.environ.get("RIVER_DB"):
         env = {"RIVER_DB": str(core.db_path()), **env}

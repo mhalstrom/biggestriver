@@ -195,6 +195,10 @@ preselected), the effort, the work, and a new tab or window. The launch_agents
 command takes the choice through `{model}` and `{effort}`
 (`claude --model {model} --effort {effort} go --remote-control`); with no
 choice, the flag before a placeholder drops out. The session gets `RIVER_MODEL`.
+From the command line, `river launch [--project P | --item N] [--agent A]
+[--model M] [--effort E] [--tab|--window] [--dry-run]` does the same as the
+dialog (a manager session uses it); `--dry-run` prints the project, the item,
+and the command without opening a terminal.
 Start with the work left at "Next" spreads sessions: first the project with
 ready agent work and no agent yet whose top item is most important, and only
 when every such project has an agent, the top item. Start names the new

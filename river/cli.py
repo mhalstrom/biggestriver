@@ -529,6 +529,17 @@ def build_parser():
     x = sub.add_parser("plan", help="start a planner session: overview, open questions, and the planner's rules")
     x.add_argument("--project", help="project name(s) to focus on (default: this folder's, else all)")
 
+    x = sub.add_parser("launch", help="start an agent session in a new terminal tab or window, like the page's Start")
+    g = x.add_mutually_exclusive_group()
+    g.add_argument("--project", help="its most important ready item (default: first a project with no agent yet)")
+    g.add_argument("--item", type=int, help="this ready item (Dispatch)")
+    x.add_argument("--agent", help="a launch_agents label (default: the first)")
+    x.add_argument("--model", help="model for the session (the item's limits apply)")
+    x.add_argument("--effort", help="effort level for the session")
+    g = x.add_mutually_exclusive_group()
+    g.add_argument("--tab", dest="launch_in", action="store_const", const="tab")
+    g.add_argument("--window", dest="launch_in", action="store_const", const="window")
+    x.add_argument("--dry-run", action="store_true", help="say what it would start; open nothing")
     x = sub.add_parser("stop", help="ask an agent to stop: it commits, releases its item, and ends (not a kill)")
     x.add_argument("agent"); x.add_argument("--reason", required=True, help="why; the agent sees it")
     x.add_argument("--kill", action="store_true",
@@ -1116,6 +1127,17 @@ def dispatch(conn, a, actor):
             return core.goal_done(conn, a.name, a.result, actor, a.drop_open)
         if g == "reopen":
             return core.goal_reopen(conn, a.name, actor)
+    if c == "launch":
+        from . import server
+        if a.dry_run:
+            t = core.launch_target(conn, a.project, a.agent, a.item, a.model, a.effort, a.launch_in,
+                                   spread=a.project is None and a.item is None)
+            return {**t, "dry_run": True, "would_push_to": core.waiting_agent_for(conn, t["project"], t["item"]["id"])}
+        if a.item is not None:
+            return server.dispatch_item(conn, a.item, agent=a.agent, actor=actor, model=a.model, effort=a.effort,
+                                        launch_in=a.launch_in)
+        return server.launch_agent(conn, a.project, agent=a.agent, actor=actor, model=a.model, effort=a.effort,
+                                   launch_in=a.launch_in)
     if c == "stop":
         if a.kill:
             return core.kill_agent(conn, a.agent, a.reason, actor)
@@ -1871,6 +1893,22 @@ def render(a, res):
         return
     if c == "queue":
         _print_queue(res)
+        return
+    if c == "launch":
+        it = f"#{res['item']['id']} {res['item']['title']}"
+        if res.get("dry_run"):
+            print(f"would start {res['agent']} in {res['project']} ({res['path']}) for {it}"
+                  + (f": {res['why']}" if res.get("why") else ""))
+            if res.get("would_push_to"):
+                print(f"  no terminal: {res['would_push_to']} waits for work in {res['project']} and would get it")
+            else:
+                print("  command: " + "".join(f"{k}={v} " for k, v in res["env"].items()) + res["command"]
+                      + f"   (in a new {res['launch_in']})")
+        elif res.get("pushed_to"):
+            print(f"gave {it} to {res['pushed_to']}, which was waiting for work in {res['project']}")
+        else:
+            print(f"started {res['agent']} as {res['session_name']} in {res['project']} for {it}"
+                  + (f" ({res['why']})" if res.get("why") else ""))
         return
     if c == "stop" and "killed" in res:
         print(f"{'killed' if res['killed'] else 'found dead'}: {res['agent']} (PID {res['pid']}); released "

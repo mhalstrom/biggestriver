@@ -305,6 +305,35 @@ class LaunchAgent(unittest.TestCase):
         t = server.launch_agent(self.c, "b", runner=sent.append)
         self.assertEqual((t["project"], t["why"]), ("b", None))
 
+    def test_river_launch_from_the_command_line(self):
+        import contextlib
+        import io
+        from river import cli
+        core.project_add(self.c, "shop", path=self.dir.name)
+        x = core.item_add(self.c, "shop", "work", models={"min_model": "opus"})["id"]
+        y = core.item_add(self.c, "shop", "more")["id"]
+        core.register(self.c, "mark", human=True)
+        sent = []
+        server.TERMINAL_RUNNER = sent.append
+        self.addCleanup(setattr, server, "TERMINAL_RUNNER", None)
+
+        def river(*args):
+            with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(cli.run(["-q", "--as", "mark", *args]), 0)
+            return out.getvalue()
+        out = river("launch", "--dry-run", "--model", "opus", "--effort", "high", "--window")
+        self.assertRegex(out, rf"would start Claude Code in shop \(\S+\) for #{x} work")
+        self.assertIn("RIVER_MODEL=opus claude --model opus --effort high go --remote-control   (in a new window)", out)
+        self.assertEqual(sent, [])
+        with self.assertRaisesRegex(RiverError, "needs at least opus"):
+            cli.dispatch(self.c, cli.build_parser().parse_args(["launch", "--model", "sonnet"]), "mark")
+        out = river("launch", "--item", str(y), "--model", "sonnet")
+        self.assertRegex(out, rf"started Claude Code as shop-\w+ in shop for #{y} more")
+        self.assertIn("RIVER_MODEL=sonnet claude --model sonnet go", sent[-1])
+        out = river("launch", "--project", "shop", "--tab")
+        self.assertIn(f"for #{x} work", out)
+        self.assertIn('keystroke "t"', sent[-1])
+
     def test_launch_options_follow_each_agents_platform(self):
         old = server._login_shell_which
         server._login_shell_which = lambda names: {n: "/bin/" + n for n in names}
