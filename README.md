@@ -246,9 +246,29 @@ stderr, never into `--json` output; `-q` or `RIVER_QUIET=1` turns them off.
 
 An agent that cannot run shell commands can use river through MCP:
 `river mcp` is a stdio MCP server with the tools `go`, `done`, `show`,
-`goal`, `inbox`, and `river` (any command, as a list of words). Each tool returns the
-same text as the command, and the server keeps the agent name that `go` gives.
+`goal`, `inbox`, `plan`, `manage`, and `river` (any command, as a list of
+words). Each tool returns the same text as the command, and the server keeps
+the agent name that `go`, `plan`, or `manage` gives.
 For Claude Code: `claude mcp add river -- river mcp`.
+
+### Claude desktop app
+
+`river setup-agent --claude-desktop` adds river to the Claude desktop app's
+MCP servers (`claude_desktop_config.json`; the other servers stay, and the
+old file is kept as `.bak`). Quit and reopen the app. `--remove` takes river
+out again.
+
+A chat has no folder and no shell, so river runs it as a chat session
+(`RIVER_CHAT=1`, or `--chat` on `go`, `plan`, and `manage`):
+
+- Plan: "plan my next work with river" runs `plan` over every project.
+- Manage: `manage` shows what needs attention; `launch` still opens a coding
+  agent in a terminal on the same computer.
+- What waits on you: `needs-you`, then `prompt --all` to go through it.
+- Work: `go` looks in every project and takes only items that need no folder:
+  an item with `--touches`, a `--check`, or a deploy or monitor stays for a
+  coding agent. The result goes into the queue: a short one in
+  `done --output`, a long one in the item's notes first.
 
 ## Outside trackers
 

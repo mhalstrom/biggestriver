@@ -114,6 +114,10 @@ SETUP = """Setting up agents to use river
      river config set lease_ttl 7d --agent <person>
 
 5. Watch it:  river serve --open
+
+6. Optional, the Claude desktop app: plan, manage, and answer what waits on
+   you from a chat (river runs it with no folder):
+     river setup-agent --claude-desktop    then quit and reopen the app
 """
 
 HINTS = {
@@ -525,13 +529,20 @@ def build_parser():
     x.add_argument("--session", help="your Claude Code session name, so others can message this session")
     x.add_argument("--model", default=os.environ.get("RIVER_MODEL"),
                    help="the model this session runs (default $RIVER_MODEL): river gives it only items its model is allowed for")
+    x.add_argument("--chat", action="store_true", default=os.environ.get("RIVER_CHAT") == "1",
+                   help="a chat app session with no folder or shell (default $RIVER_CHAT=1): every project, only "
+                        "items that need no folder, the result in done --output")
 
     x = sub.add_parser("manage", help="start the manager session (one at a time): what needs attention, and its rules")
     x.add_argument("--takeover", metavar="REASON", help="take over from the active manager")
     x.add_argument("--watch", action="store_true", help="block until something new needs the manager (at most manage_every)")
     x.add_argument("--step", help="with --watch: return after this long at most")
+    x.add_argument("--chat", action="store_true", default=os.environ.get("RIVER_CHAT") == "1",
+                   help="a chat app session with no folder (default $RIVER_CHAT=1)")
     x = sub.add_parser("plan", help="start a planner session: overview, open questions, and the planner's rules")
     x.add_argument("--project", help="project name(s) to focus on (default: this folder's, else all)")
+    x.add_argument("--chat", action="store_true", default=os.environ.get("RIVER_CHAT") == "1",
+                   help="a chat app session with no folder (default $RIVER_CHAT=1)")
 
     x = sub.add_parser("launch", help="start an agent session in a new terminal tab or window, like the page's Start")
     g = x.add_mutually_exclusive_group()
@@ -723,7 +734,69 @@ def build_parser():
                    choices=["river", "planner", "river-planner", "manager", "river-manager", "setup", "decisions"])
     x = sub.add_parser("setup-agent", help="print (or append) the instructions block for CLAUDE.md / AGENTS.md")
     x.add_argument("--append", metavar="FILE", help="append the block to this file if it is not there yet")
+    x.add_argument("--claude-desktop", action="store_true",
+                   help="add river (river mcp) to the Claude desktop app's MCP servers, leaving the others as they are")
+    x.add_argument("--remove", action="store_true", help="with --claude-desktop: take river out again")
+    x.add_argument("--config", help="with --claude-desktop: the app's config file (default: where the app keeps it)")
     return p
+
+
+def claude_desktop_config_path():
+    """Where the Claude desktop app keeps its MCP servers."""
+    if sys.platform == "darwin":
+        return Path("~/Library/Application Support/Claude/claude_desktop_config.json").expanduser()
+    if sys.platform == "win32":
+        return Path(os.environ.get("APPDATA") or Path("~/AppData/Roaming").expanduser(), "Claude",
+                    "claude_desktop_config.json")
+    return Path("~/.config/Claude/claude_desktop_config.json").expanduser()
+
+
+def claude_desktop_entry():
+    """The mcpServers entry: this Python and this river by full path (the app does not have the shell's
+    PATH), the queue this command uses, and RIVER_CHAT=1 (a chat has no folder)."""
+    import shutil
+    script = Path(__file__).resolve().parent.parent / "bin" / "river"
+    if script.is_file():
+        cmd, args = sys.executable, [str(script), "mcp"]
+    elif shutil.which("river"):
+        cmd, args = str(Path(shutil.which("river")).resolve()), ["mcp"]
+    else:
+        raise RiverError("cannot find the river program to give the Claude desktop app; install river first")
+    return {"command": cmd, "args": args,
+            "env": {"RIVER_DB": str(core.db_path().expanduser().resolve()), "RIVER_CHAT": "1"}}
+
+
+def setup_claude_desktop(path=None, remove=False):
+    """Add (or remove) the river entry in the app's config; other servers and settings stay. The old file
+    is kept as <name>.bak when it changes."""
+    f = Path(path).expanduser() if path else claude_desktop_config_path()
+    old = f.read_text() if f.exists() else ""
+    try:
+        data = json.loads(old) if old.strip() else {}
+    except ValueError as e:
+        raise RiverError(f"{f} is not valid JSON ({e}); fix it first, river does not overwrite it")
+    if not isinstance(data, dict) or not isinstance(data.get("mcpServers", {}), dict):
+        raise RiverError(f"{f}: expected an object with an mcpServers object; fix it first")
+    servers = data.setdefault("mcpServers", {})
+    if remove:
+        if "river" not in servers:
+            return f"{f} has no river entry; nothing changed"
+        del servers["river"]
+    else:
+        entry = claude_desktop_entry()
+        if servers.get("river") == entry:
+            return f"river is already in {f}; nothing changed"
+        servers["river"] = entry
+    new = json.dumps(data, indent=2) + "\n"
+    if old:
+        f.with_name(f.name + ".bak").write_text(old)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(new)
+    if remove:
+        return f"took river out of {f} (the old file: {f.name}.bak). Quit and reopen the Claude desktop app."
+    return (f"added river to {f}" + (f" (the old file: {f.name}.bak)" if old else "") + ".\n"
+            "Quit and reopen the Claude desktop app. Then ask it, for example: \"plan my next work with river\", "
+            "\"what waits on me in river?\", or \"take a writing item from river\".")
 
 
 def install_skills(dest, copy=False, force=False):
@@ -785,6 +858,11 @@ def run(argv=None):
         mcp.serve()
         return 0
     if args.cmd == "setup-agent":
+        if args.claude_desktop:
+            print(setup_claude_desktop(args.config, args.remove))
+            return 0
+        if args.remove or args.config:
+            raise RiverError("--remove and --config go with --claude-desktop")
         if not args.append:
             print(AGENT_SNIPPET)
             return 0
@@ -1243,20 +1321,21 @@ def dispatch(conn, a, actor):
     if c == "log":
         return core.completed(conn, a.project, None if a.since == "all" else a.since)
     if c == "go":
-        res = core.go(conn, os.getcwd(), actor, a.project, a.role, a.session, os.environ.get("RIVER_FOCUS"), a.model)
+        res = core.go(conn, os.getcwd(), actor, a.project, a.role, a.session, os.environ.get("RIVER_FOCUS"), a.model,
+                      chat=a.chat)
         # The platform's own messaging reaches this session at once (native_message): record its address.
         core.set_native(conn, res["agent"], *core.native_from_env(conn, os.environ))
         _record_process(conn, res["agent"])
         res["old_blocks"] = old_blocks(conn, os.getcwd())
         return res
     if c == "plan":
-        return core.plan(conn, os.getcwd(), actor, a.project)
+        return {**core.plan(conn, os.getcwd(), actor, a.project), "chat": a.chat}
     if c == "manage":
         if a.watch:
             if not actor:
                 raise RiverError("--watch needs the manager's name: river --as <name> manage --watch")
             return core.manage_watch(conn, actor, a.step)
-        return core.manage(conn, os.getcwd(), actor, a.takeover)
+        return {**core.manage(conn, os.getcwd(), actor, a.takeover), "chat": a.chat}
     if c == "next":
         if a.model and actor and conn.execute("SELECT 1 FROM agents WHERE name=?", (actor,)).fetchone():
             core.set_agent_model(conn, actor, a.model)
@@ -1507,8 +1586,13 @@ def render_manage(b):
             f"  kill:    {r} stop <agent> --kill --reason \"...\"   emergency only, and only after the user says yes",
             f"  targets: {r} target give <target> --to <agent>",
             f"  config:  {r} config set launch_agents|default_model|default_effort ...",
-            f"Then watch: {r} manage --watch  (wakes on a new finding or a message, at least every {b['every']}).",
+            (f"In a chat, run {r} manage again when the user asks what changed (manage --watch is for a terminal)."
+             if b.get("chat") else
+             f"Then watch: {r} manage --watch  (wakes on a new finding or a message, at least every {b['every']})."),
             "The rules: river guide manager"]
+    if b.get("chat"):
+        out += [""] + _chat_lines(r, False)[:1] + [
+            "  launch still works from a chat: it opens a terminal on this computer with a coding agent."]
     print("\n".join(out))
 
 
@@ -1519,7 +1603,9 @@ def render_plan(b):
            + (f" Focus: {', '.join(b['projects'])}." if b["projects"] else " Focus: every project.")]
     if core.queue_note():
         out.append(core.queue_note() + ". Tell the user if that is not what they meant.")
-    if not b.get("folder_has_project", True):
+    if b.get("chat"):
+        out += [""] + _chat_lines(r, False)[:1]
+    elif not b.get("folder_has_project", True):
         out += ["",
                 f"THIS FOLDER HAS NO PROJECT: {b['cwd']}",
                 "  The projects below are other work. Leave them alone unless the user names them.",
@@ -1573,6 +1659,21 @@ def render_plan(b):
     if len(out) == 2:
         out.append("(none)")
     print("\n".join(out))
+
+
+def _chat_lines(r, has_item=True):
+    """What a chat app session (no folder, no shell) does differently: river's words go to the river tool."""
+    out = ["IN A CHAT (no folder, no shell): call the river tool with the words after `river` "
+           "(for example [\"--as\", \"<you>\", \"show\", \"12\"]). You cannot edit a repository, run a check, "
+           "commit, or deploy, so river gives this chat only items that need no folder."]
+    if has_item:
+        out += ["  Do the item here: write, research, or decide with the user. The result goes into the queue,",
+                f"  not only the chat: a short result in {r} done <id> --output \"<the result>\"; a long one first in",
+                f"  the item's notes ({r} edit <id> --notes \"<the text>\"), then done with a one-line summary.",
+                f"  It needs code after all: {r} release <id> --note \"needs a coding agent: <why>\"."]
+    out += [f"  What waits on the user: {r} needs-you. Work through it with them: {r} prompt --all prints how,"
+            f" item by item ({r} prompt <id> for one)."]
+    return out
 
 
 def render_go(b):
@@ -1653,9 +1754,12 @@ def render_go(b):
         return
     it = b.get("item")
     if b.get("model_skipped"):
-        out.append(f"Skipped for your model {b.get('model')} (min/max model limits; another session takes them): "
+        out.append((f"Skipped for your model {b.get('model')} (min/max model limits; another session takes them): "
+                    if not b.get("chat") else "Skipped in this chat (another session takes them): ")
                    + "; ".join(f"#{x['id']} {_cut(x['title'], 40)}: {x['why']}" for x in b["model_skipped"][:4]))
         out.append("")
+    if b.get("chat"):
+        out += _chat_lines(r, bool(it)) + [""]
     if it:
         out.append(f"YOUR ITEM #{it['id']}: {it['title']}")
         if it.get("found_during") and it.get("kind") != "monitor":
@@ -1810,6 +1914,10 @@ def render_go(b):
             f"  4. Then run {r} go to take the first item, or stop and let other sessions take them.",
             f"  (Full planning guide: river guide planner)",
         ]
+    elif b.get("chat"):
+        out += ["NOTHING FOR THIS CHAT NOW.",
+                "Tell the user what waits on them (below), and ask what they want to do: plan (river plan), "
+                "manage the agents (river manage), or answer what waits on them. Do not wait for work in a chat."]
     else:
         out.append("NOTHING FOR YOU NOW.")
         if b.get("queue_waiting"):

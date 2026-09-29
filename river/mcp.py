@@ -2,8 +2,11 @@
 
 Run it with `river mcp`. Every tool runs the same code as the `river` command
 and returns the same text, so an agent reads the same briefings either way.
-The server remembers the agent name that `go` or `plan` gives, and passes it
-as --as on later calls that do not name one. Standard library only.
+The server remembers the agent name that `go`, `plan`, or `manage` gives, and
+passes it as --as on later calls that do not name one. With RIVER_CHAT=1 (the
+Claude desktop entry that `river setup-agent --claude-desktop` writes) the
+session is a chat with no folder: go, plan, and manage brief it for that.
+Standard library only.
 """
 
 from __future__ import annotations
@@ -54,7 +57,24 @@ TOOLS = [
     {"name": "inbox",
      "description": "Your unread messages and the questions that wait for your answer.",
      "inputSchema": {"type": "object", "properties": {"as": _AS}}},
+    {"name": "plan",
+     "description": "Plan with the user: river names you a planner and prints the overview, the open questions, "
+                    "and the planner's rules (add items, dependencies, priorities).",
+     "inputSchema": {"type": "object", "properties": {
+         "as": _AS, "project": {"type": "string", "description": "project name(s) to focus on (default: all)"}}}},
+    {"name": "manage",
+     "description": "Run the other agents (one manager at a time): what needs attention (stuck agents, projects "
+                    "with ready work and no agent, what waits on the user) and the manager's commands.",
+     "inputSchema": {"type": "object", "properties": {
+         "as": _AS, "takeover": {"type": "string", "description": "why you take over from the active manager"}}}},
 ]
+
+INSTRUCTIONS = "Call go to take work from the Biggest River queue, and follow its briefing."
+CHAT_INSTRUCTIONS = ("Biggest River is the user's work queue for AI agents. In this chat (no folder, no shell) you can: "
+                     "plan work with the user (plan), run the coding agents (manage), go through what waits on the user "
+                     "(river tool: [\"needs-you\"], then [\"prompt\", \"--all\"]), and do items that need no code, "
+                     "such as writing or research (go; the result goes in done). Call the tool, then follow its briefing; "
+                     "for other river commands use the river tool with the words after `river`.")
 
 
 class Server:
@@ -85,6 +105,10 @@ class Server:
                 words += ["--result", a.get("result") or ""]
         elif name == "inbox":
             words = ["inbox"]
+        elif name == "plan":
+            words = ["plan"] + (["--project", a["project"]] if a.get("project") else [])
+        elif name == "manage":
+            words = ["manage"] + (["--takeover", a["takeover"]] if a.get("takeover") else [])
         else:
             raise RiverError(f"unknown tool {name!r}")
         who = a.get("as") or self.agent
@@ -115,7 +139,7 @@ class Server:
         finally:
             os.chdir(old)
         text = out.getvalue() + err.getvalue()
-        m = re.search(r"^You are river agent (\S+)\.", text, re.M)
+        m = re.search(r"^You are (?:river agent|the river MANAGER) (\S+?)(?: \(|\.)", text, re.M)
         if m:
             self.agent = m.group(1)
         return text.strip() or "(no output)", code != 0
@@ -128,7 +152,7 @@ class Server:
             result = {"protocolVersion": msg.get("params", {}).get("protocolVersion") or PROTOCOL,
                       "capabilities": {"tools": {}},
                       "serverInfo": {"name": "biggest-river", "version": __version__},
-                      "instructions": "Call go to take work from the Biggest River queue, and follow its briefing."}
+                      "instructions": CHAT_INSTRUCTIONS if os.environ.get("RIVER_CHAT") == "1" else INSTRUCTIONS}
         elif method == "tools/list":
             result = {"tools": TOOLS}
         elif method == "tools/call":

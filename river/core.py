@@ -3748,11 +3748,12 @@ def _model_refusal(conn, it, actor):
 
 
 def next_item(conn, project=None, unblocks=None, claim=False, actor=None, limit=1, near=None, mine=False,
-              model=None, skipped=None):
+              model=None, skipped=None, folderless=False):
     """Show, or claim, the first ready item from the area the agent chose.
 
     model: the session's model (default: the one the agent recorded). Items whose min/max limits exclude it
-    are left out; `skipped`, a list, receives them with the reason."""
+    are left out; `skipped`, a list, receives them with the reason. folderless (a chat app session): items
+    that need a folder are left out too (needs_folder)."""
     model = model or agent_model(conn, actor)
     ladder = parse_ladder(setting(conn, "model_ladder")) if model else None
     doer_for = None
@@ -3789,6 +3790,11 @@ def next_item(conn, project=None, unblocks=None, claim=False, actor=None, limit=
         have = {a["id"] for a in pool}
         pool = [a for a in _queue_ready(conn, actor) if a["id"] not in have] + pool
         pool = fits(pool)
+        if folderless:
+            for a in [a for a in pool if needs_folder(a)]:
+                if skipped is not None and a["id"] not in {x["id"] for x in skipped}:
+                    skipped.append({"id": a["id"], "title": a["title"], "why": FOLDER_WHY})
+            pool = [a for a in pool if not needs_folder(a)]
         return sorted(pool, key=lambda a: (a["id"] not in qpos, qpos.get(a["id"], 0),
                                            not (a["reserved_for"] == actor and a["reserved_until"])))
 
@@ -3802,6 +3808,17 @@ def next_item(conn, project=None, unblocks=None, claim=False, actor=None, limit=
             return []
         _claim_row(conn, pool[0]["id"], actor)
         return [item_show(conn, pool[0]["id"])]
+
+
+# A chat app session (Claude desktop through river mcp) has no folder and no shell: it cannot edit a
+# repository, run a check, commit, or deploy. An item that names files or a check command needs one.
+FOLDER_WHY = "needs a folder: it names files or a check command (a coding agent takes it)"
+
+
+def needs_folder(a):
+    touches = a.get("touches") or []
+    touches = touches.split(",") if isinstance(touches, str) else touches
+    return any(str(t).strip() for t in touches) or bool((a.get("check") or "").strip()) or a.get("kind") in ("deploy", "monitor")
 
 
 def claim(conn, item_id, actor=None):
@@ -5411,10 +5428,10 @@ def _goal_brief(conn, name, actor):
             "lease": _short(_goal_lease(conn, _goal(conn, name), actor))}
 
 
-def go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None, model=None):
+def go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None, model=None, chat=False):
     """One call for a fresh agent session; see _go. A session that gets a monitor item has role monitor,
     and its brief says which deploy it follows and whom to alert."""
-    brief = _go(conn, cwd, actor, project, role, session, focus, model)
+    brief = _go(conn, cwd, actor, project, role, session, focus, model, chat)
     it = brief.get("item")
     if it and it["kind"] == "monitor":
         brief["role"] = "monitor"
@@ -5430,8 +5447,11 @@ def _monitor_brief(conn, it):
             "deployer": deployer, "target": it["target"], "person": _person(conn)}
 
 
-def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None, model=None):
+def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None, model=None, chat=False):
     """One call for a fresh agent session: find the project, name the session, pick a role, and brief it.
+
+    chat: a chat app session with no folder (river mcp from Claude desktop). With no project named and no
+    project at cwd, its area is every project; it takes only items that need no folder (needs_folder).
 
     focus (RIVER_FOCUS, set when the page opens an agent): "help:<id>@<person>" briefs the session to do a
     person's item together with the person (the Copy prompt text); "needs:@<person>" the same for everything
@@ -5444,6 +5464,10 @@ def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None
             _project(conn, n)
     else:
         names = projects_for_dir(conn, cwd)
+        if not names and chat:
+            names = [p["name"] for p in project_list(conn)]
+            if not names:
+                raise RiverError("no projects in this queue yet: plan first (river plan), or add one: river project add <name>")
         if not names:
             listing = "; ".join(f"{p['name']}" + (f" ({p['path']})" if p.get("path") else "") for p in project_list(conn))
             q = queue_note()
@@ -5464,8 +5488,8 @@ def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None
             new_name = True
     else:
         import secrets
-        actor = f"{names[0]}-{secrets.token_hex(2)}"
-        register(conn, actor, note=f"started with river go in {area}")
+        actor = f"{'chat' if chat and not project else names[0]}-{secrets.token_hex(2)}"
+        register(conn, actor, note=f"started with river go in {area}" + (" (chat, no folder)" if chat else ""))
         new_name = True
     activity(conn, actor)
     if session:
@@ -5491,7 +5515,8 @@ def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None
              "session": _agent(conn, actor)["session"],
              "human_wait_max": setting(conn, "human_wait_max", agent=actor),
              "messages": unread(conn, actor),
-             "humans": [r["name"] for r in conn.execute("SELECT name FROM agents WHERE kind='human' ORDER BY name")]}
+             "humans": [r["name"] for r in conn.execute("SELECT name FROM agents WHERE kind='human' ORDER BY name")],
+             "chat": chat}
 
     brief["unsynced"] = unsynced(conn, actor)
     stop = stop_request(conn, actor)
@@ -5544,6 +5569,9 @@ def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None
     if role in (None, "worker") and not focus:
         # The agent's own queue before the project queue: the first ready item in it.
         for a in _queue_ready(conn, actor):
+            if chat and needs_folder(a):
+                skipped.append({"id": a["id"], "title": a["title"], "why": FOLDER_WHY})
+                continue
             try:
                 item = claim(conn, a["id"], actor)
             except RiverError as e:
@@ -5556,7 +5584,7 @@ def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None
 
     def try_claim(**kw):
         try:
-            got = next_item(conn, claim=True, actor=actor, skipped=skipped, **kw)
+            got = next_item(conn, claim=True, actor=actor, skipped=skipped, folderless=chat, **kw)
         except RiverError as e:
             brief["claim_refused"] = str(e)
             return None
