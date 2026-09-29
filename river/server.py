@@ -696,6 +696,11 @@ def _launch_args(a):
             "options": {k: str(v) for k, v in (a.get("options") or {}).items()} or None}
 
 
+def _page_reason(a, who):
+    """The reason of a stop from the page: the person's words, else who stopped it."""
+    return (a.get("reason") or "").strip() or f"stopped from the page by {who or 'a person'}"
+
+
 OPS = {
     "project_add": lambda c, a, who: core.project_add(c, a["name"], a.get("rank"), a.get("notes", ""), who),
     "project_rank": lambda c, a, who: core.project_rank(c, a["name"], a["rank"], who),
@@ -766,8 +771,9 @@ OPS = {
     "queue_add": lambda c, a, who: core.queue_add(c, a["agent"], a.get("id"), a.get("message"), bool(a.get("first")),
                                                   a.get("before"), who),
     "queue_remove": lambda c, a, who: core.queue_remove(c, a["agent"], str(a["ref"]), who),
-    "stop_agent": lambda c, a, who: core.stop_agent(c, a["agent"], a.get("reason", ""), who),
-    "kill_agent": lambda c, a, who: core.kill_agent(c, a["agent"], a.get("reason", ""), who),
+    # A person stops from the page without a reason; the agent then reads who stopped it.
+    "stop_agent": lambda c, a, who: core.stop_agent(c, a["agent"], _page_reason(a, who), who),
+    "kill_agent": lambda c, a, who: core.kill_agent(c, a["agent"], _page_reason(a, who), who),
     "start_manager": lambda c, a, who: start_manager(c, agent=a.get("agent"), actor=who, **_launch_args(a)),
     "open_chat": lambda c, a, who: open_chat(c, a["agent"]),
     "decline_message": lambda c, a, who: core.decline_message(c, int(a["msg"]), a.get("note"), who),

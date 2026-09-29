@@ -47,14 +47,8 @@ function el() {
     const q = (s) => d.querySelector(s);
     if (e.target === d || e.target.closest("[data-stop-cancel]")) return dlg.close();
     const reason = q("#stopReason").value.trim();
-    if (e.target.closest("[data-stop-go]")) {
-      if (!reason) return q("#stopReason").focus();
-      finish({ reason, kill: false }); return dlg.close();
-    }
-    if (e.target.closest("[data-kill-ask]")) {
-      if (!reason) return q("#stopReason").focus();
-      q("#killConfirm").classList.remove("hidden"); return;
-    }
+    if (e.target.closest("[data-stop-go]")) { finish({ reason, kill: false }); return dlg.close(); }
+    if (e.target.closest("[data-kill-ask]")) { q("#killConfirm").classList.remove("hidden"); return; }
     if (e.target.closest("[data-kill-go]")) { finish({ reason, kill: true }); return dlg.close(); }
   });
   return d;
@@ -68,7 +62,7 @@ export function chooseStop(a) {
   $("#stopDlg .box").innerHTML = `
     <h2 style="margin:0">Stop ${esc(a.name)}</h2>
     <div class="muted" style="font-size:13px;margin:6px 0">A stop is a request: the agent commits finished work, releases its item, and ends. A waiting agent ends at once.</div>
-    <div class="form"><label>Why (the agent sees it)<input id="stopReason" placeholder="the plan changed"></label></div>
+    <div class="form"><label>Why (optional; the agent sees it)<input id="stopReason" placeholder="the plan changed"></label></div>
     <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px">
       <button class="btn" data-stop-cancel="1">Cancel</button>
       ${a.can_kill ? `<button class="btn" data-kill-ask="1" title="Emergency only">Kill process…</button>` : ""}

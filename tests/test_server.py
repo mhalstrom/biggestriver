@@ -392,8 +392,11 @@ class LaunchAgent(unittest.TestCase):
         OPS = server.OPS
         OPS["queue_remove"](self.c, {"agent": "w1", "ref": str(x)}, "mark")
         OPS["queue_add"](self.c, {"agent": "w1", "message": "commit first"}, "mark")
-        r = OPS["stop_agent"](self.c, {"agent": "w1", "reason": "done for today"}, "mark")
+        r = OPS["stop_agent"](self.c, {"agent": "w1", "reason": ""}, "mark")  # the page needs no reason
         self.assertIn("ends", r)
+        self.assertEqual(core.stop_request(self.c, "w1")["stop_reason"], "stopped from the page by mark")
+        with self.assertRaisesRegex(RiverError, "say why"):
+            core.stop_agent(self.c, "w1", " ", actor="m")  # river stop still needs --reason
         self.assertEqual(OPS["open_chat"](self.c, {"agent": "w1"}, "mark")["hint"][:24], "No chat to open for w1: ")
         core.record_session_url(self.c, "w1", "https://claude.ai/code/session_x")
         self.assertEqual(OPS["open_chat"](self.c, {"agent": "w1"}, "mark")["url"], "https://claude.ai/code/session_x")
