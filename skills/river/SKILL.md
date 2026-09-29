@@ -241,6 +241,21 @@ bypassed without a notice.
   their item waits for them, still theirs), or
   `river decline <msg-id> --message --note "why"`.
 
+## Your queue
+
+A person or a manager can give you your own queue (`river queue add <you> <id>`,
+`river queue add <you> --message "..."`). It comes before everything else:
+
+- Instructions from your queue show at the top of `river go` under FROM YOUR
+  QUEUE. Act on them in order, then remove each one:
+  `river --as <you> queue remove <you> e<id>`.
+- `river go` and `river next` give you the first ready item in your queue
+  before the project queue, from any project; items that are not ready wait.
+  Other agents cannot take your queued items.
+- `river --as <you> queue list` shows it. `river wait` wakes you at once when
+  it gets an entry.
+- When your session is gone or stops, your queued items go back to the main queue.
+
 ## Pushed items
 
 Someone can push an item to you (`river push <id> --to <you> --note "..."`):

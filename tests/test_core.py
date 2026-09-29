@@ -2727,3 +2727,71 @@ class GoalLeases(Base):
         core.claim(self.c, self.add("site", "x's work"), "x")
         with self.assertRaisesRegex(RiverError, r"max_leases 1"):
             core.give(self.c, busy, "x", "ops")
+
+
+class AgentQueue(Base):
+    """river queue: one agent's ordered queue of items and instructions, read before the project queue (#425)."""
+
+    def setUp(self):
+        super().setUp()
+        core.project_add(self.c, "a", path=self.dir.name)
+        core.project_add(self.c, "b")
+        for n in ("s1", "s2", "boss"):
+            core.register(self.c, n)
+        core.register(self.c, "mark", human=True)
+
+    def test_queue_comes_first_and_is_kept_from_others(self):
+        top = self.add("a", "top", 0)
+        other = self.add("b", "in another project", 4)
+        later = self.add("a", "later", 3)
+        blocker = self.add("a", "blocker", 3)
+        waits = self.add("a", "waits", 3, after=[blocker])
+        for i in (waits, other, later):
+            core.queue_add(self.c, "s1", i, actor="mark")
+        core.queue_move(self.c, "s1", later, before=other, actor="mark")
+        self.assertEqual([e["item"] for e in core.queue_list(self.c, "s1")["entries"]], [waits, later, other])
+        with self.assertRaisesRegex(RiverError, "already in the queue of s1"):
+            core.queue_add(self.c, "s2", later, actor="mark")
+        with self.assertRaisesRegex(RiverError, "in the queue of s1"):
+            core.claim(self.c, later, "s2")
+        self.assertNotIn(later, [x["id"] for x in core.next_item(self.c, actor="s2", limit=9)])
+        self.assertEqual([x["id"] for x in core.next_item(self.c, "a", actor="s1", limit=2)], [later, other])
+        b = core.go(self.c, self.dir.name, "s1")  # waits is not ready: later, although top is more important
+        self.assertEqual((b["item"]["id"], b["why"]), (later, f"#{later} is the first ready item in your queue"))
+        self.assertEqual([e["item"] for e in core.queue_list(self.c, "s1")["entries"]], [waits, other])
+        self.assertNotEqual(top, later)
+
+    def test_instructions_are_read_first_and_only_people_or_managers_change_queues(self):
+        x = self.add("a", "x")
+        with self.assertRaisesRegex(RiverError, "a person or a manager changes queues"):
+            core.queue_add(self.c, "s1", x, actor="s2")
+        core.queue_add(self.c, "s1", message="commit what you have, then take #%d" % x, actor="mark")
+        self.assertIn("instruction", core._work_for(self.c, "s1", ["a"]))  # river wait wakes at once
+        b = core.go(self.c, self.dir.name, "s1")
+        (n,) = b["queue_instructions"]
+        self.assertEqual((n["body"][:6], n["added_by"]), ("commit", "mark"))
+        self.assertIsNotNone(core.queue_list(self.c, "s1")["entries"][0]["delivered_at"])
+        with self.assertRaisesRegex(RiverError, "refused"):
+            core.queue_remove(self.c, "s1", "e%d" % n["id"], actor="s2")
+        core.queue_remove(self.c, "s1", "e%d" % n["id"], actor="s1")  # its own instruction, after it acts
+        self.assertEqual(core.queue_list(self.c, "s1")["entries"], [])
+        # A manager may change queues too.
+        self.c.execute("UPDATE agents SET role='manager' WHERE name='boss'")
+        z = self.add("a", "z")
+        core.queue_add(self.c, "s2", z, actor="boss")
+        with self.assertRaisesRegex(RiverError, "refused"):
+            core.queue_remove(self.c, "s2", str(z), actor="s2")  # an agent does not drop its queued items
+
+    def test_a_gone_or_stopped_session_gives_its_queue_back(self):
+        x, y = self.add("a", "x"), self.add("a", "y")
+        core.queue_add(self.c, "s1", x, actor="mark")
+        core.queue_add(self.c, "s2", y, actor="mark")
+        self.c.execute("UPDATE agents SET role='manager' WHERE name='boss'")
+        core.agent_note(self.c, "boss", "managing")
+        self.c.execute("UPDATE agents SET last_seen=? WHERE name='s1'", (core.iso(core.now() - core.timedelta(days=3)),))
+        with core.tx(self.c):
+            core._sweep(self.c)
+        self.assertIsNone(core.annotate(self.c)[x]["queued_for"])
+        self.assertIn("s1 is gone", core.inbox(self.c, "boss")[0]["body"])
+        core.unregister(self.c, "s2")
+        self.assertIsNone(core.annotate(self.c)[y]["reserved_for"])

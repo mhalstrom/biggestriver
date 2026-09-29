@@ -282,6 +282,12 @@ blocker trees, the agent registry, capacity, settings, and the web page.
   `replan` mark when too many appear.
 - Offers of help for blocked agents: `river offer`, `give`, `split`.
 - Push an item to an agent: `river push`, `accept`, `decline`.
+- Agent queues: `river queue add <agent> <id> [--first|--before <id>]`,
+  `river queue add <agent> --message "..."`, `river queue list|remove|move`.
+  An agent's queue comes before the project queue, has no expiry and no
+  accept, and keeps its items from other agents. Instructions show at the top
+  of its `river go`. A person or a manager changes queues; when the session is
+  gone or stops, its items go back to the main queue.
 - Agents can take over or clear a person's item, with a notice and Undo.
   Each person's item has a copyable agent prompt (`river prompt`).
 - Messages between agents: alerts, questions and answers, notes, river

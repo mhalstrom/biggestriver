@@ -214,6 +214,21 @@ CREATE TABLE IF NOT EXISTS item_refs (
   PRIMARY KEY (item_id, ref)
 );
 
+-- An agent's own queue: items it takes before the project queue, and instructions it reads first.
+-- Ordered by pos; no expiry and no accept (unlike a push). An item is in at most one queue.
+CREATE TABLE IF NOT EXISTS queue_entries (
+  id            INTEGER PRIMARY KEY,
+  agent         TEXT NOT NULL,
+  pos           REAL NOT NULL,
+  item_id       INTEGER REFERENCES items(id),
+  body          TEXT,                         -- an instruction entry: the text
+  kind          TEXT NOT NULL DEFAULT 'item' CHECK (kind IN ('item','message','stop')),
+  added_by      TEXT,
+  created_at    TEXT NOT NULL,
+  delivered_at  TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS queue_item ON queue_entries(item_id) WHERE item_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS deps (
   item_id     INTEGER NOT NULL REFERENCES items(id),
   blocked_by  INTEGER NOT NULL REFERENCES items(id),
@@ -2466,6 +2481,8 @@ def annotate(conn):
     goal_owners = {r["name"]: r["owner"] for r in conn.execute(
         "SELECT name, owner FROM goals WHERE status='open' AND owner IS NOT NULL AND owner_expires_at >= ?",
         (iso(now()),))}
+    queued = {r["item_id"]: r["agent"] for r in conn.execute(
+        "SELECT item_id, agent FROM queue_entries WHERE item_id IS NOT NULL")}
     refs: dict[int, list] = {}
     for r in conn.execute("SELECT item_id, ref, url, synced_at FROM item_refs ORDER BY created_at, ref"):
         refs.setdefault(r["item_id"], []).append({"ref": r["ref"], "url": r["url"], "synced_at": r["synced_at"]})
@@ -2536,6 +2553,9 @@ def annotate(conn):
         a.update(_item_models(it, p["name"], model_defaults, ladder_text))
         a["goals"] = tags.get(i, [])
         a["goal_reserved"] = None
+        a["queued_for"] = queued.get(i)
+        if a["queued_for"] and it["status"] == "open":
+            a["reserved_for"] = a["queued_for"]  # other agents skip a queued item
         if not a["reserved_for"] and it["doer"] != "human" and it["status"] == "open":
             g = next((g for g in a["goals"] if g in goal_owners), None)
             if g:
@@ -2663,6 +2683,174 @@ def ready_list(conn, project=None, unblocks=None, doer_for=None, ann=None, near=
     return pool
 
 
+# ---------------------------------------------------------------- agent queues
+
+def may_change_queue(conn, actor, agent):
+    """Who may change an agent's queue: a person, or a manager session. Returns None or why not."""
+    if not actor:
+        return "name yourself: --as <name>"
+    r = conn.execute("SELECT kind, role FROM agents WHERE name=?", (actor,)).fetchone()
+    if r and (r["kind"] == "human" or r["role"] == "manager"):
+        return None
+    return (f"{actor} is an agent; a person or a manager changes queues. An agent lists its own queue "
+            f"(river queue list) and removes its own instruction entries after it acts on them")
+
+
+def _queue_rows(conn, agent):
+    return conn.execute("SELECT * FROM queue_entries WHERE agent=? ORDER BY kind='item', pos, id", (agent,)).fetchall()
+
+
+def _queue_pos(conn, agent, first=False, before=None, after=None):
+    rows = conn.execute("SELECT item_id, pos FROM queue_entries WHERE agent=? ORDER BY pos", (agent,)).fetchall()
+    if not rows:
+        return 1.0
+    if first:
+        return rows[0]["pos"] - 1
+    ref = before if before is not None else after
+    if ref is None:
+        return rows[-1]["pos"] + 1
+    k = next((n for n, r in enumerate(rows) if r["item_id"] == int(ref)), None)
+    if k is None:
+        raise RiverError(f"#{ref} is not in the queue of {agent}")
+    if before is not None:
+        return (rows[k - 1]["pos"] + rows[k]["pos"]) / 2 if k else rows[k]["pos"] - 1
+    return (rows[k]["pos"] + rows[k + 1]["pos"]) / 2 if k + 1 < len(rows) else rows[k]["pos"] + 1
+
+
+def queue_add(conn, agent, item=None, message=None, first=False, before=None, actor=None, kind=None):
+    """Put an item (at the end, first, or before another) or an instruction into an agent's queue."""
+    why = may_change_queue(conn, actor, agent)
+    if why:
+        raise RiverError(f"refused: {why}")
+    if (item is None) == (message is None):
+        raise RiverError("give an item id or --message \"...\"")
+    with tx(conn):
+        ag = _agent(conn, agent)
+        if ag["kind"] != "ai":
+            raise RiverError(f"{agent} is a person; a queue is for an agent session")
+        t = iso(now())
+        if message is not None:
+            k = kind or "message"
+            conn.execute("INSERT INTO queue_entries(agent,pos,body,kind,added_by,created_at) VALUES (?,?,?,?,?,?)",
+                         (agent, _queue_pos(conn, agent, first=True) if k == "stop" else _queue_pos(conn, agent),
+                          message, k, actor, t))
+            _event(conn, None, actor, f"queue {agent}: {k} added")
+            _send(conn, "notice", actor or "river", f"new {'stop request' if k == 'stop' else 'instruction'} in your "
+                  f"queue: {message}", to=agent)
+            return queue_list(conn, agent)
+        it = _item(conn, item)
+        if it["status"] in CLOSED_STATES:
+            raise RiverError(f"#{it['id']} is {it['status']}")
+        if it["doer"] == "human":
+            raise RiverError(f"#{it['id']} is for a person")
+        q = conn.execute("SELECT agent FROM queue_entries WHERE item_id=?", (it["id"],)).fetchone()
+        if q:
+            raise RiverError(f"#{it['id']} is already in the queue of {q['agent']}" + (
+                "" if q["agent"] == agent else f"; remove it there first: river queue remove {q['agent']} {it['id']}"))
+        if it["status"] != "open" and it["assignee"] != agent:
+            raise RiverError(f"#{it['id']} is {it['status']} by {it['assignee']}")
+        conn.execute("INSERT INTO queue_entries(agent,pos,item_id,kind,added_by,created_at) VALUES (?,?,?,'item',?,?)",
+                     (agent, _queue_pos(conn, agent, first, before), it["id"], actor, t))
+        _event(conn, it["id"], actor, f"queued for {agent}")
+        _send(conn, "notice", actor or "river", f"#{it['id']} {it['title']} is in your queue now; river go takes it "
+              f"when it is ready", to=agent, item_id=it["id"])
+    return queue_list(conn, agent)
+
+
+def queue_list(conn, agent):
+    ann = annotate(conn)
+    out = []
+    for r in _queue_rows(conn, agent):
+        e = {"entry": r["id"], "kind": r["kind"], "added_by": r["added_by"], "created_at": r["created_at"],
+             "delivered_at": r["delivered_at"]}
+        if r["item_id"] is not None and r["item_id"] in ann:
+            a = ann[r["item_id"]]
+            e.update(item=a["id"], title=a["title"], project=a["project"], ready=a["ready"], status=a["status"],
+                     open_blockers=a["open_blockers"])
+        else:
+            e["body"] = r["body"]
+        out.append(e)
+    return {"agent": agent, "entries": out}
+
+
+def _queue_entry(conn, agent, ref):
+    """An entry of the agent's queue by item id (12) or entry id (e5)."""
+    ref = str(ref).strip().lstrip("#")
+    if ref[:1] in ("e", "E") and ref[1:].isdigit():
+        r = conn.execute("SELECT * FROM queue_entries WHERE agent=? AND id=?", (agent, int(ref[1:]))).fetchone()
+    elif ref.isdigit():
+        r = conn.execute("SELECT * FROM queue_entries WHERE agent=? AND item_id=?", (agent, int(ref))).fetchone()
+    else:
+        raise RiverError("name an item id (12) or an entry (e5; river queue list shows them)")
+    if not r:
+        raise RiverError(f"{ref} is not in the queue of {agent} (river queue list {agent})")
+    return r
+
+
+def queue_remove(conn, agent, ref, actor=None):
+    with tx(conn):
+        r = _queue_entry(conn, agent, ref)
+        own_note = actor == agent and r["kind"] != "item"
+        why = None if own_note else may_change_queue(conn, actor, agent)
+        if why:
+            raise RiverError(f"refused: {why}")
+        conn.execute("DELETE FROM queue_entries WHERE id=?", (r["id"],))
+        _event(conn, r["item_id"], actor, f"removed from the queue of {agent}" if r["item_id"] else
+               f"queue {agent}: {r['kind']} e{r['id']} removed")
+    return queue_list(conn, agent)
+
+
+def queue_move(conn, agent, item, before=None, after=None, actor=None):
+    why = may_change_queue(conn, actor, agent)
+    if why:
+        raise RiverError(f"refused: {why}")
+    if (before is None) == (after is None):
+        raise RiverError("give --before <id> or --after <id>")
+    with tx(conn):
+        r = _queue_entry(conn, agent, item)
+        if r["item_id"] is None:
+            raise RiverError("instructions come first, in the order they were added; move items only")
+        conn.execute("DELETE FROM queue_entries WHERE id=?", (r["id"],))
+        pos = _queue_pos(conn, agent, before=before, after=after)
+        conn.execute("INSERT INTO queue_entries(id,agent,pos,item_id,kind,added_by,created_at) VALUES (?,?,?,?,'item',?,?)",
+                     (r["id"], agent, pos, r["item_id"], r["added_by"], r["created_at"]))
+        _event(conn, r["item_id"], actor, f"moved in the queue of {agent}")
+    return queue_list(conn, agent)
+
+
+def queue_instructions(conn, agent, mark=True):
+    """The agent's instruction entries, in order; marks them delivered."""
+    rows = [dict(r) for r in conn.execute("SELECT * FROM queue_entries WHERE agent=? AND kind<>'item' "
+                                          "ORDER BY kind<>'stop', pos, id", (agent,))]
+    if mark and rows:
+        with tx(conn):
+            conn.execute("UPDATE queue_entries SET delivered_at=? WHERE agent=? AND kind<>'item' AND delivered_at IS NULL",
+                         (iso(now()), agent))
+    return rows
+
+
+def _queue_ready(conn, agent, ann=None):
+    """The agent's queued items that are ready now, in queue order."""
+    ann = ann or annotate(conn)
+    return [ann[r["item_id"]] for r in conn.execute(
+        "SELECT item_id FROM queue_entries WHERE agent=? AND item_id IS NOT NULL ORDER BY pos", (agent,))
+        if r["item_id"] in ann and ann[r["item_id"]]["ready"]]
+
+
+def _drop_queue(conn, agent, why):
+    """The agent is gone or stopped: its queued items go back to the main queue; an active manager hears it."""
+    rows = conn.execute("SELECT item_id FROM queue_entries WHERE agent=? AND item_id IS NOT NULL", (agent,)).fetchall()
+    conn.execute("DELETE FROM queue_entries WHERE agent=?", (agent,))
+    for r in rows:
+        _event(conn, r["item_id"], "river", f"back to the main queue ({agent} {why})")
+    if rows:
+        for m in conn.execute("SELECT * FROM agents WHERE role='manager' AND name<>?", (agent,)).fetchall():
+            if _agent_state(conn, m) == "active":
+                _send(conn, "notice", "river", f"{agent} {why}; its queued items went back to the main queue: "
+                      + ", ".join(f"#{r['item_id']}" for r in rows), to=m["name"])
+    return [r["item_id"] for r in rows]
+
+
 # ---------------------------------------------------------------- registry and leases
 
 def _touch_agent(conn, actor):
@@ -2711,6 +2899,9 @@ def _sweep(conn):
             _send(conn, "notice", "river", f"the wait on #{r['id']} {r['title']} ended "
                   f"({r['blocked_reason']}); it can start now", to=r["blocked_set_by"], item_id=r["id"])
     _due_warnings(conn, t)
+    for r in conn.execute("SELECT DISTINCT a.* FROM agents a JOIN queue_entries q ON q.agent=a.name").fetchall():
+        if _agent_state(conn, r) == "gone":
+            _drop_queue(conn, r["name"], "is gone")
     for r in conn.execute("SELECT name, owner FROM goals WHERE owner IS NOT NULL AND owner_expires_at < ?",
                           (t,)).fetchall():
         conn.execute("UPDATE goals SET owner=NULL, owner_expires_at=NULL, owner_lease=NULL WHERE name=?", (r["name"],))
@@ -3017,6 +3208,7 @@ def unregister(conn, name, actor=None):
         if owned:
             raise RiverError(f"{name} owns target {', '.join(owned)}; release or give it first "
                              f"(river target release <t>, river target give <t> --to <agent>)")
+        _drop_queue(conn, name, "stopped")
         conn.execute("DELETE FROM agents WHERE name=?", (name,))
         conn.execute("DELETE FROM settings WHERE scope=?", (f"agent:{name}",))
         _event(conn, None, actor or name, f"agent {name} unregistered")
@@ -3117,6 +3309,9 @@ def _claim_row(conn, item_id, actor):
                          f"(the user is told, and can undo it): river takeover {item_id} --note \"<how you will do it>\"")
     if it0["reserved_for"] and it0["reserved_for"] != actor:
         raise RiverError(f"refused: #{item_id} is reserved for {it0['reserved_for']}, who holds the item it unblocks")
+    q = conn.execute("SELECT agent FROM queue_entries WHERE item_id=?", (item_id,)).fetchone()
+    if q and q["agent"] != actor and ag["kind"] == "ai":
+        raise RiverError(f"refused: #{item_id} is in the queue of {q['agent']} (river queue list {q['agent']})")
     # A goal's items are its owner's, unless one was pushed or given to this agent.
     if ag["kind"] == "ai" and it0["doer"] != "human" and it0["reserved_for"] != actor:
         g = conn.execute("SELECT g.name, g.owner FROM item_goals ig JOIN goals g ON g.id=ig.goal_id WHERE ig.item_id=? "
@@ -3156,6 +3351,8 @@ def _claim_row(conn, item_id, actor):
         conn.execute("UPDATE messages SET state='accepted', read_at=COALESCE(read_at, ?) "
                      "WHERE kind='alert' AND item_id=? AND to_agent=? AND state='open'", (iso(t), item_id, actor))
     _event(conn, item_id, actor, f"claimed (lease {_short(ttl)})")
+    if conn.execute("DELETE FROM queue_entries WHERE item_id=?", (item_id,)).rowcount:
+        _event(conn, item_id, actor, "left the queue (claimed)")
     _goal_notice(conn, item_id, actor, "claimed")
     if it["kind"] == "deploy":
         _add_monitor(conn, it, actor)
@@ -3208,9 +3405,15 @@ def next_item(conn, project=None, unblocks=None, claim=False, actor=None, limit=
         owned = {r["name"] for r in conn.execute("SELECT name FROM targets WHERE owner=?", (actor,))}
         pool = [a for a in pool if (a["kind"] != "deploy" or a["target"] in owned)
                 and a["reserved_for"] in (None, actor)]
+        # The agent's own queue comes first, in its order and from any project; then items pushed to it.
+        # The sort is stable, so graph order holds inside each group.
+        qpos = {r["item_id"]: n for n, r in enumerate(conn.execute(
+            "SELECT item_id FROM queue_entries WHERE agent=? AND item_id IS NOT NULL ORDER BY pos", (actor,)))}
+        have = {a["id"] for a in pool}
+        pool = [a for a in _queue_ready(conn, actor) if a["id"] not in have] + pool
         pool = fits(pool)
-        # Items pushed to this agent come first; the sort is stable, so graph order holds inside each group.
-        return sorted(pool, key=lambda a: not (a["reserved_for"] == actor and a["reserved_until"]))
+        return sorted(pool, key=lambda a: (a["id"] not in qpos, qpos.get(a["id"], 0),
+                                           not (a["reserved_for"] == actor and a["reserved_until"])))
 
     if not claim:
         return [{k: v for k, v in a.items() if k != 'sort_key'}
@@ -4660,6 +4863,7 @@ def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None
              "humans": [r["name"] for r in conn.execute("SELECT name FROM agents WHERE kind='human' ORDER BY name")]}
 
     brief["unsynced"] = unsynced(conn, actor)
+    brief["queue_instructions"] = queue_instructions(conn, actor)
     brief["model"] = agent_model(conn, actor)
     brief["model_skipped"] = skipped = []
     mine_goal = _owned_goal(conn, actor, names)
@@ -4697,6 +4901,19 @@ def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None
                      why=f"you already hold #{item['id']}; finish or release it first")
         _set_role_note(conn, actor, r, item["id"])
         return brief
+
+    if role in (None, "worker") and not focus:
+        # The agent's own queue before the project queue: the first ready item in it.
+        for a in _queue_ready(conn, actor):
+            try:
+                item = claim(conn, a["id"], actor)
+            except RiverError as e:
+                brief["claim_refused"] = str(e)
+                continue
+            brief.update(role="worker", item=item, why=f"#{item['id']} is the first ready item in your queue")
+            _set_role_note(conn, actor, "worker", item["id"])
+            return brief
+        brief["queue_waiting"] = [e for e in queue_list(conn, actor)["entries"] if e.get("item")]
 
     def try_claim(**kw):
         try:
@@ -4944,6 +5161,13 @@ def _work_for(conn, actor, names):
                           "AND status='open'", (actor,)).fetchone()
     if pushed:
         return f"#{pushed['id']} was pushed to you"
+    note = conn.execute("SELECT kind, body FROM queue_entries WHERE agent=? AND kind<>'item' AND delivered_at IS NULL "
+                        "ORDER BY kind<>'stop', pos LIMIT 1", (actor,)).fetchone()
+    if note:
+        return f"your queue has {'a stop request' if note['kind'] == 'stop' else 'an instruction'}: {note['body']}"
+    q = _queue_ready(conn, actor)
+    if q:
+        return f"#{q[0]['id']} in your queue is ready: {q[0]['title']}"
     try:
         nxt = next_item(conn, ",".join(names) if names else None, None, False, actor, 1)
     except RiverError:

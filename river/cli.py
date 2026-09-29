@@ -529,6 +529,17 @@ def build_parser():
     x = sub.add_parser("plan", help="start a planner session: overview, open questions, and the planner's rules")
     x.add_argument("--project", help="project name(s) to focus on (default: this folder's, else all)")
 
+    q = sub.add_parser("queue", help="one agent's own ordered queue: items it takes first, and instructions")
+    qs = q.add_subparsers(dest="qcmd", required=True)
+    x = qs.add_parser("add", help="add an item (at the end, --first, or --before <id>) or an instruction (--message)")
+    x.add_argument("agent"); x.add_argument("id", type=int, nargs="?")
+    x.add_argument("--message", help="an instruction the agent reads first, at the top of its river go")
+    x.add_argument("--first", action="store_true"); x.add_argument("--before", type=int)
+    x = qs.add_parser("list", help="an agent's queue (default: yours)"); x.add_argument("agent", nargs="?")
+    x = qs.add_parser("remove", help="take an item (12) or an instruction (e5) out of a queue")
+    x.add_argument("agent"); x.add_argument("ref")
+    x = qs.add_parser("move", help="move an item in a queue"); x.add_argument("agent"); x.add_argument("id", type=int)
+    x.add_argument("--before", type=int); x.add_argument("--after", type=int)
     x = sub.add_parser("claim", help="take one ready item by id"); x.add_argument("id", type=int)
     x = sub.add_parser("done", help="finish an item"); x.add_argument("id", type=int); x.add_argument("--output")
     x.add_argument("--ship", action="store_true", help="also ask for it to be deployed (river ship)")
@@ -838,6 +849,19 @@ def _monitor_lines(m):
             + " to follow the deploy") for x in m]
 
 
+def _print_queue(res):
+    es = res["entries"]
+    print(f"queue of {res['agent']}: " + (f"{len(es)} entr{'y' if len(es) == 1 else 'ies'}" if es else "empty"))
+    for e in es:
+        if e.get("item"):
+            st = ("ready" if e["ready"] else e["status"].replace("_", " ") if e["status"] != "open"
+                  else "waits on " + ",".join(f"#{b}" for b in e["open_blockers"]) if e["open_blockers"] else "not ready")
+            print(f"  #{e['item']:<4} [{e['project']}] {e['title']}  ({st})")
+        else:
+            print(f"  e{e['entry']:<3} {'STOP REQUEST' if e['kind'] == 'stop' else 'instruction'}: {e['body']}"
+                  + ("" if e["delivered_at"] else "  (not read yet)"))
+
+
 def _hint(a, res, actor):
     c = a.cmd
     if c in ("go", "plan"):
@@ -1069,6 +1093,16 @@ def dispatch(conn, a, actor):
             return core.goal_done(conn, a.name, a.result, actor, a.drop_open)
         if g == "reopen":
             return core.goal_reopen(conn, a.name, actor)
+    if c == "queue":
+        if a.qcmd == "add":
+            return core.queue_add(conn, a.agent, a.id, a.message, a.first, a.before, actor)
+        if a.qcmd == "list":
+            if not (a.agent or actor):
+                raise RiverError("name the agent, or yourself with --as <name>")
+            return core.queue_list(conn, a.agent or actor)
+        if a.qcmd == "remove":
+            return core.queue_remove(conn, a.agent, a.ref, actor)
+        return core.queue_move(conn, a.agent, a.id, a.before, a.after, actor)
     if c == "target":
         if a.tcmd == "add":
             return core.target_add(conn, a.name, a.description, actor)
@@ -1436,6 +1470,13 @@ def render_go(b):
                 f"Do not take other work in this session unless the person asks: then run {r} go --role worker."]
         print("\n".join(out).rstrip())
         return
+    notes = b.get("queue_instructions") or []
+    if notes:
+        out.append("FROM YOUR QUEUE (read and act on these first, in order):")
+        for n in notes:
+            out.append(f"  e{n['id']} {'STOP REQUEST' if n['kind'] == 'stop' else 'instruction'}"
+                       + (f" from {n['added_by']}" if n["added_by"] else "") + f": {n['body']}")
+        out += [f"  When you have acted on one: {r} queue remove {me} e<id>", ""]
     for u in b.get("unsynced") or []:
         out += _writeback_lines(u, r, u.get("tracker", "")) + ["  Do this before your item below.", ""]
     gb = b.get("goal")
@@ -1622,6 +1663,9 @@ def render_go(b):
         ]
     else:
         out.append("NOTHING FOR YOU NOW.")
+        if b.get("queue_waiting"):
+            out.append("Your queue holds items that are not ready yet: " + ", ".join(
+                f"#{e['item']} {_cut(e['title'], 40)}" for e in b["queue_waiting"][:5]) + "; river wait wakes you when one is.")
         for h in b.get("held_by_others", []):
             out.append(f"  #{h['id']} {h['title']}  (held by {h['assignee']})")
         out += [
@@ -1771,6 +1815,9 @@ def render(a, res):
                   + (f"  [target {p['target']}]" if p.get("target") else ""))
             if p.get("notes"):
                 print(f"    {p['notes']}")
+        return
+    if c == "queue":
+        _print_queue(res)
         return
     if c == "target":
         if isinstance(res, list):
