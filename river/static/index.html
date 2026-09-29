@@ -61,7 +61,7 @@
             <span class="spacer"></span>
             <select id="area"><option value="">All projects</option><option value="__mine">Near my earlier work</option></select>
             <button class="btn primary" id="claimNext">Claim next</button>
-            <label class="muted" style="font-size:12px;font-weight:400;text-transform:none;letter-spacing:normal;display:flex;align-items:center;gap:4px" title="After you claim, open an agent in the item's project folder that helps you do it"><input type="checkbox" id="claimAgent" checked>with an agent</label><span id="claimAgentPick"></span>
+            <label class="muted" style="font-size:12px;font-weight:400;text-transform:none;letter-spacing:normal;display:flex;align-items:center;gap:4px" title="After you claim, open an agent in the item's project folder that helps you do it"><input type="checkbox" id="claimAgent" checked>with an agent</label>
           </h2>
           <div id="next"></div>
         </div>
@@ -172,7 +172,8 @@
       <h2>Settings</h2>
       <div class="muted" style="font-size:12px;margin-bottom:8px">The most specific value wins: item, then agent, then project, then global, then the built-in default.<br>
         <b>launch_agents</b> lists the agents the Start button offers, as <code>Label=command</code> entries separated by <code>;</code>. The first is the default. Agents other than Claude Code do not read CLAUDE.md, so tell them what to do, for example:
-        <code>Claude Code=claude go --remote-control; Codex=codex "run river go in this folder and follow the briefing"; Grok=grok "run river go in this folder and follow the briefing"</code></div>
+        <code>Claude Code=claude --model {model} --effort {effort} go --remote-control; Codex=codex -m {model} -c model_reasoning_effort={effort} "run river go in this folder and follow the briefing"; Grok=grok "run river go in this folder and follow the briefing"</code>.
+        Each start opens a dialog to pick the agent, the model, and the effort: <code>{model}</code> and <code>{effort}</code> take the choice, and with no choice the flag before them drops out.</div>
       <div style="margin-bottom:8px"><button class="btn" id="openSetup">Open setup guide</button></div>
       <div id="settingsTable"></div>
       <div class="form" style="margin-top:12px;max-width:640px">

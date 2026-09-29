@@ -222,6 +222,55 @@ class LaunchAgent(unittest.TestCase):
         with self.assertRaisesRegex(RiverError, "in progress by mark"):
             server.open_agent_on(self.c, x, runner=sent.append, person="someone-else")
 
+    def test_launch_dialog_choices_fill_the_command(self):
+        core.project_add(self.c, "shop", path=self.dir.name)
+        x = core.item_add(self.c, "shop", "work", models={"min_model": "opus"})["id"]
+        sent = []
+        t = server.launch_agent(self.c, runner=sent.append, model="opus", effort="high", launch_in="window")
+        self.assertEqual(t["command"], "claude --model opus --effort high go --remote-control")
+        self.assertIn("RIVER_MODEL=opus claude --model opus --effort high go", sent[-1])
+        self.assertNotIn("keystroke", sent[-1])  # launch_in window, although the setting says tab
+        t = server.launch_agent(self.c, runner=sent.append)
+        self.assertEqual(t["command"], "claude go --remote-control")  # no choice: the flags drop out
+        self.assertNotIn("RIVER_MODEL", sent[-1])
+        with self.assertRaisesRegex(RiverError, "needs at least opus"):
+            server.dispatch_item(self.c, x, runner=sent.append, model="sonnet")
+        # A session that waits for work gets the item only when its model is allowed.
+        core.register(self.c, "w")
+        core.set_agent_model(self.c, "w", "sonnet")
+        self.c.execute("UPDATE agents SET role='waiting', waiting_in='shop', waiting_since='2026-01-01T00:00:00Z' WHERE name='w'")
+        self.assertIsNone(core.waiting_agent_for(self.c, "shop", x))
+        self.assertEqual(core.waiting_agent_for(self.c, "shop"), "w")
+        core.set_agent_model(self.c, "w", "opus")
+        self.assertEqual(server.dispatch_item(self.c, x, runner=sent.append)["pushed_to"], "w")
+        core.cancel_push(self.c, x)
+        core.unregister(self.c, "w")
+        server.PLATFORM = "win32"  # tearDown restores it
+        t = server.dispatch_item(self.c, x, runner=sent.append, model="fable")
+        self.assertEqual(sent[-1]["env"]["RIVER_MODEL"], "fable")
+        b = core.go(self.c, self.dir.name, t["session_name"], model=sent[-1]["env"]["RIVER_MODEL"])
+        self.assertEqual((b["item"]["id"], core.agent_model(self.c, t["session_name"])), (x, "fable"))
+
+    def test_launch_options_follow_each_agents_platform(self):
+        old = server._login_shell_which
+        server._login_shell_which = lambda names: {n: "/bin/" + n for n in names}
+        self.addCleanup(setattr, server, "_login_shell_which", old)
+        server.setup_agent_add(self.c, "Codex")
+        core.config_set(self.c, "launch_agents", core.setting(self.c, "launch_agents") + "; Mine=myagent go")
+        opts = {o["label"]: o for o in core.state(self.c)["launch_options"]}
+        self.assertEqual((opts["Claude Code"]["family"], [m["name"] for m in opts["Claude Code"]["models"]]),
+                         ("claude", ["sonnet", "opus", "fable"]))
+        self.assertEqual(opts["Claude Code"]["efforts"], ["low", "medium", "high", "xhigh", "max"])
+        self.assertEqual((opts["Codex"]["family"], [m["name"] for m in opts["Codex"]["models"]]),
+                         ("openai", ["luna", "terra", "sol", "astra"]))
+        self.assertTrue(opts["Codex"]["takes_model"] and opts["Codex"]["takes_effort"])
+        self.assertTrue(all(m["note"] for m in opts["Codex"]["models"]))
+        self.assertEqual((opts["Mine"]["family"], len(opts["Mine"]["models"]), opts["Mine"]["takes_model"]), (None, 7, False))
+        codex = dict(core.parse_launch_agents(core.setting(self.c, "launch_agents")))["Codex"]
+        self.assertTrue(core.fill_launch_command(codex, "sol", "xhigh").startswith("codex -m sol -c model_reasoning_effort=xhigh --add-dir"))
+        self.assertTrue(core.fill_launch_command(codex, None, None).startswith("codex --add-dir"))
+        self.assertEqual(core.fill_launch_command("x --v --effort={effort} go", None, None), "x --v go")
+
     def test_windows_opens_a_console_window_with_the_env_set(self):
         core.project_add(self.c, "shop", path=self.dir.name)
         x = core.item_add(self.c, "shop", "work")["id"]

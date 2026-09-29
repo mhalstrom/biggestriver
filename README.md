@@ -184,6 +184,14 @@ There is no order across families: a limit applies only to sessions of its
 own family, so give one model per family to limit both (`--min-model opus,sol`).
 `effort_levels` lists the effort levels, lowest first.
 
+On the page, every button that starts an agent (Start, Dispatch, Open agent,
+Claim next with an agent, Deploy now) opens one dialog: the agent, the model
+(only the agent's family, inside the item's limits, the recommendation
+preselected), the effort, the work, and a new tab or window. The launch_agents
+command takes the choice through `{model}` and `{effort}`
+(`claude --model {model} --effort {effort} go --remote-control`); with no
+choice, the flag before a placeholder drops out. The session gets `RIVER_MODEL`.
+
 An agent that waits on a person's item (`river add "..." --doer human --blocks
 <id> --keep`) holds its own item at most `human_wait_max` (30m; set it per
 project). Then river releases the item, which still waits on the person,

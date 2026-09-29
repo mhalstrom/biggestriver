@@ -6,7 +6,8 @@ import { itemRow, itemOrder, itemTableRows, itemTableColumns } from "./component
 import { makeTable } from "./components/table.js";
 import { makeDrawer, itemDrawerHtml, msgLine } from "./components/drawer.js";
 import { makeDialog } from "./components/dialog.js";
-import { agentStart, agentPick, pickedAgent, wireAgentPicks } from "./components/agentStart.js";
+import { agentStart } from "./components/agentStart.js";
+import { chooseLaunch, launchArgs } from "./components/launchDialog.js";
 import { makePanZoom } from "./components/panZoom.js";
 import { folderForm, wireFolderForms } from "./components/folderForm.js";
 hooks.refresh = refresh;
@@ -204,7 +205,6 @@ function renderStrip() {
   // The other fixed places that start an agent: Needs you > Open agent, and Claim next with an agent.
   const put = (el, h) => { if (el.dataset.sig !== h) { el.innerHTML = h; el.dataset.sig = h; } };
   put($("#agentAllSlot"), agentStart(S.launch_agents, { label: "Open agent", attrs: 'id="agentAll"', title: "Open an agent session that walks you through all of these, with the same prompt" }));
-  put($("#claimAgentPick"), agentPick(S.launch_agents));
 }
 
 // Work column: one row per project; a click opens its open items (ready first).
@@ -439,7 +439,9 @@ async function drawerAction(what) {
     if (what === "replanned") await act("replanned", { id });
     if (what === "msg") { const body = $("#dMsgBody").value.trim(); if (!body) return; if (!actor()) return toast("Choose your name in 'You are' first", true); await act("send", { kind: $("#dMsgKind").value, body, item: id }); toast("Sent"); }
     if (what === "agent") {
-      const r = await act("open_agent_on", { id, person: actor() || undefined, agent: pickedAgent(S.launch_agents) });
+      const ch = await chooseLaunch(S, { title: "Open an agent", go: "Open agent", what: `#${id} ${it.title}`, item: it.ready ? it : null });
+      if (!ch) return;
+      const r = await act("open_agent_on", { id, person: actor() || undefined, ...launchArgs(ch) });
       toast(r.pushed_to ? `Gave #${id} to ${r.pushed_to}, which was waiting for work`
         : `Started ${r.agent} in ${r.project}` + (r.focus && r.focus.startsWith("help") ? `, to do #${id} with you` : r.focus ? `, to unblock #${id}` : `, for #${id}`));
     }
@@ -661,8 +663,11 @@ document.addEventListener("click", async (e) => {
     return; }
   const la = t.closest("[data-launch]"); if (la) {
     if (la.dataset.busy) return; la.dataset.busy = "1"; setTimeout(() => delete la.dataset.busy, 4000);
-    const agent = pickedAgent(S.launch_agents);
-    try { const r = await act("launch_agent", { agent });
+    const ch = await chooseLaunch(S, { title: "Start an agent", go: "Start", pickWork: true });
+    if (!ch) return;
+    try { const w = ch.work || "";
+      const r = w.startsWith("i:") ? await act("dispatch_item", { id: +w.slice(2), ...launchArgs(ch) })
+        : await act("launch_agent", { project: w.startsWith("p:") ? w.slice(2) : undefined, ...launchArgs(ch) });
       toast(r.pushed_to ? `Gave #${r.item.id} ${clip(r.item.title, 60)} to ${r.pushed_to}, which was waiting for work`
                         : `Started ${r.agent} in ${r.project}, for #${r.item.id} ${clip(r.item.title, 60)}`); } catch (e) { /* toast shown */ }
     return; }
@@ -691,8 +696,11 @@ document.addEventListener("click", async (e) => {
   if (t.id === "copyAll") return copyPrompt("/api/prompt-all");
   if (t.dataset.deploy) {
     if (t.dataset.busy) return; t.dataset.busy = "1"; setTimeout(() => delete t.dataset.busy, 4000);
+    const ch = await chooseLaunch(S, { title: t.dataset.review ? "Review and deploy" : "Deploy now", go: "Start",
+      what: `${t.dataset.review ? "review and deploy" : "deploy"} ${t.dataset.deploy} (when the target has an owner, river alerts the owner instead)` });
+    if (!ch) return;
     try {
-      const r = await act("deploy_now", { target: t.dataset.deploy, review: !!t.dataset.review, agent: pickedAgent(S.launch_agents) });
+      const r = await act("deploy_now", { target: t.dataset.deploy, review: !!t.dataset.review, ...launchArgs(ch) });
       const what = `#${r.start.id} ${clip(r.start.title, 50)}`;
       toast(!r.ready ? `${what} waits on ${r.waits_on.map(w => "#" + w.id).join(", ")}; it starts when they are done`
         : r.alerted ? `${what} is ready; alerted the owner ${r.alerted}`
@@ -702,7 +710,11 @@ document.addEventListener("click", async (e) => {
   }
   if (t.id === "agentAll" || t.dataset.agentHelp) {
     if (t.dataset.busy) return; t.dataset.busy = "1"; setTimeout(() => delete t.dataset.busy, 4000);
-    const opts = { person: actor() || undefined, agent: pickedAgent(S.launch_agents) };
+    const hid = +t.dataset.agentHelp, hit = hid ? S.items.find(i => i.id === hid) : null;
+    const ch = await chooseLaunch(S, { title: "Open an agent", go: "Open agent", item: hit,
+      what: t.id === "agentAll" ? "go through everything that waits on you, with you" : `#${hid} ${hit ? hit.title : ""}, with you` });
+    if (!ch) return;
+    const opts = { person: actor() || undefined, ...launchArgs(ch) };
     try {
       const r = t.id === "agentAll" ? await act("open_needs_you", opts) : await act("open_agent_on", { ...opts, id: +t.dataset.agentHelp });
       toast(`Started ${r.agent} in ${r.project}` + (t.id === "agentAll" ? ", to go through what needs you" : `, to do #${t.dataset.agentHelp} with you`));
@@ -724,7 +736,6 @@ document.addEventListener("click", async (e) => {
 });
 
 $("#actor").addEventListener("change", () => { store("river.actor", $("#actor").value); inboxGen++; pollInbox().catch(() => {}); });
-wireAgentPicks();
 $("#inboxAll").addEventListener("change", () => { inboxGen++; pollInbox().catch(() => {}); });
 async function sendForm() {
   if (!actor()) return toast("Choose your name in 'You are' first", true);
@@ -786,8 +797,11 @@ $("#claimNext").addEventListener("click", async () => {
   openDrawer(id);
   const person = (S.agents || []).some(a => a.name === actor() && a.kind === "human");
   if (!person || !$("#claimAgent").checked) return toast(`Claimed #${id}`);
+  const it = S.items.find(i => i.id === id);
+  const ch = await chooseLaunch(S, { title: "Claim next with an agent", go: "Open agent", what: `#${id} ${it ? it.title : ""}, with you`, item: it });
+  if (!ch) return toast(`Claimed #${id}`);
   try {
-    const r = await act("open_agent_on", { id, person: actor(), agent: pickedAgent(S.launch_agents) });
+    const r = await act("open_agent_on", { id, person: actor(), ...launchArgs(ch) });
     toast(`Claimed #${id}; started ${r.agent} in ${r.project} to do it with you`);
   } catch (e) { toast(`Claimed #${id}; no agent opened`, true); }
 });
@@ -877,10 +891,12 @@ $("#readyDlg").addEventListener("click", async (e) => {
   if (e.target === e.currentTarget) return readyDialog.close();
   if (e.target.closest("[data-open]")) return readyDialog.close();  // the item opens in the drawer
   const b = e.target.closest("[data-dispatch]"); if (!b || b.disabled) return;
+  const id = +b.dataset.dispatch, it = S.items.find(i => i.id === id);
+  const ch = await chooseLaunch(S, { title: "Dispatch", go: "Dispatch", what: `#${id} ${it ? it.title : ""}`, item: it });
+  if (!ch) return;
   b.disabled = true;
-  const agent = pickedAgent(S.launch_agents);
   try {
-    const r = await act("dispatch_item", { id: +b.dataset.dispatch, agent });
+    const r = await act("dispatch_item", { id, ...launchArgs(ch) });
     toast(r.pushed_to ? `Gave #${r.item.id} ${clip(r.item.title, 60)} to ${r.pushed_to}, which was waiting for work`
                       : `Started ${r.agent} as ${r.session_name} in ${r.project}, for #${r.item.id} ${clip(r.item.title, 60)}`);
   } catch (err) { b.disabled = false; /* toast shown */ }

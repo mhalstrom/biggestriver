@@ -86,29 +86,29 @@ def _can_open_terminal(runner, hint):
         raise RiverError(f"starting an agent from the page works on macOS and Windows only; start one yourself: {hint}")
 
 
-def launch_agent(conn, project=None, runner=None, agent=None, actor=None):
+def launch_agent(conn, project=None, runner=None, agent=None, actor=None, model=None, effort=None, launch_in=None):
     """Open a Terminal window in the project folder of the most important ready agent item and run
     the command of the chosen launch_agents entry there (default `claude go --remote-control`), so one click starts one
     agent session. macOS and Windows."""
     # A session that waits for work in that project (river wait) gets the item: no new session needed.
-    top = core.launch_target(conn, project, agent)
-    waiting = core.waiting_agent_for(conn, top["project"])
+    top = core.launch_target(conn, project, agent, None, model, effort, launch_in)
+    waiting = core.waiting_agent_for(conn, top["project"], top["item"]["id"])
     if waiting:
         core.push(conn, top["item"]["id"], waiting, "from the Start button: you were waiting for work", actor)
         return {**top, "pushed_to": waiting}
     _can_open_terminal(runner, "cd <project folder> && claude go")
-    t = core.launch_target(conn, project, agent)
-    _open_terminal(t, {}, runner)
+    t = core.launch_target(conn, project, agent, None, model, effort, launch_in)
+    _open_terminal(t, t["env"], runner)
     return t
 
 
-def dispatch_item(conn, item_id, runner=None, agent=None, actor=None):
+def dispatch_item(conn, item_id, runner=None, agent=None, actor=None, model=None, effort=None, launch_in=None):
     """Start work on one ready item: a session that waits for work in its project gets it (push);
     else river names a new session, reserves the item for it (push), and opens the chosen agent in the
     project folder with RIVER_AGENT set to that name, so its first river go takes this item."""
     import secrets
-    t = core.launch_target(conn, agent=agent, item=item_id)
-    waiting = core.waiting_agent_for(conn, t["project"])
+    t = core.launch_target(conn, agent=agent, item=item_id, model=model, effort=effort, launch_in=launch_in)
+    waiting = core.waiting_agent_for(conn, t["project"], t["item"]["id"])
     if waiting:
         core.push(conn, t["item"]["id"], waiting, "from the page: Dispatch; you were waiting for work", actor)
         return {**t, "pushed_to": waiting}
@@ -116,11 +116,12 @@ def dispatch_item(conn, item_id, runner=None, agent=None, actor=None):
     name = f"{t['project']}-{secrets.token_hex(2)}"
     core.register(conn, name, note=f"started from the page for #{t['item']['id']}")
     core.push(conn, t["item"]["id"], name, "from the page: Dispatch started this session for it", actor)
-    _open_terminal(t, {"RIVER_AGENT": name}, runner)
+    _open_terminal(t, {"RIVER_AGENT": name, **t["env"]}, runner)
     return {**t, "session_name": name}
 
 
-def open_agent_on(conn, item_id, runner=None, agent=None, person=None, actor=None):
+def open_agent_on(conn, item_id, runner=None, agent=None, person=None, actor=None, model=None, effort=None,
+                  launch_in=None):
     """Open an agent session for one item from its drawer. A ready item: Dispatch. A person's item: a
     session that does it together with the person. An item that waits: a session that first takes what
     blocks it. The session learns which from RIVER_FOCUS, which its river go reads."""
@@ -133,17 +134,18 @@ def open_agent_on(conn, item_id, runner=None, agent=None, person=None, actor=Non
     if it["doer"] == "human" or mine:
         focus = f"help:{it['id']}" + (f"@{person}" if person else "")
     elif it["ready"]:
-        return dispatch_item(conn, it["id"], runner, agent, actor)
+        return dispatch_item(conn, it["id"], runner, agent, actor, model, effort, launch_in)
     else:
         focus = f"unblock:{it['id']}"
     p = core._project(conn, it["project"])
     if not p["path"]:
         raise RiverError(f"project {p['name']} has no folder, so river cannot start a session there: "
                          f"river project path {p['name']} <folder>")
-    return {**_open_focused(conn, p, focus, runner, agent), "item": {"id": it["id"], "title": it["title"]}}
+    return {**_open_focused(conn, p, focus, runner, agent, model, effort, launch_in),
+            "item": {"id": it["id"], "title": it["title"]}}
 
 
-def open_needs_you(conn, runner=None, agent=None, person=None):
+def open_needs_you(conn, runner=None, agent=None, person=None, model=None, effort=None, launch_in=None):
     """Needs you, Open agent: a session that works through everything that waits on the person, with
     them (the Copy prompt text), in the folder of the most important such item's project."""
     ann = core.annotate(conn)
@@ -154,10 +156,11 @@ def open_needs_you(conn, runner=None, agent=None, person=None):
     p = next((x for x in projects if x["path"]), None)
     if p is None:
         raise RiverError("no project has a folder, so river cannot start a session: river project path <name> <folder>")
-    return _open_focused(conn, p, "needs:" + (f"@{person}" if person else ""), runner, agent)
+    return _open_focused(conn, p, "needs:" + (f"@{person}" if person else ""), runner, agent, model, effort, launch_in)
 
 
-def deploy_now(conn, target, review=False, runner=None, agent=None, actor=None):
+def deploy_now(conn, target, review=False, runner=None, agent=None, actor=None, model=None, effort=None,
+               launch_in=None):
     """Targets tab, Deploy now (or Review and deploy): when the deploy item (or its review) is ready and
     the target has no owner to alert, open an agent in a folder of the target's projects that takes it."""
     r = core.deploy_now(conn, target, review, actor)
@@ -168,15 +171,16 @@ def deploy_now(conn, target, review=False, runner=None, agent=None, actor=None):
     if p is None:
         raise RiverError(f"no project of target {target} has a folder, so river cannot start a session there: "
                          f"river project path <name> <folder>")
-    return {**r, **_open_focused(conn, p, f"{'review' if review else 'deploy'}:{target}", runner, agent)}
+    return {**r, **_open_focused(conn, p, f"{'review' if review else 'deploy'}:{target}", runner, agent,
+                                 model, effort, launch_in)}
 
 
-def _open_focused(conn, p, focus, runner, agent):
+def _open_focused(conn, p, focus, runner, agent, model=None, effort=None, launch_in=None):
     """Open the chosen agent in a project folder with RIVER_FOCUS set; its river go reads it."""
     _can_open_terminal(runner, f"cd {p['path']}, set RIVER_FOCUS={focus}, then claude go")
     t = {"project": p["name"], "path": p["path"], "focus": focus,
-         **core._launch_agent_cmd(conn, p["id"], agent), "launch_in": core.setting(conn, "launch_in", project_id=p["id"])}
-    _open_terminal(t, {"RIVER_FOCUS": focus}, runner)
+         **core._launch_agent_cmd(conn, p["id"], agent, model, effort), "launch_in": core._launch_in(conn, p["id"], launch_in)}
+    _open_terminal(t, {"RIVER_FOCUS": focus, **t["env"]}, runner)
     return t
 
 
@@ -319,8 +323,9 @@ def update_apply(repo=REPO, restart=_restart_soon):
 # even where the agent does not read the project's instruction file. {river_dir} becomes the folder of the
 # queue: Codex's sandbox writes only in the project folder unless --add-dir names another one.
 KNOWN_AGENTS = [
-    ("Claude Code", "claude", "claude go --remote-control"),
-    ("Codex", "codex", 'codex --add-dir {river_dir} "run river go in this folder and follow the briefing"'),
+    ("Claude Code", "claude", "claude --model {model} --effort {effort} go --remote-control"),
+    ("Codex", "codex", 'codex -m {model} -c model_reasoning_effort={effort} --add-dir {river_dir} '
+                       '"run river go in this folder and follow the briefing"'),
     ("Grok", "grok", 'grok "run river go in this folder and follow the briefing"'),
     ("OpenCode", "opencode", 'opencode --prompt "run river go in this folder and follow the briefing"'),
     ("Gemini", "gemini", 'gemini -i "run river go in this folder and follow the briefing"'),
@@ -542,6 +547,11 @@ def setup_ntfy(conn, actor=None):
 
 
 # Operations the page may call. Each maps JSON args to one core function.
+def _launch_args(a):
+    """The launch dialog's choices: model, effort, and tab or window (each optional)."""
+    return {k: a.get(k) or None for k in ("model", "effort", "launch_in")}
+
+
 OPS = {
     "project_add": lambda c, a, who: core.project_add(c, a["name"], a.get("rank"), a.get("notes", ""), who),
     "project_rank": lambda c, a, who: core.project_rank(c, a["name"], a["rank"], who),
@@ -601,11 +611,13 @@ OPS = {
     "setup_skills": lambda c, a, who: setup_skills(),
     "setup_agent_add": lambda c, a, who: setup_agent_add(c, a["label"], who),
     "setup_ntfy": lambda c, a, who: setup_ntfy(c, who),
-    "launch_agent": lambda c, a, who: launch_agent(c, a.get("project"), agent=a.get("agent"), actor=who),
-    "dispatch_item": lambda c, a, who: dispatch_item(c, int(a["id"]), agent=a.get("agent"), actor=who),
-    "open_agent_on": lambda c, a, who: open_agent_on(c, int(a["id"]), agent=a.get("agent"), person=a.get("person"), actor=who),
-    "open_needs_you": lambda c, a, who: open_needs_you(c, agent=a.get("agent"), person=a.get("person")),
-    "deploy_now": lambda c, a, who: deploy_now(c, a["target"], bool(a.get("review")), agent=a.get("agent"), actor=who),
+    "launch_agent": lambda c, a, who: launch_agent(c, a.get("project"), agent=a.get("agent"), actor=who, **_launch_args(a)),
+    "dispatch_item": lambda c, a, who: dispatch_item(c, int(a["id"]), agent=a.get("agent"), actor=who, **_launch_args(a)),
+    "open_agent_on": lambda c, a, who: open_agent_on(c, int(a["id"]), agent=a.get("agent"), person=a.get("person"), actor=who,
+                                                     **_launch_args(a)),
+    "open_needs_you": lambda c, a, who: open_needs_you(c, agent=a.get("agent"), person=a.get("person"), **_launch_args(a)),
+    "deploy_now": lambda c, a, who: deploy_now(c, a["target"], bool(a.get("review")), agent=a.get("agent"), actor=who,
+                                               **_launch_args(a)),
     "decline_message": lambda c, a, who: core.decline_message(c, int(a["msg"]), a.get("note"), who),
     "update": lambda c, a, who: _no_update_in_app() or update_apply(),
     "restart": lambda c, a, who: _no_update_in_app() or (_restart_soon(), {"restarting": True})[1],

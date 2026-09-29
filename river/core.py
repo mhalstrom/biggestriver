@@ -70,7 +70,8 @@ DEFAULT_SETTINGS = {
     "due_warn_before": "3d",
     # Agents the page can start, as "Label=command" entries separated by ";". The first is the default.
     # Claude Code starts with Remote Control, so the session has a web link that notifications open.
-    "launch_agents": "Claude Code=claude go --remote-control",
+    # {model} and {effort} take the launch dialog's choices; with no choice the flag before them drops out.
+    "launch_agents": "Claude Code=claude --model {model} --effort {effort} go --remote-control",
     "launch_in": "tab",
     "setup_done": "off",
     # Review before release: with review on, each deploy item waits on a review item that waits on
@@ -4258,17 +4259,19 @@ def parse_launch_agents(value):
     return out
 
 
-def waiting_agent_for(conn, project):
-    """An active session that waits for work in this project (river wait), longest waiting first."""
+def waiting_agent_for(conn, project, item_id=None):
+    """An active session that waits for work in this project (river wait), longest waiting first; with
+    item_id, only one whose model the item's limits allow."""
     for r in conn.execute("SELECT name, waiting_in FROM agents WHERE role='waiting' AND kind='ai' "
                           "ORDER BY waiting_since").fetchall():
         a = agent_status(conn, r["name"])
         if a["state"] == "active" and not a["holds"] and project in (r["waiting_in"] or "").split(","):
-            return r["name"]
+            if item_id is None or not _model_refusal(conn, _item(conn, item_id), r["name"]):
+                return r["name"]
     return None
 
 
-def launch_target(conn, project=None, agent=None, item=None):
+def launch_target(conn, project=None, agent=None, item=None, model=None, effort=None, launch_in=None):
     """Where and how a new agent session should start: the folder of the project that holds the most
     important ready item an agent can take (or of the project named, or of the one item named), and the
     command of the chosen launch_agents entry (the first when none is named). Refuses when nothing is ready there."""
@@ -4292,19 +4295,81 @@ def launch_target(conn, project=None, agent=None, item=None):
     if not p["path"]:
         raise RiverError(f"project {p['name']} has no folder, so river cannot start a session there: "
                          f"river project path {p['name']} <folder>")
+    if model:
+        ok, why = model_check(parse_ladder(setting(conn, "model_ladder")), model, top["min_model"], top["max_model"])
+        if not ok:
+            raise RiverError(f"#{top['id']} {why}; pick another model")
     return {"project": p["name"], "path": p["path"], "item": {"id": top["id"], "title": top["title"]},
-            "ready": len(pool), **_launch_agent_cmd(conn, p["id"], agent),
-            "launch_in": setting(conn, "launch_in", project_id=p["id"])}
+            "ready": len(pool), **_launch_agent_cmd(conn, p["id"], agent, model, effort),
+            "launch_in": _launch_in(conn, p["id"], launch_in)}
 
 
-def _launch_agent_cmd(conn, project_id, agent):
+def _launch_in(conn, project_id, choice=None):
+    if choice not in (None, "", "tab", "window"):
+        raise RiverError("launch_in is tab or window")
+    return choice or setting(conn, "launch_in", project_id=project_id)
+
+
+def _launch_agent_cmd(conn, project_id, agent, model=None, effort=None):
+    """The chosen launch_agents entry, with {model} and {effort} filled in. The session also gets RIVER_MODEL."""
     agents = parse_launch_agents(setting(conn, "launch_agents", project_id=project_id))
-    if agent is None:
-        return {"agent": agents[0][0], "command": agents[0][1]}
-    for label, cmd in agents:
-        if label == agent:
-            return {"agent": label, "command": cmd}
-    raise RiverError(f"no agent {agent!r} in launch_agents; known: {', '.join(a for a, _ in agents)}")
+    pick = agents[0] if agent is None else next((a for a in agents if a[0] == agent), None)
+    if pick is None:
+        raise RiverError(f"no agent {agent!r} in launch_agents; known: {', '.join(a for a, _ in agents)}")
+    model = _check_model_name(model) if model else None
+    if effort and not re.match(r"^[a-z][a-z0-9_-]{0,31}$", effort):
+        raise RiverError(f"effort {effort!r}: a level such as low, medium, high")
+    return {"agent": pick[0], "command": fill_launch_command(pick[1], model, effort or None),
+            "model": model, "effort": effort or None, "env": {"RIVER_MODEL": model} if model else {}}
+
+
+# Which model family an agent CLI runs, by the program that starts it, and the effort levels its CLI takes.
+AGENT_FAMILIES = {"claude": "claude", "codex": "openai"}
+PLATFORM_EFFORTS = {"claude": ["low", "medium", "high", "xhigh", "max"],
+                    "openai": ["minimal", "low", "medium", "high", "xhigh"]}
+# One line per model in the launch dialog: when it fits.
+MODEL_NOTES = {
+    "sonnet": "routine, well specified work: monitors, checks, small fixes",
+    "opus": "normal feature work that follows the code already there",
+    "fable": "hard design, hard bugs, security, data that is costly to lose",
+    "luna": "quick routine edits and checks",
+    "terra": "routine work that needs some judgment",
+    "sol": "normal feature work that follows the code already there",
+    "astra": "the hardest problems: design, hard bugs, security",
+}
+
+
+def fill_launch_command(cmd, model, effort):
+    """Put the model and effort into a launch command. Without a value the placeholder goes, and with it
+    the flag just before it: '--model {model}' and '-c model_reasoning_effort={effort}' drop out whole."""
+    for key, value in (("model", model), ("effort", effort)):
+        ph = "{" + key + "}"
+        if value:
+            cmd = cmd.replace(ph, value)
+            continue
+
+        def drop(m):
+            # A word that is a flag itself ('--effort={effort}') goes alone; the flag before it stays.
+            return (m.group(1) or "") if m.group(2).startswith("-") else ""
+        cmd = re.sub(r"(\s+-[\w-]+)?\s+(\S*" + re.escape(ph) + r"\S*)", drop, " " + cmd)[1:]
+    return cmd
+
+
+def launch_options(conn):
+    """What the launch dialog offers for each launch_agents entry: its family, models, and effort levels."""
+    ladder = parse_ladder(setting(conn, "model_ladder"))
+    levels = _levels(setting(conn, "effort_levels"))
+    out = []
+    for label, cmd in parse_launch_agents(setting(conn, "launch_agents")):
+        exe = Path(cmd.split()[0]).name.lower() if cmd.split() else ""
+        fam = AGENT_FAMILIES.get(exe)
+        fam = fam if fam in ladder else None
+        out.append({"label": label, "family": fam,
+                    "models": [{"name": m, "note": MODEL_NOTES.get(m, ""), "family": f}
+                               for f, ms in ladder.items() if fam in (None, f) for m in ms],
+                    "efforts": PLATFORM_EFFORTS.get(fam, levels),
+                    "takes_model": "{model}" in cmd, "takes_effort": "{effort}" in cmd})
+    return out
 
 
 def recent_events(conn, limit=40):
@@ -4326,6 +4391,8 @@ def state(conn):
         "targets": targets_view(conn, ann),
         "launch_agents": [label for label, _ in parse_launch_agents(setting(conn, "launch_agents"))],
         "model_ladder": parse_ladder(setting(conn, "model_ladder")),
+        "launch_options": launch_options(conn),
+        "launch_in": setting(conn, "launch_in"),
         "effort_levels": _levels(setting(conn, "effort_levels")),
         "settings": config_list(conn),
         "events": recent_events(conn),

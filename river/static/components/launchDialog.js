@@ -1,0 +1,157 @@
+// The launch dialog: every button that starts an agent opens it first, to pick the agent, the model, the
+// effort, the work (Start only), and a new tab or window. The server fills {model} and {effort} in the
+// agent's launch_agents command and sets RIVER_MODEL. The last choices stay in this browser.
+import { $, esc, store } from "../lib.js";
+import { makeDialog } from "./dialog.js";
+
+// Whether a model may take an item with limits lo/hi (comma lists), as core.model_check: a limit compares
+// only models of the same family, and a model outside the ladder is not limited.
+export function modelAllowed(ladder, m, lo, hi) {
+  const fam = Object.keys(ladder || {}).find(f => ladder[f].includes(m));
+  if (!fam) return true;
+  const pos = ladder[fam].indexOf(m);
+  const same = (lim) => String(lim || "").split(",").map(x => x.trim()).find(x => ladder[fam].includes(x));
+  const a = same(lo), b = same(hi);
+  return !(a && pos < ladder[fam].indexOf(a)) && !(b && pos > ladder[fam].indexOf(b));
+}
+
+// The ready items an agent can start on, most important first (S.items is in queue order).
+export function startable(S) {
+  return (S.items || []).filter(i => i.ready && i.doer !== "human" && !["deploy", "review"].includes(i.kind)
+    && !i.reserved_for && !i.project_archived);
+}
+
+// The model to preselect for an agent option on an item: the item's recommendation, else the weakest its
+// limits allow, else the last choice here, else the agent's own default ("").
+export function pickModel(opt, it, ladder, last) {
+  const ok = (m) => opt.models.some(x => x.name === m) && (!it || modelAllowed(ladder, m, it.min_model, it.max_model));
+  if (it && it.model && ok(it.model)) return it.model;
+  if (it && (it.min_model || it.max_model)) {
+    const first = opt.models.find(x => ok(x.name));
+    if (first) return first.name;
+  }
+  return last && ok(last) ? last : "";
+}
+
+// The effort to preselect: the item's recommendation when the agent's CLI takes it ("max" becomes the
+// CLI's highest level), else the last choice here, else the agent's default ("").
+export function pickEffort(opt, it, last) {
+  const e = it && it.effort;
+  if (e && opt.efforts.includes(e)) return e;
+  if (e === "max" && opt.efforts.length) return opt.efforts[opt.efforts.length - 1];
+  return last && opt.efforts.includes(last) ? last : "";
+}
+
+let dlg = null, resolve = null, ctx = null, S = null;
+
+function el() {
+  let d = $("#launchDlg");
+  if (d) return d;
+  d = document.createElement("div");
+  d.id = "launchDlg"; d.className = "hidden";
+  d.setAttribute("role", "dialog"); d.setAttribute("aria-modal", "true"); d.setAttribute("aria-labelledby", "launchTitle");
+  d.innerHTML = '<div class="box"></div>';
+  document.body.appendChild(d);
+  dlg = makeDialog(d, { onClose: () => finish(null) });
+  d.addEventListener("click", (e) => {
+    if (e.target === d || e.target.closest("[data-launch-cancel]")) return dlg.close();
+    if (e.target.closest("[data-launch-go]")) {
+      const v = values();
+      store("river.launch.agent", v.agent);
+      const fam = famOf(v.agent);
+      store("river.launch.model." + fam, v.model);
+      store("river.launch.effort." + fam, v.effort);
+      store("river.launch.in", v.launch_in);
+      finish(v);
+      dlg.close();
+    }
+  });
+  d.addEventListener("change", (e) => { if (e.target.id === "lAgent" || e.target.id === "lWork") draw(values()); });
+  return d;
+}
+
+function finish(v) { const r = resolve; resolve = null; if (r) r(v); }
+function famOf(agent) { const o = (S.launch_options || []).find(x => x.label === agent); return (o && o.family) || "any"; }
+
+function values() {
+  const d = $("#launchDlg"), q = (s) => d.querySelector(s);
+  return { agent: q("#lAgent") ? q("#lAgent").value : (S.launch_options[0] || {}).label,
+           model: q("#lModel") ? q("#lModel").value : "", effort: q("#lEffort") ? q("#lEffort").value : "",
+           launch_in: (d.querySelector('input[name="lIn"]:checked') || {}).value || "tab",
+           work: q("#lWork") ? q("#lWork").value : "" };
+}
+
+// The item the work choice points at (its recommendation and limits pick the model).
+function workItem(work) {
+  if (!ctx.pickWork) return ctx.item || null;
+  const rows = startable(S);
+  if (work.startsWith("i:")) return rows.find(i => i.id === +work.slice(2)) || null;
+  if (work.startsWith("p:")) return rows.find(i => i.project === work.slice(2)) || null;
+  return rows[0] || null;
+}
+
+function draw(prev) {
+  const opts = S.launch_options || [];
+  const agent = prev && opts.some(o => o.label === prev.agent) ? prev.agent
+    : opts.some(o => o.label === store("river.launch.agent")) ? store("river.launch.agent") : (opts[0] || {}).label;
+  const opt = opts.find(o => o.label === agent) || { models: [], efforts: [] };
+  const fam = opt.family || "any";
+  const work = prev ? prev.work : (ctx.work || "");
+  const it = workItem(work);
+  const ladder = S.model_ladder || {};
+  const models = opt.models.filter(m => !it || modelAllowed(ladder, m.name, it.min_model, it.max_model));
+  const model = pickModel(opt, it, ladder, store("river.launch.model." + fam));
+  const effort = pickEffort(opt, it, store("river.launch.effort." + fam));
+  const where = (prev && prev.launch_in) || store("river.launch.in") || S.launch_in || "tab";
+  const rows = startable(S), projects = [...new Set(rows.map(i => i.project))];
+  const limits = it && (it.min_model || it.max_model) ? `#${it.id} allows ${[it.min_model && "at least " + it.min_model, it.max_model && "at most " + it.max_model].filter(Boolean).join(" and ")}.` : "";
+  const rec = it && (it.model || it.effort) ? `#${it.id} recommends ${[it.model, it.effort && it.effort + " effort"].filter(Boolean).join(", ")}.` : "";
+  const box = $("#launchDlg .box");
+  box.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
+      <h2 id="launchTitle" style="margin:0">${esc(ctx.title || "Start an agent")}</h2>
+      <button class="iconbtn" data-launch-cancel="1" title="Close">✕</button>
+    </div>
+    <div class="form" style="margin-top:10px">
+      ${ctx.pickWork ? `<label>Work<select id="lWork">
+          <option value="">${rows[0] ? `The most important ready item: #${rows[0].id} ${esc(rows[0].title)}` : "Nothing is ready"}</option>
+          ${projects.length > 1 ? `<optgroup label="Project (its most important ready item)">${projects.map(p => `<option value="p:${esc(p)}" ${work === "p:" + p ? "selected" : ""}>${esc(p)}</option>`).join("")}</optgroup>` : ""}
+          <optgroup label="Item">${rows.slice(0, 30).map(i => `<option value="i:${i.id}" ${work === "i:" + i.id ? "selected" : ""}>#${i.id} ${esc(i.title)}</option>`).join("")}</optgroup>
+        </select></label>` : `<div><span class="muted">Work:</span> ${esc(ctx.what || "")}</div>`}
+      <label>Agent<select id="lAgent">${opts.map(o => `<option ${o.label === agent ? "selected" : ""}>${esc(o.label)}</option>`).join("")}</select></label>
+      <div class="two">
+        <label>Model<select id="lModel"><option value="">the agent's default</option>${models.map(m =>
+          `<option value="${esc(m.name)}" ${m.name === model ? "selected" : ""}>${esc(m.name)}${m.note ? " · " + esc(m.note) : ""}</option>`).join("")}</select></label>
+        <label>Effort<select id="lEffort"><option value="">the agent's default</option>${opt.efforts.map(e =>
+          `<option ${e === effort ? "selected" : ""}>${esc(e)}</option>`).join("")}</select></label>
+      </div>
+      <div class="muted" style="font-size:12px">${esc([rec, limits].filter(Boolean).join(" "))}
+        ${!opt.takes_model || !opt.takes_effort ? ` The ${esc(agent)} command has no ${[!opt.takes_model && "{model}", !opt.takes_effort && "{effort}"].filter(Boolean).join(" or ")} placeholder, so the agent starts with its own ${!opt.takes_model ? "model" : "effort"} (river still records the model you pick). Add it in Settings: launch_agents.` : ""}</div>
+      <div class="actions" style="align-items:center"><span class="muted" style="font-size:12px">Open in:</span>
+        <label style="display:flex;gap:4px;align-items:center"><input type="radio" name="lIn" value="tab" ${where === "tab" ? "checked" : ""}>a new tab</label>
+        <label style="display:flex;gap:4px;align-items:center"><input type="radio" name="lIn" value="window" ${where === "window" ? "checked" : ""}>a new window</label></div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px">
+      <button class="btn" data-launch-cancel="1">Cancel</button>
+      <button class="btn primary" data-launch-go="1">▶ ${esc(ctx.go || "Start")}</button>
+    </div>`;
+}
+
+// Open the dialog. c: {title, go (button label), what (the work, as text), item (limits and recommendation),
+// pickWork (Start: choose the work)}. Resolves to {agent, model, effort, launch_in, work} or null (cancel).
+export function chooseLaunch(state, c) {
+  S = state; ctx = c || {};
+  el();
+  if (resolve) finish(null);
+  draw(null);
+  dlg.open();
+  const first = $("#launchDlg [data-launch-go]"); if (first) first.focus();
+  return new Promise(r => { resolve = r; });
+}
+
+// The choices as action arguments (empty ones left out, so the server uses its defaults).
+export function launchArgs(v) {
+  const out = { agent: v.agent };
+  for (const k of ["model", "effort", "launch_in"]) if (v[k]) out[k] = v[k];
+  return out;
+}
