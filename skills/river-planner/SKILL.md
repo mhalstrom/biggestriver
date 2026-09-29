@@ -148,6 +148,7 @@ river list --goal <name>
 ```
 river add <project> "<title>" [-p 0-4] [--doer any|ai|human] [--after <id> ...] [--feeds <id> ...] [--notes "..."]
           [--context "..."] [--touches <file> ...] [--check "<command>"]
+          [--model <m>] [--effort <level>] [--min-model <m>] [--max-model <m>]
 river add [project] --from plan.md [--dry-run]   # one item per line of an outline: a line waits on
                                     # the lines indented under it; 'P0' at the start and '(human)' or
                                     # '(ai)' at the end set priority and doer; '[x]' lines are skipped
@@ -159,6 +160,7 @@ river undep <id> --on <id> ...
 river prio <id> <0-4>               # 0 is most important
 river move <id> --before|--after <id>   # manual order inside a project
 river edit <id> [--title] [--notes] [--doer] [--project] [--context] [--touches ...] [--check] [--due <date>|none]
+          [--model|--effort|--min-model|--max-model <value>|none]
 river blocked <id> --reason "..." [--until "mon 07:00 America/New_York"] / river unblock <id>
 river drop <id> / river reopen <id>
 river replanned <id> [--note "..."]   # clear the replan mark after you split or re-scope the item
@@ -196,9 +198,36 @@ Stripe activation" P0); its prerequisites inherit it. Do not raise every step.
   `--doer ai` for code and text work; `any` otherwise.
 - Record every "needs first" as a dependency. The tool refuses loops.
 
+## Model and effort
+
+Each item can recommend a model (`--model`) and an effort level (`--effort`:
+one of the `effort_levels` setting, `low, medium, high, xhigh, max`). The
+recommendation says which agent to start; it never keeps a session off the item.
+Pick the weakest model that does the item well:
+
+- A weaker model (sonnet, luna) and low effort: routine, well specified work.
+  Monitors, checks, renames, text changes, a fix whose cause is known.
+- A middle model (opus, terra or sol) and medium or high effort: normal
+  feature work that follows code already there.
+- The strongest model (fable, astra) and high effort or more: design with
+  few examples to follow, a hard bug, security, or data that is costly to lose.
+
+Hard limits keep sessions off an item: `--min-model opus` (weaker sessions skip
+it) and `--max-model sonnet` (do not spend a strong model on it). Set a limit
+only when a wrong model is costly; the recommendation is enough otherwise.
+The `model_ladder` setting orders the models, weakest first, one list per
+family: `claude: sonnet, opus, fable; openai: luna, terra, sol, astra`. There
+is no order across families, so a limit applies only to sessions of its
+family. Name one model per family to limit both: `--min-model opus,sol`.
+
+Defaults come from settings: `default_model`, `default_effort`,
+`default_min_model`, `default_max_model`, per project (`--project`) or per
+item kind (`--kind deploy`). An item's own value wins. A session declares its
+model with `RIVER_MODEL=<model>` or `river go --model <model>`.
+
 ## Settings
 
 `river config get` lists every setting. `river config set <key> <value>
-[--project P | --agent A | --item N]`. The most specific value wins: item,
-agent, project, global, default. For example, a person's lease:
+[--project P | --agent A | --item N | --kind K]`. The most specific value wins: item,
+agent, item kind, project, global, default. For example, a person's lease:
 `river config set lease_ttl 7d --agent alex`.

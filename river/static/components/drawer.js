@@ -1,6 +1,6 @@
 // The item drawer: the panel on the right with one item's details, actions, and history.
 import { esc, ago, left, clip } from "../lib.js";
-import { chip, statusChip, prioChip, doerChip } from "./chip.js";
+import { chip, statusChip, prioChip, doerChip, modelChip } from "./chip.js";
 import { input, textarea, select, field, two, renderKeepingEdits } from "./form.js";
 import { agentStart } from "./agentStart.js";
 
@@ -58,13 +58,20 @@ function agentButton(it, S) {
   return label ? agentStart(S && S.launch_agents, { label, title, attrs: 'data-do="agent"' }) : "";
 }
 
+// A model field: the item's own value; a default from settings shows as the placeholder.
+function modelInput(it, f, id, hint) {
+  const own = it[f + "_from"] === "item" ? it[f] : "";
+  const dflt = !own && it[f] ? `${it[f]} (${it[f + "_from"]} default)` : "";
+  return input({ id, placeholder: dflt || hint, value: own || "" });
+}
+
 // The drawer for one item (it from /api/item/<id>). S: the page state; me: who acts.
 export function itemDrawerHtml(it, { S, me }) {
   const closed = ["done", "dropped"].includes(it.status);
   return `
     <div style="display:flex;align-items:center;gap:8px"><span class="muted">#${it.id} · ${esc(it.project)}</span><span class="spacer" style="flex:1"></span><button class="btn" id="dClose">Close</button></div>
     <h3>${esc(it.title)}</h3>
-    <div class="chips" style="justify-content:flex-start">${prioChip(it)}${doerChip(it)}${statusChip(it)}</div>
+    <div class="chips" style="justify-content:flex-start">${prioChip(it)}${doerChip(it)}${modelChip(it)}${statusChip(it)}</div>
     <div class="actions" style="margin-top:6px;align-items:center"><span class="muted" style="font-size:12px">Goals:</span>
       ${(it.goals || []).map(g => chip("c-goal", `${esc(g)} <span class="link" data-untag="${esc(g)}" title="remove this goal tag">×</span>`)).join("") || '<span class="muted" style="font-size:12px">none</span>'}
       ${(S.goals || []).some(g => g.status === "open" && !(it.goals || []).includes(g.name)) ? `<select id="dGoal">${(S.goals || []).filter(g => g.status === "open" && !(it.goals || []).includes(g.name)).sort((a, b) => (b.project === it.project) - (a.project === it.project)).map(g => `<option value="${esc(g.name)}">${esc(g.name)}${g.project !== it.project ? " (" + esc(g.project) + ")" : ""}</option>`).join("")}</select><button class="btn" data-do="tag">Add goal</button>` : ""}</div>
@@ -85,6 +92,10 @@ export function itemDrawerHtml(it, { S, me }) {
       ${field("Touches", input({ id: "dTouches", placeholder: "files it changes, comma separated", value: (it.touches || []).join(", ") }))}
       ${field("Check", input({ id: "dCheck", placeholder: "command that shows it works", value: it.check }))}
       ${field("Due", input({ id: "dDue", placeholder: "2026-10-15, fri 17:00, or none", value: "" }), it.due ? ` <span class="muted">(${esc(it.due_text)})</span>` : it.due_from ? ` <span class="muted">(from #${it.due_from}: ${esc(it.due_text)})</span>` : "")}
+      ${two(field("Model", modelInput(it, "model", "dModel", "recommended, e.g. opus")),
+        field("Effort", modelInput(it, "effort", "dEffort", (S.effort_levels || []).join(", ") || "low … max")))}
+      ${two(field("Min model", modelInput(it, "min_model", "dMinModel", "weakest allowed, e.g. opus")),
+        field("Max model", modelInput(it, "max_model", "dMaxModel", "strongest allowed, e.g. sonnet")))}
       ${two(field("Priority (own)", select({ id: "dPrio" }, [0, 1, 2, 3, 4], it.priority)),
         field("Who can do it", select({ id: "dDoer" }, [["any", "anyone"], ["ai", "agent"], ["human", "human"]], it.doer)))}
       ${two(field("Project", select({ id: "dProject" }, S.projects.map(p => p.name), it.project)),

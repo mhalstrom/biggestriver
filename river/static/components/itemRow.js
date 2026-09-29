@@ -1,6 +1,6 @@
 // Item rows, and the one order items take in a list.
 import { esc } from "../lib.js";
-import { goalChips, prioChip, dueChip, doerChip, replanChip, statusChip } from "./chip.js";
+import { goalChips, prioChip, dueChip, doerChip, replanChip, statusChip, modelChip } from "./chip.js";
 
 // Ready first, then more important, then what unblocks more, then the project's own order.
 export function itemOrder(a, b) {
@@ -12,7 +12,7 @@ export function itemRow(it, why) {
   return `<div class="row" data-id="${it.id}"${it.status === "open" ? ' draggable="true"' : ""}>
     <div class="id">#${it.id}</div>
     <div class="t"><div class="title">${esc(it.title)}</div>${it.blocked_reason && it.status === "open" ? `<div class="blk">${esc(it.blocked_text)}</div>` : ""}${why ? `<div class="why">${esc(why)}</div>` : ""}</div>
-    <div class="chips">${goalChips(it)}${prioChip(it)}${dueChip(it)}${doerChip(it)}${replanChip(it)}${statusChip(it)}</div></div>`;
+    <div class="chips">${goalChips(it)}${prioChip(it)}${dueChip(it)}${doerChip(it)}${modelChip(it)}${replanChip(it)}${statusChip(it)}</div></div>`;
 }
 
 // Items as table rows (components/table.js): one flat row per item, with plain values to sort and
@@ -26,6 +26,7 @@ export function itemTableRows(items) {
     due: it.effective_due && !["done", "dropped"].includes(it.status) ? it.effective_due : "",
     waits: it.open_blockers.map(b => "#" + b).join(" "),
     goals: (it.goals || []).join(" "),
+    model: it.model || "",
   }));
 }
 
@@ -41,6 +42,7 @@ export function itemTableColumns(why = () => "") {
     { title: "Status", field: "status", width: 130, filter: "select", html: (r) => statusChip(r.it) + replanChip(r.it) },
     { title: "P", field: "prio", width: 92, filter: "select", html: (r) => prioChip(r.it) },
     { title: "Who", field: "doer", width: 80, filter: "select", html: (r) => doerChip(r.it) || '<span class="muted">anyone</span>' },
+    { title: "Model", field: "model", width: 110, filter: "select", html: (r) => modelChip(r.it) },
     { title: "Due", field: "due", width: 84, filter: false, html: (r) => dueChip(r.it) },
     { title: "Waits on", field: "waits", width: 90, html: (r) => r.it.open_blockers.map(b => `<span class="link" data-open="${b}">#${b}</span>`).join(" ") },
     { title: "Goals", field: "goals", minWidth: 110, widthGrow: 1, cssClass: "wrap", html: (r) => goalChips(r.it) },

@@ -92,6 +92,17 @@ DEFAULT_SETTINGS = {
     "review": "off",
     "review_prompt": "",
     "review_cmd": "",
+    # Models, weakest to strongest, one list per family ("family: a, b, c", families separated by ";").
+    # There is no order across families: a limit compares only models of the same family.
+    "model_ladder": "claude: sonnet, opus, fable; openai: luna, terra, sol, astra",
+    "effort_levels": "low, medium, high, xhigh, max",
+    # What an item gets when it names none itself. Set them per project (--project) or per item kind
+    # (--kind deploy); for example monitors: default_model sonnet, default_effort low, default_max_model sonnet.
+    # A recommendation never blocks; min/max limits keep a session whose model is outside them off the item.
+    "default_model": "",
+    "default_effort": "",
+    "default_min_model": "",
+    "default_max_model": "",
 }
 
 SCHEMA = """
@@ -154,6 +165,10 @@ CREATE TABLE IF NOT EXISTS items (
   takeover_at       TEXT,
   takeover_seen     INTEGER NOT NULL DEFAULT 0,
   needs_check       INTEGER NOT NULL DEFAULT 0,
+  model             TEXT,                     -- recommended model (NULL: the default_model setting)
+  effort            TEXT,                     -- recommended effort level (NULL: default_effort)
+  min_model         TEXT,                     -- hard limits, one model per family, comma list
+  max_model         TEXT,
   created_at        TEXT NOT NULL,
   closed_at         TEXT
 );
@@ -218,6 +233,7 @@ CREATE TABLE IF NOT EXISTS agents (
   session        TEXT,
   session_ref    TEXT,
   session_url    TEXT,                       -- web link to the agent's session (Claude Code Remote Control)
+  model          TEXT,                       -- the model the session runs (RIVER_MODEL, river go --model)
   registered_at  TEXT NOT NULL,
   last_seen      TEXT NOT NULL
 );
@@ -521,6 +537,8 @@ def _migrate(conn):
         conn.execute("ALTER TABLE agents ADD COLUMN waiting_in TEXT")
     if "session_url" not in acols:
         conn.execute("ALTER TABLE agents ADD COLUMN session_url TEXT")
+    if "model" not in acols:
+        conn.execute("ALTER TABLE agents ADD COLUMN model TEXT")
     if "auto" not in {r["name"] for r in conn.execute("PRAGMA table_info(deps)")}:
         conn.execute("ALTER TABLE deps ADD COLUMN auto INTEGER NOT NULL DEFAULT 0")
     icols = {r["name"] for r in conn.execute("PRAGMA table_info(items)")}
@@ -546,6 +564,9 @@ def _migrate(conn):
     if "late_prereqs" not in icols:
         conn.execute("ALTER TABLE items ADD COLUMN late_prereqs INTEGER NOT NULL DEFAULT 0")
     for col in ("blocked_at", "blocked_until", "blocked_set_by"):
+        if col not in icols:
+            conn.execute(f"ALTER TABLE items ADD COLUMN {col} TEXT")
+    for col in ("model", "effort", "min_model", "max_model"):
         if col not in icols:
             conn.execute(f"ALTER TABLE items ADD COLUMN {col} TEXT")
     if "needs_check" not in icols:
@@ -585,18 +606,22 @@ def _event(conn, item_id, actor, change):
 # ---------------------------------------------------------------- settings
 
 def setting(conn, key: str, item_id: int | None = None, agent: str | None = None,
-            project_id: int | None = None) -> str:
-    """Most specific value wins: item, agent, project, global, built-in."""
+            project_id: int | None = None, kind: str | None = None) -> str:
+    """Most specific value wins: item, agent, item kind, project, global, built-in."""
     if key not in DEFAULT_SETTINGS:
         raise RiverError(f"unknown setting {key!r}; known: {', '.join(sorted(DEFAULT_SETTINGS))}")
-    if item_id is not None and project_id is None:
-        r = conn.execute("SELECT project_id FROM items WHERE id=?", (item_id,)).fetchone()
-        project_id = r["project_id"] if r else None
+    if item_id is not None and (project_id is None or kind is None):
+        r = conn.execute("SELECT project_id, kind FROM items WHERE id=?", (item_id,)).fetchone()
+        if r:
+            project_id = r["project_id"] if project_id is None else project_id
+            kind = r["kind"] if kind is None else kind
     scopes = []
     if item_id is not None:
         scopes.append(f"item:{item_id}")
     if agent:
         scopes.append(f"agent:{agent}")
+    if kind:
+        scopes.append(f"kind:{kind}")
     if project_id is not None:
         r = conn.execute("SELECT name FROM projects WHERE id=?", (project_id,)).fetchone()
         if r:
@@ -609,10 +634,14 @@ def setting(conn, key: str, item_id: int | None = None, agent: str | None = None
     return DEFAULT_SETTINGS[key]
 
 
-def _scope(conn, project=None, item=None, agent=None) -> str:
-    given = [x for x in (project, item, agent) if x is not None]
+def _scope(conn, project=None, item=None, agent=None, kind=None) -> str:
+    given = [x for x in (project, item, agent, kind) if x is not None]
     if len(given) > 1:
-        raise RiverError("give at most one of --project, --item, --agent")
+        raise RiverError("give at most one of --project, --item, --agent, --kind")
+    if kind is not None:
+        if not re.match(r"^[a-z][a-z0-9_-]*$", kind):
+            raise RiverError("--kind is an item kind, for example work, deploy, review")
+        return f"kind:{kind}"
     if project is not None:
         _project(conn, project)
         return f"project:{project}"
@@ -624,7 +653,7 @@ def _scope(conn, project=None, item=None, agent=None) -> str:
     return "global"
 
 
-def config_set(conn, key, value, project=None, item=None, agent=None, actor=None):
+def config_set(conn, key, value, project=None, item=None, agent=None, actor=None, kind=None):
     if key not in DEFAULT_SETTINGS:
         raise RiverError(f"unknown setting {key!r}; known: {', '.join(sorted(DEFAULT_SETTINGS))}")
     if key.endswith(("_ttl", "_after", "_before", "_interval", "_window")) or key in ("wait_max", "wait_step", "human_wait_max", "goal_lease"):
@@ -634,6 +663,17 @@ def config_set(conn, key, value, project=None, item=None, agent=None, actor=None
             raise RiverError(f"{key} takes a whole number")
     elif key == "launch_agents":
         parse_launch_agents(value)
+    elif key == "model_ladder":
+        parse_ladder(value)
+    elif key == "effort_levels":
+        if not _levels(value):
+            raise RiverError("effort_levels is a comma list, lowest first: low, medium, high, xhigh, max")
+    elif key == "default_effort" and value:
+        _check_effort(conn, value)
+    elif key == "default_model" and value:
+        _check_model_name(value)
+    elif key in ("default_min_model", "default_max_model") and value:
+        _limit_list(parse_ladder(setting(conn, "model_ladder")), value, key)
     elif key == "review" and value not in ("on", "off"):
         raise RiverError("review is on or off")
     elif key == "setup_done" and value not in ("on", "off"):
@@ -655,7 +695,7 @@ def config_set(conn, key, value, project=None, item=None, agent=None, actor=None
         raise RiverError("ntfy_topic uses letters, digits, '-' and '_' (up to 64); river notify setup ntfy makes one")
     elif key == "notify_channels" and not all(re.match(r"^[a-z0-9_-]+$", c) for c in _channels(value)):
         raise RiverError("notify_channels is a comma list of channel names, for example: mac,ntfy (empty sends nothing)")
-    sc = _scope(conn, project, item, agent)
+    sc = _scope(conn, project, item, agent, kind)
     with tx(conn):
         conn.execute("INSERT INTO settings(scope,key,value) VALUES (?,?,?) "
                      "ON CONFLICT(scope,key) DO UPDATE SET value=excluded.value", (sc, key, value))
@@ -663,8 +703,8 @@ def config_set(conn, key, value, project=None, item=None, agent=None, actor=None
     return {"scope": sc, "key": key, "value": mask(key, value)}
 
 
-def config_unset(conn, key, project=None, item=None, agent=None, actor=None):
-    sc = _scope(conn, project, item, agent)
+def config_unset(conn, key, project=None, item=None, agent=None, actor=None, kind=None):
+    sc = _scope(conn, project, item, agent, kind)
     with tx(conn):
         conn.execute("DELETE FROM settings WHERE scope=? AND key=?", (sc, key))
         _event(conn, None, actor, f"setting {sc} {key} unset")
@@ -686,6 +726,161 @@ def config_list(conn):
     for r in rows:
         r["value"] = mask(r["key"], r["value"])
     return {"defaults": DEFAULT_SETTINGS, "overrides": rows}
+
+
+# ---------------------------------------------------------------- models
+
+MODEL_FIELDS = ("model", "effort", "min_model", "max_model")
+
+
+def parse_ladder(value):
+    """model_ladder: {family: [models weakest first]}. "claude: sonnet, opus; openai: luna, sol"."""
+    fams, seen = {}, set()
+    for n, part in enumerate(x for x in value.split(";") if x.strip()):
+        name, _, models = part.rpartition(":")
+        name = name.strip().lower() or f"family{n + 1}"
+        ms = _levels(models)
+        if not ms:
+            raise RiverError(f"model_ladder: family {name} lists no models; write "
+                             f"\"claude: sonnet, opus, fable; openai: luna, terra, sol, astra\"")
+        for m in ms:
+            if m in seen:
+                raise RiverError(f"model_ladder: {m} is in more than one place")
+            seen.add(m)
+        fams[name] = ms
+    return fams
+
+
+def _levels(value):
+    return [x.strip().lower() for x in (value or "").split(",") if x.strip()]
+
+
+def _family(ladder, model):
+    """(family, position) of a model in the ladder, or (None, None)."""
+    m = (model or "").strip().lower()
+    for fam, ms in ladder.items():
+        if m in ms:
+            return fam, ms.index(m)
+    return None, None
+
+
+def _check_model_name(value):
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", value):
+        raise RiverError(f"model {value!r}: a model name uses letters, digits, '.', '_', '-'")
+    return value.lower()
+
+
+def _check_effort(conn, value, levels=None):
+    levels = levels or _levels(setting(conn, "effort_levels"))
+    if value.lower() not in levels:
+        raise RiverError(f"effort is one of {', '.join(levels)} (the effort_levels setting)")
+    return value.lower()
+
+
+def _limit_list(ladder, value, what="limit"):
+    """A min/max limit: one model per family, each in the ladder. Returns the normal form "a, b"."""
+    out, fams = [], set()
+    for m in _levels(value):
+        fam, _ = _family(ladder, m)
+        if fam is None:
+            known = "; ".join(f"{f}: {', '.join(ms)}" for f, ms in ladder.items())
+            raise RiverError(f"{what}: {m} is not in the model_ladder setting ({known}); "
+                             f"a limit needs an order. Add it: river config set model_ladder \"...\"")
+        if fam in fams:
+            raise RiverError(f"{what}: give at most one model per family ({fam} twice)")
+        fams.add(fam)
+        out.append(m)
+    return ", ".join(out)
+
+
+def _check_limits(ladder, lo, hi):
+    """min <= max inside each family that both name."""
+    for a in _levels(lo):
+        fa, pa = _family(ladder, a)
+        for b in _levels(hi):
+            fb, pb = _family(ladder, b)
+            if fa == fb and pa > pb:
+                raise RiverError(f"min model {a} is stronger than max model {b} ({fa}: {', '.join(ladder[fa])})")
+
+
+def model_check(ladder, model, lo, hi):
+    """Whether a session running `model` may take an item with limits lo/hi (comma lists).
+
+    Returns (allowed, reason). A limit compares only models of the session's family; a limit that names
+    no model of that family, or a model the ladder does not know, does not apply, and the reason says so."""
+    if not (lo or hi):
+        return True, ""
+    if not model:
+        return True, ""
+    fam, pos = _family(ladder, model)
+    if fam is None:
+        return True, (f"limits (min {lo or '-'}, max {hi or '-'}) not checked: model {model} is not in "
+                      f"model_ladder, so it has no order")
+    notes = []
+    for label, lim in (("min", lo), ("max", hi)):
+        if not lim:
+            continue
+        same = [m for m in _levels(lim) if _family(ladder, m)[0] == fam]
+        if not same:
+            notes.append(f"{label} {lim} is another family than {model} ({fam}): no order across families, "
+                         f"so the limit does not apply")
+            continue
+        _, p = _family(ladder, same[0])
+        if label == "min" and pos < p:
+            return False, f"needs at least {same[0]}; {model} is weaker ({fam}: {', '.join(ladder[fam])})"
+        if label == "max" and pos > p:
+            return False, f"allows at most {same[0]}; {model} is stronger ({fam}: {', '.join(ladder[fam])})"
+    return True, "; ".join(notes)
+
+
+def _model_defaults(conn):
+    """The default_* settings by scope, read once for annotate."""
+    rows = {}
+    for r in conn.execute("SELECT scope, key, value FROM settings WHERE key IN "
+                          "('default_model','default_effort','default_min_model','default_max_model')"):
+        rows.setdefault(r["scope"], {})[r["key"]] = r["value"]
+    return rows
+
+
+def _item_models(it, project, defaults, ladder_text=DEFAULT_SETTINGS["model_ladder"]):
+    """Effective model, effort, and limits of an item: its own, else the most specific default_* setting."""
+    scopes = [f"item:{it['id']}", f"kind:{it['kind']}", f"project:{project}", "global"]
+    out = {}
+    for f in MODEL_FIELDS:
+        own = it[f]
+        if own:
+            out[f], out[f + "_from"] = own, "item"
+            continue
+        out[f], out[f + "_from"] = None, None
+        for sc in scopes:
+            v = defaults.get(sc, {}).get("default_" + f)
+            if v is not None:
+                if v:
+                    out[f], out[f + "_from"] = v, sc
+                break
+    # A default limit that contradicts the item's own limit gives way to it.
+    lo, hi = out["min_model"], out["max_model"]
+    if lo and hi and (out["min_model_from"] == "item") != (out["max_model_from"] == "item"):
+        try:
+            _check_limits(parse_ladder(ladder_text), lo, hi)
+        except RiverError:
+            f = "max_model" if out["min_model_from"] == "item" else "min_model"
+            out[f], out[f + "_from"] = None, None
+    return out
+
+
+def agent_model(conn, name):
+    r = conn.execute("SELECT model FROM agents WHERE name=?", (name,)).fetchone() if name else None
+    return r["model"] if r else None
+
+
+def set_agent_model(conn, name, model):
+    """Record the model a session runs; go, next, and claim keep it off items whose limits exclude it."""
+    model = _check_model_name(model) if model else None
+    with tx(conn):
+        if conn.execute("UPDATE agents SET model=? WHERE name=? AND model IS NOT ?", (model, name, model)).rowcount:
+            _event(conn, None, name, f"model {model or 'unset'}")
+    return model
 
 
 # ---------------------------------------------------------------- projects
@@ -1276,7 +1471,7 @@ def touches_list(text):
 
 def item_add(conn, project, title, priority=2, notes="", doer="any", after=(), actor=None,
              context="", touches=None, check="", blocks=None, mode=None, found_during=None, feeds=(), due=None,
-             goals=None, refs=None):
+             goals=None, refs=None, models=None):
     """Add an item. `after`: items it waits on. `feeds`: items it waits on and whose output it reads."""
     if doer not in DOERS:
         raise RiverError(f"doer is one of {', '.join(DOERS)}")
@@ -1303,6 +1498,8 @@ def item_add(conn, project, title, priority=2, notes="", doer="any", after=(), a
             _tag(conn, iid, g, actor)
         if refs:
             _add_refs(conn, iid, refs, actor)
+        if models:
+            _set_models(conn, conn.execute("SELECT * FROM items WHERE id=?", (iid,)).fetchone(), models, actor)
         if due:
             t = parse_due(due, setting(conn, "timezone"))
             conn.execute("UPDATE items SET due=? WHERE id=?", (t, iid))
@@ -1326,6 +1523,31 @@ def item_add(conn, project, title, priority=2, notes="", doer="any", after=(), a
             a["holder_wait"] = {"item": parent["id"], "until": parent["hold_expires_at"],
                                 "max": setting(conn, "human_wait_max", item_id=parent["id"], agent=actor)}
     return a
+
+
+def _set_models(conn, it, models, actor):
+    """Set an item's model, effort, min_model, max_model from a dict; "" or "none" clears one (the default applies)."""
+    ladder = parse_ladder(setting(conn, "model_ladder"))
+    new = {f: it[f] for f in MODEL_FIELDS}
+    for f, v in models.items():
+        if f not in MODEL_FIELDS:
+            raise RiverError(f"unknown model field {f}")
+        if v is None:
+            continue
+        v = v.strip()
+        if v.lower() in ("", "none"):
+            new[f] = None
+        elif f == "model":
+            new[f] = _check_model_name(v)
+        elif f == "effort":
+            new[f] = _check_effort(conn, v)
+        else:
+            new[f] = _limit_list(ladder, v, f.replace("_", " "))
+    _check_limits(ladder, new["min_model"], new["max_model"])
+    for f in MODEL_FIELDS:
+        if new[f] != it[f]:
+            conn.execute(f"UPDATE items SET {f}=? WHERE id=?", (new[f], it["id"]))
+            _event(conn, it["id"], actor, f"{f.replace('_', ' ')} {new[f] or 'unset'}")
 
 
 REF_RE = re.compile(r"^[a-z][a-z0-9_.-]*:\S+$")
@@ -1448,9 +1670,12 @@ def add_plan(conn, project, text, actor=None, priority=2, doer="any", dry_run=Fa
 
 
 def item_edit(conn, item_id, title=None, notes=None, doer=None, project=None, actor=None,
-              context=None, touches=None, check=None, due=None, goals=None, untag=None, refs=None, unref=None):
+              context=None, touches=None, check=None, due=None, goals=None, untag=None, refs=None, unref=None,
+              models=None):
     with tx(conn):
         it = _item(conn, item_id)
+        if models:
+            _set_models(conn, it, models, actor)
         if refs:
             _add_refs(conn, it["id"], refs, actor)
         for r in unref or ():
@@ -2153,6 +2378,8 @@ def annotate(conn):
         refs.setdefault(r["item_id"], []).append({"ref": r["ref"], "url": r["url"], "synced_at": r["synced_at"]})
     now_s = iso(now())
     soon_s = iso(now() + parse_duration(setting(conn, "due_warn_before")))
+    model_defaults = _model_defaults(conn)
+    ladder_text = setting(conn, "model_ladder")
 
     # Open dependents, transitive, of each open item.
     memo: dict[int, frozenset] = {}
@@ -2213,6 +2440,7 @@ def annotate(conn):
             if items[d]["due"] and (due is None or items[d]["due"] < due):
                 due, due_from = items[d]["due"], d
         a["effective_due"], a["due_from"] = (due, due_from) if is_open[i] else (it["due"], None)
+        a.update(_item_models(it, p["name"], model_defaults, ladder_text))
         a["goals"] = tags.get(i, [])
         a["goal_reserved"] = None
         if not a["reserved_for"] and it["doer"] != "human" and it["status"] == "open":
@@ -2814,6 +3042,10 @@ def _claim_row(conn, item_id, actor):
         raise RiverError(f"refused: {actor} already holds {held} item(s) (max_leases {limit}). "
                          f"Finish one (river done <id>), release one (river release <id>), "
                          f"or raise the limit (river config set max_leases <n> --agent {actor})")
+    why = _model_refusal(conn, it0, actor)
+    if why:
+        raise RiverError(f"refused: #{item_id} {why}. Take other work (river go), or a session with an allowed "
+                         f"model takes it; a planner can change the limits: river edit {item_id} --min-model/--max-model")
     it = _item(conn, item_id)
     if it["kind"] == "deploy":
         owner = conn.execute("SELECT owner FROM targets WHERE name=?", (it["target"],)).fetchone()
@@ -2837,8 +3069,25 @@ def _claim_row(conn, item_id, actor):
     return ag
 
 
-def next_item(conn, project=None, unblocks=None, claim=False, actor=None, limit=1, near=None, mine=False):
-    """Show, or claim, the first ready item from the area the agent chose."""
+def _model_refusal(conn, it, actor):
+    """Why the actor's model may not take this item (its min/max limits), or None."""
+    model = agent_model(conn, actor)
+    if not model:
+        return None
+    ladder_text = setting(conn, "model_ladder")
+    m = _item_models(it, _project_name(conn, it["project_id"]), _model_defaults(conn), ladder_text)
+    ok, why = model_check(parse_ladder(ladder_text), model, m["min_model"], m["max_model"])
+    return None if ok else why
+
+
+def next_item(conn, project=None, unblocks=None, claim=False, actor=None, limit=1, near=None, mine=False,
+              model=None, skipped=None):
+    """Show, or claim, the first ready item from the area the agent chose.
+
+    model: the session's model (default: the one the agent recorded). Items whose min/max limits exclude it
+    are left out; `skipped`, a list, receives them with the reason."""
+    model = model or agent_model(conn, actor)
+    ladder = parse_ladder(setting(conn, "model_ladder")) if model else None
     doer_for = None
     if actor:
         r = conn.execute("SELECT kind FROM agents WHERE name=?", (actor,)).fetchone()
@@ -2847,12 +3096,26 @@ def next_item(conn, project=None, unblocks=None, claim=False, actor=None, limit=
         raise RiverError("--mine needs an agent name: set RIVER_AGENT or pass --as <name>")
     who_mine = actor if mine else None
 
+    def fits(pool):
+        if not model:
+            return pool
+        out = []
+        for a in pool:
+            ok, why = model_check(ladder, model, a["min_model"], a["max_model"])
+            if ok:
+                a["model_note"] = why
+                out.append(a)
+            elif skipped is not None and a["id"] not in {x["id"] for x in skipped}:
+                skipped.append({"id": a["id"], "title": a["title"], "why": why})
+        return out
+
     def takeable(pool):
         if not actor:
-            return pool
+            return fits(pool)
         owned = {r["name"] for r in conn.execute("SELECT name FROM targets WHERE owner=?", (actor,))}
         pool = [a for a in pool if (a["kind"] != "deploy" or a["target"] in owned)
                 and a["reserved_for"] in (None, actor)]
+        pool = fits(pool)
         # Items pushed to this agent come first; the sort is stable, so graph order holds inside each group.
         return sorted(pool, key=lambda a: not (a["reserved_for"] == actor and a["reserved_until"]))
 
@@ -4062,6 +4325,8 @@ def state(conn):
         "capacity": capacity(conn, ann),
         "targets": targets_view(conn, ann),
         "launch_agents": [label for label, _ in parse_launch_agents(setting(conn, "launch_agents"))],
+        "model_ladder": parse_ladder(setting(conn, "model_ladder")),
+        "effort_levels": _levels(setting(conn, "effort_levels")),
         "settings": config_list(conn),
         "events": recent_events(conn),
         "takeovers": takeovers(conn),
@@ -4107,7 +4372,7 @@ def _goal_brief(conn, name, actor):
             "lease": _short(_goal_lease(conn, _goal(conn, name), actor))}
 
 
-def go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None):
+def go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None, model=None):
     """One call for a fresh agent session: find the project, name the session, pick a role, and brief it.
 
     focus (RIVER_FOCUS, set when the page opens an agent): "help:<id>@<person>" briefs the session to do a
@@ -4147,6 +4412,8 @@ def go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None)
     activity(conn, actor)
     if session:
         set_session(conn, actor, session)
+    if model:
+        set_agent_model(conn, actor, model)
     with tx(conn):
         conn.execute("UPDATE agents SET role=NULL WHERE name=? AND role='planner'", (actor,))
 
@@ -4169,6 +4436,8 @@ def go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None)
              "humans": [r["name"] for r in conn.execute("SELECT name FROM agents WHERE kind='human' ORDER BY name")]}
 
     brief["unsynced"] = unsynced(conn, actor)
+    brief["model"] = agent_model(conn, actor)
+    brief["model_skipped"] = skipped = []
     mine_goal = _owned_goal(conn, actor, names)
     if mine_goal is not None:
         brief["goal"] = _goal_brief(conn, mine_goal["name"], actor)
@@ -4207,7 +4476,7 @@ def go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None)
 
     def try_claim(**kw):
         try:
-            got = next_item(conn, claim=True, actor=actor, **kw)
+            got = next_item(conn, claim=True, actor=actor, skipped=skipped, **kw)
         except RiverError as e:
             brief["claim_refused"] = str(e)
             return None

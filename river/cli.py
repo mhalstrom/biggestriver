@@ -158,6 +158,10 @@ def _fmt_item(a, show_reason=True):
     if a.get("effective_due") and a["status"] in core.OPEN_STATES:
         flags.append(("OVERDUE " if a["due_state"] == "overdue" else "due soon " if a["due_state"] == "soon" else "due ")
                      + a["due_text"] + (f" (from #{a['due_from']})" if a.get("due_from") else ""))
+    if a.get("model") or a.get("effort") or a.get("min_model") or a.get("max_model"):
+        flags.append("/".join(x for x in (a.get("model"), a.get("effort")) if x)
+                     + (f" min {a['min_model']}" if a.get("min_model") else "")
+                     + (f" max {a['max_model']}" if a.get("max_model") else ""))
     if a.get("same_project"):
         flags.append("same project as your earlier work")
     elif a.get("distance") is not None:
@@ -175,9 +179,37 @@ def _ref_args(x):
                    help="web link of the --ref at the same position (github: refs get one by themselves)")
 
 
+def _model_args(x, edit=False):
+    clear = "; none clears it" if edit else ""
+    x.add_argument("--model", help="recommended model for the agent that takes it (a suggestion; never blocks)" + clear)
+    x.add_argument("--effort", help="recommended effort level: one of the effort_levels setting" + clear)
+    x.add_argument("--min-model", dest="min_model",
+                   help="weakest model allowed, one per family (opus or opus,sol); weaker sessions skip it" + clear)
+    x.add_argument("--max-model", dest="max_model",
+                   help="strongest model allowed, one per family (sonnet or sonnet,luna)" + clear)
+
+
+def _models(a):
+    return {f: getattr(a, f) for f in core.MODEL_FIELDS if getattr(a, f) is not None}
+
+
+def _model_line(a):
+    """fable; effort high; min opus, sol; max fable  (a default from settings says where it comes from)."""
+    parts = []
+    for f, label in (("model", ""), ("effort", "effort "), ("min_model", "min "), ("max_model", "max ")):
+        if a.get(f):
+            src = a.get(f + "_from")
+            parts.append(f"{label}{a[f]}" + (f" ({src} default)" if src and src != "item" else ""))
+    return "; ".join(parts)
+
+
 def _context_lines(a, indent="  "):
     """What a new agent needs to start: why and where (context), the files (touches), how to know it works (check)."""
     out = []
+    if _model_line(a):
+        out.append(f"{indent}model:   {_model_line(a)}")
+    if a.get("model_note"):
+        out.append(f"{indent}         ({a['model_note']})")
     if a.get("context"):
         first, *rest = a["context"].splitlines() or [""]
         out.append(f"{indent}context: {first}")
@@ -417,6 +449,7 @@ def build_parser():
     x.add_argument("--context", default="", help="what a new agent must know to start: why, where, decisions made")
     x.add_argument("--touches", nargs="*", default=[], help="files or directories it changes")
     x.add_argument("--check", default="", help="command that shows it works (tests, a build)")
+    _model_args(x)
     x.add_argument("--blocks", type=int, help="item that must wait on this new one (usually the one you hold)")
     x.add_argument("--found-during", type=int, dest="found_during",
                    help="the item you were working on when you found this (links them; not a dependency)")
@@ -432,6 +465,7 @@ def build_parser():
     x.add_argument("--doer", choices=core.DOERS); x.add_argument("--project")
     x.add_argument("--context"); x.add_argument("--touches", nargs="*", help="replaces the list; give none to clear it")
     x.add_argument("--check")
+    _model_args(x, edit=True)
     x.add_argument("--due", help="due date (2026-10-15, 'fri 17:00'), or none to remove it")
     x.add_argument("--goal", action="append", help="tag the item with a goal (repeatable)")
     x.add_argument("--untag", action="append", help="remove a goal tag (repeatable)")
@@ -471,6 +505,8 @@ def build_parser():
     x.add_argument("--mine", action="store_true", help="items linked to what you claimed or finished before, then your projects")
     x.add_argument("--claim", action="store_true", help="take it")
     x.add_argument("--limit", "-n", type=int, default=1)
+    x.add_argument("--model", default=os.environ.get("RIVER_MODEL"),
+                   help="the model this session runs (default $RIVER_MODEL): skip items whose limits exclude it")
 
     x = sub.add_parser("init", help="set up the current folder: link or create its project, add the agent block")
     x.add_argument("--project", help="project name (default: the folder name)")
@@ -485,6 +521,8 @@ def build_parser():
     x.add_argument("--project", help="project name(s) when this folder is not linked")
     x.add_argument("--role", choices=core.ROLES, help="ask for a role instead of letting river pick")
     x.add_argument("--session", help="your Claude Code session name, so others can message this session")
+    x.add_argument("--model", default=os.environ.get("RIVER_MODEL"),
+                   help="the model this session runs (default $RIVER_MODEL): river gives it only items its model is allowed for")
 
     x = sub.add_parser("plan", help="start a planner session: overview, open questions, and the planner's rules")
     x.add_argument("--project", help="project name(s) to focus on (default: this folder's, else all)")
@@ -628,6 +666,7 @@ def build_parser():
         if name == "set":
             y.add_argument("value")
         y.add_argument("--project"); y.add_argument("--item", type=int); y.add_argument("--agent")
+        y.add_argument("--kind", help="items of one kind (work, deploy, review): for the default_* model settings")
 
     x = sub.add_parser("serve", help="the web page on 127.0.0.1")
     x.add_argument("--port", type=int); x.add_argument("--open", action="store_true")
@@ -1020,10 +1059,10 @@ def dispatch(conn, a, actor):
             project = core.project_for_add(conn, os.getcwd(), a.blocks if a.blocks is not None else a.found_during)
         return core.item_add(conn, project, title, a.priority, a.notes, a.doer, a.after, actor,
                              a.context, a.touches, a.check, a.blocks, a.mode, a.found_during, a.feeds, a.due,
-                             [] if a.no_goal else a.goal, core.parse_refs(a.ref, a.ref_url))
+                             [] if a.no_goal else a.goal, core.parse_refs(a.ref, a.ref_url), _models(a))
     if c == "edit":
         return core.item_edit(conn, a.id, a.title, a.notes, a.doer, a.project, actor, a.context, a.touches, a.check,
-                              a.due, a.goal, a.untag, core.parse_refs(a.ref, a.ref_url), a.unref)
+                              a.due, a.goal, a.untag, core.parse_refs(a.ref, a.ref_url), a.unref, _models(a))
     if c == "list":
         return core.item_list(conn, a.project, a.status, a.all, a.goal, a.ref)
     if c == "show":
@@ -1060,14 +1099,26 @@ def dispatch(conn, a, actor):
     if c == "log":
         return core.completed(conn, a.project, None if a.since == "all" else a.since)
     if c == "go":
-        res = core.go(conn, os.getcwd(), actor, a.project, a.role, a.session, os.environ.get("RIVER_FOCUS"))
+        res = core.go(conn, os.getcwd(), actor, a.project, a.role, a.session, os.environ.get("RIVER_FOCUS"), a.model)
         res["old_blocks"] = old_blocks(conn, os.getcwd())
         return res
     if c == "plan":
         return core.plan(conn, os.getcwd(), actor, a.project)
     if c == "next":
-        return core.next_item(conn, a.project, a.unblocks, a.claim, actor, a.limit, a.near, a.mine)
+        if a.model and actor and conn.execute("SELECT 1 FROM agents WHERE name=?", (actor,)).fetchone():
+            core.set_agent_model(conn, actor, a.model)
+        skipped = []
+        res = core.next_item(conn, a.project, a.unblocks, a.claim, actor, a.limit, a.near, a.mine, a.model, skipped)
+        if skipped and not a.json:
+            print(f"skipped for your model {a.model or core.agent_model(conn, actor)} (min/max model limits):",
+                  file=sys.stderr)
+            for x in skipped[:5]:
+                print(f"  #{x['id']} {_cut(x['title'], 50)}: {x['why']}", file=sys.stderr)
+        return res
     if c == "claim":
+        m = os.environ.get("RIVER_MODEL")
+        if m and actor and conn.execute("SELECT 1 FROM agents WHERE name=?", (actor,)).fetchone():
+            core.set_agent_model(conn, actor, m)
         return core.claim(conn, a.id, actor)
     if c == "done":
         return core.done(conn, a.id, a.output, actor, a.ship, a.note, a.synced, a.force)
@@ -1182,11 +1233,11 @@ def dispatch(conn, a, actor):
             if a.key:
                 return {"key": a.key, "value": core.mask(a.key, core.setting(
                     conn, a.key, item_id=a.item, agent=a.agent,
-                    project_id=core._project(conn, a.project)["id"] if a.project else None))}
+                    project_id=core._project(conn, a.project)["id"] if a.project else None, kind=a.kind))}
             return core.config_list(conn)
         if a.ccmd == "set":
-            return core.config_set(conn, a.key, a.value, a.project, a.item, a.agent, actor)
-        return core.config_unset(conn, a.key, a.project, a.item, a.agent, actor)
+            return core.config_set(conn, a.key, a.value, a.project, a.item, a.agent, actor, a.kind)
+        return core.config_unset(conn, a.key, a.project, a.item, a.agent, actor, a.kind)
     raise RiverError(f"unknown command {c}")
 
 
@@ -1239,6 +1290,7 @@ Change the plan only; do not take or do the work (claims refuse for this session
   Projects:      {r} project add <name> --description "..." [--path <dir>] [--target <t>]   (describe, rank, target)
   Items:         {r} add <project> "<title>" --doer ai|human --context "..." --touches <files> --check "<cmd>"
   Order:         {r} dep <id> --on <id> [--kind feeds|conflicts]   Importance: {r} prio <id> 0 (on the outcome only)
+  Model:         --model sonnet|opus|fable --effort low..max (advice); --min-model/--max-model only when a wrong model is costly
   Fix:           {r} edit <id> ...   {r} move <id> --before <id>   {r} drop <id>   {r} blocked <id> --reason "..."
   Progress:      river status   river log --since 7d   river blockers <id>
 Ask the user about each open question below that matters to what they want. The full guide: river guide planner
@@ -1364,6 +1416,10 @@ def render_go(b):
                    f"and when done-when holds: {r} goal done {gb['name']} --result \"<one line>\"")
         out.append("")
     it = b.get("item")
+    if b.get("model_skipped"):
+        out.append(f"Skipped for your model {b.get('model')} (min/max model limits; another session takes them): "
+                   + "; ".join(f"#{x['id']} {_cut(x['title'], 40)}: {x['why']}" for x in b["model_skipped"][:4]))
+        out.append("")
     if it:
         out.append(f"YOUR ITEM #{it['id']}: {it['title']}")
         if it.get("found_during"):

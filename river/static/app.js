@@ -150,7 +150,7 @@ function agentHolds(a) {
       ${S.items.filter(i => i.status === "open" && i.reserved_until && i.reserved_for === a.name).map(i => `<div class="st">pushed <span class="link" data-open="${i.id}">#${i.id} ${esc(i.title)}</span> · ${left(i.reserved_until)} left · <span class="link" data-unpush="${i.id}">cancel</span></div>`).join("")}`;
 }
 function agentSession(a) {
-  return `${a.session ? `<span title="Claude Code session">${esc(a.session)}${a.session_ref ? " [" + esc(a.session_ref) + "]" : ""}</span>` : ""}${a.session_url ? ` <a class="link" href="${esc(a.session_url)}" target="_blank" rel="noopener">open</a>` : ""}`;
+  return `${a.model ? `<span class="chip c-p" title="the model this session runs (RIVER_MODEL)">${esc(a.model)}</span> ` : ""}${a.session ? `<span title="Claude Code session">${esc(a.session)}${a.session_ref ? " [" + esc(a.session_ref) + "]" : ""}</span>` : ""}${a.session_url ? ` <a class="link" href="${esc(a.session_url)}" target="_blank" rel="noopener">open</a>` : ""}`;
 }
 
 function renderTargets() {
@@ -448,7 +448,10 @@ async function drawerAction(what) {
     if (what === "tag") { const g = $("#dGoal").value; if (g) await act("item_edit", { id, goals: [g] }); }
     if (what === "dep") { const on = $("#dDep").value.split(/[\s,]+/).filter(Boolean).map(Number); if (on.length) await act("dep_add", { id, on }); }
     if (what === "save") {
-      await act("item_edit", { id, title: $("#dTitle").value, notes: $("#dNotes").value, context: $("#dContext").value, touches: $("#dTouches").value, check: $("#dCheck").value, due: $("#dDue").value.trim() || undefined, doer: $("#dDoer").value, project: $("#dProject").value !== it.project ? $("#dProject").value : undefined });
+      await act("item_edit", { id, title: $("#dTitle").value, notes: $("#dNotes").value, context: $("#dContext").value, touches: $("#dTouches").value, check: $("#dCheck").value, due: $("#dDue").value.trim() || undefined, doer: $("#dDoer").value, project: $("#dProject").value !== it.project ? $("#dProject").value : undefined,
+        models: Object.fromEntries([["model", "#dModel"], ["effort", "#dEffort"], ["min_model", "#dMinModel"], ["max_model", "#dMaxModel"]]
+          .map(([f, sel]) => [f, $(sel).value.trim()]).filter(([f, v]) => v !== (it[f + "_from"] === "item" ? it[f] || "" : ""))
+          .map(([f, v]) => [f, v || "none"])) });
       if (+$("#dPrio").value !== it.priority) await act("prio", { id, priority: +$("#dPrio").value });
       toast("Saved");
     }

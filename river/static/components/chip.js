@@ -38,6 +38,16 @@ export function replanChip(it) {
 // "human" or "agent": who does an item (doer ai|human), or what an agent row is (kind human|ai).
 export function personChip(kind) { return kind === "human" ? chip("c-human", "human") : chip("c-ai", "agent"); }
 export function doerChip(it) { return it.doer === "any" ? "" : personChip(it.doer); }
+// The recommended model and effort, and the hard limits: "opus · high ≥opus ≤fable". Empty when none is set.
+export function modelChip(it) {
+  const parts = [it.model, it.effort].filter(Boolean).map(esc).join(" · ");
+  const lim = (it.min_model ? " ≥" + esc(it.min_model) : "") + (it.max_model ? " ≤" + esc(it.max_model) : "");
+  if (!parts && !lim) return "";
+  const src = f => it[f] ? `${f.replace("_", " ")} ${it[f]}${it[f + "_from"] && it[f + "_from"] !== "item" ? " (" + it[f + "_from"] + " default)" : ""}` : "";
+  const title = ["model", "effort", "min_model", "max_model"].map(src).filter(Boolean).join("; ")
+    + (lim ? ". Limits keep a session with another model off the item; the recommendation never blocks." : ". A recommendation; it never blocks.");
+  return chip("c-p", (parts + lim).trim(), title);
+}
 export function goalChips(it) { return (it.goals || []).map(g => chip("c-goal", esc(g), "goal")).join(""); }
 export function projectChip(name) { return chip("c-p", esc(name)); }
 export function ownerChip(owner) { return owner ? chip("c-ai", "owner · " + esc(owner)) : chip("c-waiting", "no owner"); }

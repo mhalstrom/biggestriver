@@ -154,14 +154,35 @@ added when `--touches` overlap) is in progress. Inside the area an agent chooses
 
 ### Settings
 
-`river config get` lists them. Set a value globally or for one project, agent, or
-item; the most specific value wins.
+`river config get` lists them. Set a value globally or for one project, agent,
+item kind (`--kind`), or item; the most specific value wins.
 
 ```sh
 river config set lease_ttl 45m
 river config set lease_ttl 7d --agent alex       # people keep claims longer
 river config set max_leases 3 --agent alex
 ```
+
+### Model and effort
+
+An item can recommend a model and an effort level, and it can set hard limits:
+
+```sh
+river add "Rewrite the scheduler" --model fable --effort high --min-model opus
+river edit 12 --max-model sonnet                 # a monitor: no strong model needed
+river config set default_model sonnet --project monitors
+river config set default_effort low --kind deploy
+RIVER_MODEL=sonnet river go                      # or: river go --model sonnet
+```
+
+The recommendation never blocks. A session that declares its model
+(`RIVER_MODEL` or `--model`) gets only items whose `--min-model` and
+`--max-model` allow it; `go` and `next` say what they skipped and why.
+`model_ladder` orders the models, weakest first, one list per family
+(`claude: sonnet, opus, fable; openai: luna, terra, sol, astra`).
+There is no order across families: a limit applies only to sessions of its
+own family, so give one model per family to limit both (`--min-model opus,sol`).
+`effort_levels` lists the effort levels, lowest first.
 
 An agent that waits on a person's item (`river add "..." --doer human --blocks
 <id> --keep`) holds its own item at most `human_wait_max` (30m; set it per

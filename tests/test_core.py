@@ -2537,3 +2537,90 @@ class Wait(Base):
         kinds = {x["kind"]: x["text"] for x in core.capacity(self.c)["advice"]}
         self.assertIn("waiting", kinds)
         self.assertIn("1 session(s) have no work", kinds["too_many"])
+
+
+class Models(Base):
+    """Recommended model and effort per item, min/max limits, and sessions that declare their model (#319)."""
+
+    def setUp(self):
+        super().setUp()
+        core.project_add(self.c, "a")
+        core.project_path(self.c, "a", self.dir.name)
+        for n in ("s1", "s2"):
+            core.register(self.c, n)
+
+    def test_add_and_edit_store_the_fields_and_validate_them(self):
+        i = core.item_add(self.c, "a", "x", models={"model": "Opus", "effort": "high", "min_model": "opus, sol"})
+        self.assertEqual((i["model"], i["effort"], i["min_model"], i["model_from"]), ("opus", "high", "opus, sol", "item"))
+        with self.assertRaisesRegex(RiverError, "effort is one of"):
+            core.item_edit(self.c, i["id"], models={"effort": "huge"})
+        with self.assertRaisesRegex(RiverError, "not in the model_ladder"):
+            core.item_edit(self.c, i["id"], models={"max_model": "gpt5"})
+        with self.assertRaisesRegex(RiverError, "one model per family"):
+            core.item_edit(self.c, i["id"], models={"max_model": "opus, fable"})
+        with self.assertRaisesRegex(RiverError, "stronger than max"):
+            core.item_edit(self.c, i["id"], models={"max_model": "sonnet"})
+        e = core.item_edit(self.c, i["id"], models={"min_model": "none", "model": ""})
+        self.assertIsNone(e["min_model"])
+        self.assertIsNone(e["model"])
+        self.assertEqual(e["effort"], "high")
+
+    def test_ladder_has_no_order_across_families(self):
+        ladder = core.parse_ladder(core.setting(self.c, "model_ladder"))
+        self.assertEqual(ladder["claude"], ["sonnet", "opus", "fable"])
+        self.assertEqual(ladder["openai"], ["luna", "terra", "sol", "astra"])
+        self.assertEqual(core.model_check(ladder, "sonnet", "opus", None)[0], False)
+        self.assertEqual(core.model_check(ladder, "fable", None, "opus")[0], False)
+        self.assertEqual(core.model_check(ladder, "opus", "opus", "opus"), (True, ""))
+        ok, why = core.model_check(ladder, "astra", "opus", None)
+        self.assertTrue(ok)
+        self.assertIn("another family", why)
+        self.assertFalse(core.model_check(ladder, "terra", "opus, sol", None)[0])
+        ok, why = core.model_check(ladder, "mystery", "opus", None)
+        self.assertTrue(ok)
+        self.assertIn("not in model_ladder", why)
+        with self.assertRaisesRegex(RiverError, "more than one place"):
+            core.config_set(self.c, "model_ladder", "a: x, y; b: y")
+
+    def test_defaults_come_from_project_and_kind_settings(self):
+        core.config_set(self.c, "default_model", "sonnet", project="a")
+        core.config_set(self.c, "default_effort", "low", kind="work")
+        core.config_set(self.c, "default_max_model", "sonnet", project="a")
+        i = self.add("a", "monitor")
+        own = core.item_add(self.c, "a", "big", models={"model": "fable", "min_model": "opus"})["id"]
+        ann = core.annotate(self.c)
+        self.assertEqual((ann[i]["model"], ann[i]["model_from"]), ("sonnet", "project:a"))
+        self.assertEqual((ann[i]["effort"], ann[i]["effort_from"]), ("low", "kind:work"))
+        self.assertEqual(ann[own]["model"], "fable")
+        # The project's max sonnet contradicts the item's own min opus: the item's own limit wins.
+        self.assertEqual((ann[own]["min_model"], ann[own]["max_model"]), ("opus", None))
+        self.assertEqual(core.setting(self.c, "default_effort", item_id=i), "low")
+        with self.assertRaisesRegex(RiverError, "effort is one of"):
+            core.config_set(self.c, "default_effort", "extreme")
+
+    def test_a_session_gets_only_items_its_model_is_allowed_for(self):
+        big = core.item_add(self.c, "a", "big", 1, models={"min_model": "opus"})["id"]
+        small = core.item_add(self.c, "a", "small", 2, models={"max_model": "sonnet"})["id"]
+        rec = core.item_add(self.c, "a", "rec", 3, models={"model": "fable"})["id"]
+        core.set_agent_model(self.c, "s1", "sonnet")
+        skipped = []
+        got = core.next_item(self.c, "a", actor="s1", limit=5, skipped=skipped)
+        self.assertEqual([x["id"] for x in got], [small, rec])  # the recommendation alone never blocks
+        self.assertEqual([x["id"] for x in skipped], [big])
+        self.assertIn("needs at least opus", skipped[0]["why"])
+        with self.assertRaisesRegex(RiverError, "needs at least opus"):
+            core.claim(self.c, big, "s1")
+        # Without a declared model nothing is filtered; with --model the filter applies without an agent.
+        self.assertEqual(len(core.next_item(self.c, "a", limit=5)), 3)
+        self.assertEqual([x["id"] for x in core.next_item(self.c, "a", limit=5, model="fable")], [big, rec])
+
+    def test_go_records_the_model_and_says_what_it_skipped(self):
+        big = core.item_add(self.c, "a", "big", 1, models={"min_model": "opus"})["id"]
+        small = self.add("a", "small", 2)
+        b = core.go(self.c, self.dir.name, "s1", model="sonnet")
+        self.assertEqual(b["item"]["id"], small)
+        self.assertEqual(b["model"], "sonnet")
+        self.assertEqual([x["id"] for x in b["model_skipped"]], [big])
+        self.assertEqual(core.agent_model(self.c, "s1"), "sonnet")
+        b2 = core.go(self.c, self.dir.name, "s2", model="opus")
+        self.assertEqual(b2["item"]["id"], big)

@@ -85,6 +85,15 @@ class PageGoals(unittest.TestCase):
         h.do_GET()
         return out["code"], out["body"]
 
+    def test_item_models_through_the_page(self):
+        i = self.op("item_add", None, project="a", title="x", models={"model": "opus", "effort": "high"})["id"]
+        self.op("item_edit", None, id=i, models={"max_model": "fable", "effort": "none"})
+        code, st = self.get("/api/state")
+        it = next(x for x in st["items"] if x["id"] == i)
+        self.assertEqual((it["model"], it["effort"], it["max_model"]), ("opus", None, "fable"))
+        self.assertEqual(st["effort_levels"], ["low", "medium", "high", "xhigh", "max"])
+        self.assertIn("claude", st["model_ladder"])
+
     def test_goal_ops_tags_and_state(self):
         self.op("goal_add", None, project="a", name="ship", outcome="it ships", done_when="users can install it")
         self.op("goal_add", None, project="a", name="docs")

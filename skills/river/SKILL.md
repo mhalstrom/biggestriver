@@ -36,6 +36,12 @@ export RIVER_AGENT=<session-name>        # or pass --as <session-name>
 
 A person registers with `--human`.
 
+Declare the model your session runs, once: `river --as <you> go --model <model>`
+(or `RIVER_MODEL=<model>`). River then gives you only items whose
+`--min-model`/`--max-model` limits allow your model, and says what it skipped.
+An item's recommended model and effort (`model:` in the briefing) are advice:
+work at that effort; a different model may still take it.
+
 ## Work loop
 
 1. Choose your area and take an item. `river project list` shows what each
