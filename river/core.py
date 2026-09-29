@@ -139,6 +139,9 @@ LAUNCH_PLATFORMS = {
         "permission_mode": {"kind": "choice", "default": "",
                             "choices": ["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"],
                             "text": "permission mode (--permission-mode); empty: Claude Code's own setting"},
+        "model_ids": {"kind": "text", "default": "",
+                      "text": "the id Claude Code gets for a model_ladder name (name=id, ...); a name with no "
+                              "entry goes as it is: claude --model takes sonnet, opus, and fable"},
         "args": {"kind": "text", "default": "", "text": "more arguments, put before the prompt"},
         "prompt": {"kind": "text", "default": "go", "text": "the first prompt"},
     }},
@@ -147,6 +150,10 @@ LAUNCH_PLATFORMS = {
                     "text": "sandbox (--sandbox); empty: Codex's own setting. river adds --add-dir for the queue folder"},
         "approval": {"kind": "choice", "default": "", "choices": ["on-request", "never"],
                      "text": "when Codex asks before it runs a command (--ask-for-approval); empty: Codex's own setting"},
+        # Codex takes full ids, and they change with each OpenAI release: update this list then.
+        "model_ids": {"kind": "text", "default": "luna=gpt-6-luna, terra=gpt-5.6-terra, sol=gpt-6.1-sol, astra=gpt-6-astra",
+                      "text": "the id Codex gets (codex -m) for a model_ladder name (name=id, ...); "
+                              "a name with no entry goes as it is"},
         "args": {"kind": "text", "default": "", "text": "more arguments, put before the prompt"},
         "prompt": {"kind": "text", "default": "run river go in this folder and follow the briefing",
                    "text": "the first prompt (Codex does not read CLAUDE.md)"},
@@ -4992,10 +4999,47 @@ def _check_option(platform, opt, value):
         raise RiverError(f"{platform} {opt} is on or off")
     if spec["kind"] == "choice" and value and value not in spec["choices"]:
         raise RiverError(f"{platform} {opt} is one of {', '.join(spec['choices'])} (or empty for the CLI's own setting)")
+    if opt == "model_ids":
+        parse_model_ids(value, platform)
     if opt == "prompt" and not value.strip():
         raise RiverError(f"{platform} prompt: the session needs a first prompt, for example {spec['default']!r}")
     if ";" in value:
         raise RiverError(f"{platform} {opt}: ';' separates launch_agents entries; leave it out")
+
+
+def parse_model_ids(value, platform="model_ids"):
+    """'luna=gpt-6-luna, sol=gpt-6.1-sol' -> {"luna": "gpt-6-luna", "sol": "gpt-6.1-sol"}."""
+    out = {}
+    for part in (x.strip() for x in (value or "").split(",")):
+        if not part:
+            continue
+        name, sep, mid = (x.strip() for x in part.partition("="))
+        if not sep or not name or not re.match(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$", mid):
+            raise RiverError(f"{platform} model_ids: {part!r} needs the form name=id, for example astra=gpt-6-astra")
+        out[name.lower()] = mid
+    return out
+
+
+def model_id(conn, platform, model, project_id=None, inline=None):
+    """The id a platform's CLI gets for a model_ladder name: its <prefix>model_ids entry, else the name."""
+    if not model or platform not in LAUNCH_PLATFORMS:
+        return model
+    ids = (inline or {}).get("model_ids")
+    if ids is None:
+        ids = setting(conn, LAUNCH_PLATFORMS[platform]["prefix"] + "model_ids", project_id=project_id)
+    return parse_model_ids(ids, platform).get(model.lower(), model)
+
+
+def codex_models():
+    """{id: [effort levels]} from the Codex model cache (~/.codex/models_cache.json), or None without one."""
+    import json
+    path = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "models_cache.json"
+    try:
+        data = json.loads(path.read_text())
+        return {m["slug"]: [x["effort"] for x in m.get("supported_reasoning_levels") or [] if x.get("effort")]
+                for m in data.get("models") or [] if m.get("slug")}
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return None
 
 
 def _shell_quote(s):
@@ -5274,22 +5318,37 @@ def _launch_agent_cmd(conn, project_id, agent, model=None, effort=None, options=
     if effort and not re.match(r"^[a-z][a-z0-9_-]{0,31}$", effort):
         raise RiverError(f"effort {effort!r}: a level such as low, medium, high")
     prof = parse_profile(pick[1])
+    # The CLI gets its own id for the model (codex -m gpt-6-astra); river keeps the ladder name everywhere else.
+    platform = prof[0] if prof else {"claude": "claude-code", "codex": "codex"}.get(Path(entry_exe(pick[1])).name.lower())
+    mid = model_id(conn, platform, model, project_id, prof[1] if prof else None)
+    if effort and platform == "codex":
+        _check_codex_effort(mid, effort)
     if prof:
         opts = profile_options(conn, prof[0], prof[1], project_id, options)
-        cmd = build_command(prof[0], opts, model, effort or None)
+        cmd = build_command(prof[0], opts, mid, effort or None)
     elif options:
         raise RiverError(f"{pick[0]} is a custom command ({pick[1]}), so it has no launch options; "
                          f"give it a profile in launch_agents (@claude-code or @codex) for them")
     else:
-        opts, cmd = {}, fill_launch_command(pick[1], model, effort or None)
+        opts, cmd = {}, fill_launch_command(pick[1], mid, effort or None)
     return {"agent": pick[0], "command": cmd, "platform": prof[0] if prof else None, "options": opts,
-            "model": model, "effort": effort or None, "env": {"RIVER_MODEL": model} if model else {}}
+            "model": model, "model_id": mid, "effort": effort or None, "env": {"RIVER_MODEL": model} if model else {}}
+
+
+def _check_codex_effort(mid, effort):
+    """Refuse an effort that Codex does not take: for the model, when the Codex model cache lists it,
+    else Codex's levels in PLATFORM_EFFORTS."""
+    known = codex_models() or {}
+    levels = known.get(mid) if mid else None
+    levels = levels or PLATFORM_EFFORTS["openai"]
+    if effort not in levels:
+        raise RiverError(f"Codex{' ' + mid if mid else ''} takes effort {', '.join(levels)}, not {effort}; pick one of them")
 
 
 # Which model family an agent CLI runs, by the program that starts it, and the effort levels its CLI takes.
 AGENT_FAMILIES = {"claude": "claude", "codex": "openai"}
 PLATFORM_EFFORTS = {"claude": ["low", "medium", "high", "xhigh", "max"],
-                    "openai": ["minimal", "low", "medium", "high", "xhigh"]}
+                    "openai": ["low", "medium", "high", "xhigh", "max"]}
 # One line per model in the launch dialog: when it fits.
 MODEL_NOTES = {
     "sonnet": "routine, well specified work: monitors, checks, small fixes",

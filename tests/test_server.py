@@ -1,7 +1,9 @@
+import json
 import os
 import re
 import tempfile
 import unittest
+from pathlib import Path
 
 from river import core, server
 from river.core import RiverError
@@ -666,7 +668,44 @@ class LaunchProfiles(unittest.TestCase):
         self.assertEqual((opts["Grok"]["options"], opts["Grok"]["takes_model"]), ([], False))
         (prof,) = server.setup_status(self.c)["launch_profiles"]
         self.assertEqual([o["setting"] for o in prof["options"]],
-                         ["claude_remote_control", "claude_permission_mode", "claude_args", "claude_prompt"])
+                         ["claude_remote_control", "claude_permission_mode", "claude_model_ids", "claude_args", "claude_prompt"])
+
+    def test_the_cli_gets_its_own_model_id_and_river_keeps_the_name(self):
+        pid = core._project(self.c, "shop")["id"]
+        rd = core.river_dir()
+        codex_home = tempfile.TemporaryDirectory()
+        self.addCleanup(codex_home.cleanup)
+        os.environ["CODEX_HOME"] = codex_home.name
+        self.addCleanup(os.environ.pop, "CODEX_HOME", None)
+        core.config_set(self.c, "launch_agents", "Claude Code=@claude-code; Codex=@codex; Mine=codex -m {model} go")
+        t = core._launch_agent_cmd(self.c, pid, "Codex", "astra", "high")
+        self.assertEqual(t["command"], f"codex -m gpt-6-astra -c model_reasoning_effort=high --add-dir {rd} "
+                                       "'run river go in this folder and follow the briefing'")
+        self.assertEqual((t["model"], t["model_id"], t["env"]), ("astra", "gpt-6-astra", {"RIVER_MODEL": "astra"}))
+        self.assertEqual(core._launch_agent_cmd(self.c, pid, "Mine", "terra")["command"], "codex -m gpt-5.6-terra go")
+        # Claude Code takes the ladder names as they are.
+        self.assertEqual(core._launch_agent_cmd(self.c, pid, "Claude Code", "fable", "max")["command"],
+                         "claude --model fable --effort max go --remote-control")
+        # A new release: change the list, per project if needed; a name with no entry goes as it is.
+        core.config_set(self.c, "codex_model_ids", "astra=gpt-7-astra", project="shop")
+        self.assertIn("-m gpt-7-astra ", core._launch_agent_cmd(self.c, pid, "Codex", "astra")["command"])
+        self.assertIn("-m sol ", core._launch_agent_cmd(self.c, pid, "Codex", "sol")["command"])
+        self.assertIn("-m gpt-6.1-sol ", core._launch_agent_cmd(self.c, None, "Codex", "sol")["command"])
+        with self.assertRaisesRegex(RiverError, "name=id"):
+            core.config_set(self.c, "codex_model_ids", "astra gpt-6-astra")
+        # Effort: Codex levels, or the model's own when the Codex model cache lists it.
+        with self.assertRaisesRegex(RiverError, "not minimal"):
+            core._launch_agent_cmd(self.c, None, "Codex", "sol", "minimal")
+        Path(codex_home.name, "models_cache.json").write_text(json.dumps({"models": [
+            {"slug": "gpt-6-luna", "supported_reasoning_levels": [{"effort": e} for e in ("low", "medium", "high")]}]}))
+        self.assertIn("model_reasoning_effort=high", core._launch_agent_cmd(self.c, None, "Codex", "luna", "high")["command"])
+        with self.assertRaisesRegex(RiverError, "gpt-6-luna takes effort low, medium, high, not max"):
+            core._launch_agent_cmd(self.c, None, "Codex", "luna", "max")
+        # The dialog offers each agent the models of its family only, and the CLI's effort levels.
+        opts = {o["label"]: o for o in core.state(self.c)["launch_options"]}
+        self.assertEqual([m["name"] for m in opts["Codex"]["models"]], ["luna", "terra", "sol", "astra"])
+        self.assertEqual([m["name"] for m in opts["Claude Code"]["models"]], ["sonnet", "opus", "fable"])
+        self.assertEqual(opts["Codex"]["efforts"], ["low", "medium", "high", "xhigh", "max"])
 
     def test_a_launch_with_options_through_a_fake_runner(self):
         x = core.item_add(self.c, "shop", "work")["id"]
@@ -732,7 +771,7 @@ class LaunchProfiles(unittest.TestCase):
         self.assertEqual((core.setting(self.c, "codex_sandbox", project_id=pid),
                           core.setting(self.c, "codex_prompt", project_id=pid)), ("read-only", "run river go and follow it"))
         self.assertEqual(core._launch_agent_cmd(self.c, pid, "Codex", "sol")["command"],
-                         f"codex -m sol --sandbox read-only --add-dir {rd} 'run river go and follow it'")
+                         f"codex -m gpt-6.1-sol --sandbox read-only --add-dir {rd} 'run river go and follow it'")
         self.assertEqual(core._launch_agent_cmd(self.c, pid, "Planner")["command"],
                          "claude --permission-mode plan go --remote-control")
         # A remote-control name, or no prompt: custom, since a profile would change them.

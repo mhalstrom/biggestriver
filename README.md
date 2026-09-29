@@ -207,10 +207,17 @@ differ (`river config set claude_remote_control off --project shop`):
 | `claude_prompt`, `codex_prompt` | the first prompt | `go`; `run river go in this folder and follow the briefing` |
 | `codex_sandbox` | `--sandbox` | Codex's own |
 | `codex_approval` | `--ask-for-approval` | Codex's own |
+| `claude_model_ids`, `codex_model_ids` | the id the CLI gets for a ladder name | none; `luna=gpt-6-luna, terra=gpt-5.6-terra, sol=gpt-6.1-sol, astra=gpt-6-astra` |
 
 The model and effort go in as `--model`/`--effort` (Claude Code) and
 `-m`/`-c model_reasoning_effort=` (Codex); Codex also gets `--add-dir` for
-the queue folder. Codex has no Remote Control flag for one session. An entry
+the queue folder. The CLI gets the model's id from `<prefix>model_ids`
+(`codex -m gpt-6-astra` for `astra`); a name with no entry goes as it is,
+which suits Claude Code (`claude --model fable`). Codex ids change with each
+OpenAI release: then change `codex_model_ids`. River keeps the ladder name
+everywhere else (limits, `RIVER_MODEL`, the page). A Codex effort that the
+model does not take (from Codex's model cache, `~/.codex/models_cache.json`)
+is refused before the launch. Codex has no Remote Control flag for one session. An entry
 can set an option for itself (`Plan=@claude-code permission_mode=plan`), the
 launch dialog can change the toggles and modes for one start, and the setup
 guide edits them. Any other command is custom: it takes the dialog's choice

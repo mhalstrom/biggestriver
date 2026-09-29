@@ -1002,7 +1002,7 @@ function renderSetup(st) {
         ? `<label style="display:inline-flex;gap:4px;align-items:center;margin-right:10px" title="${esc(o.text)}"><input type="checkbox" data-su-opt="${esc(o.setting)}" ${o.value === "on" ? "checked" : ""}>${esc(name)}</label>`
         : o.kind === "choice"
         ? `<label style="display:inline-flex;gap:4px;align-items:center;margin-right:10px" title="${esc(o.text)}">${esc(name)}<select data-su-opt="${esc(o.setting)}"><option value="">the agent's own</option>${o.choices.map(c => `<option ${c === o.value ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></label>`
-        : `<label style="display:inline-flex;gap:4px;align-items:center;margin-right:10px" title="${esc(o.text)}">${esc(name)}<input data-su-opt="${esc(o.setting)}" value="${esc(o.value)}" style="width:${o.name === "prompt" ? 260 : 140}px"></label>`;
+        : `<label style="display:inline-flex;gap:4px;align-items:center;margin-right:10px" title="${esc(o.text)}">${esc(name)}<input data-su-opt="${esc(o.setting)}" value="${esc(o.value)}" style="width:${o.name === "model_ids" ? 380 : o.name === "prompt" ? 260 : 140}px"></label>`;
     }).join("")}</div>`).join("")
       + `<div class="muted" style="font-size:12px">For every project; set one project apart in Settings (for example claude_remote_control with the project scope). The launch dialog can change the toggles for one start.</div>`, "");
   // A first task, then an agent that takes it.
