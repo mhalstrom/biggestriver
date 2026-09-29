@@ -191,12 +191,35 @@ own family, so give one model per family to limit both (`--min-model opus,sol`).
 On the page, every button that starts an agent (Start, Dispatch, Open agent,
 Claim next with an agent, Deploy now) opens one dialog: the agent, the model
 (only the agent's family, inside the item's limits, the recommendation
-preselected), the effort, the work, and a new tab or window. The launch_agents
-command takes the choice through `{model}` and `{effort}`
-(`claude --model {model} --effort {effort} go --remote-control`); with no
-choice, the flag before a placeholder drops out. The session gets `RIVER_MODEL`.
+preselected), the effort, the agent's launch options, the work, and a new tab
+or window. The session gets `RIVER_MODEL`.
+
+Claude Code and Codex start from launch profiles: a launch_agents entry
+`Claude Code=@claude-code` or `Codex=@codex`, and river builds the command
+from the platform's options. Each option is a setting, so a project can
+differ (`river config set claude_remote_control off --project shop`):
+
+| Setting | Flag | Default |
+|---|---|---|
+| `claude_remote_control` | `--remote-control` | on |
+| `claude_permission_mode` | `--permission-mode` | Claude Code's own |
+| `claude_args`, `codex_args` | more arguments before the prompt | none |
+| `claude_prompt`, `codex_prompt` | the first prompt | `go`; `run river go in this folder and follow the briefing` |
+| `codex_sandbox` | `--sandbox` | Codex's own |
+| `codex_approval` | `--ask-for-approval` | Codex's own |
+
+The model and effort go in as `--model`/`--effort` (Claude Code) and
+`-m`/`-c model_reasoning_effort=` (Codex); Codex also gets `--add-dir` for
+the queue folder. Codex has no Remote Control flag for one session. An entry
+can set an option for itself (`Plan=@claude-code permission_mode=plan`), the
+launch dialog can change the toggles and modes for one start, and the setup
+guide edits them. Any other command is custom: it takes the dialog's choice
+through `{model}` and `{effort}`; with no choice, the flag before a
+placeholder drops out. river turned an older Claude Code or Codex command
+that a profile builds exactly into a profile once; `river config get
+launch_agents` says what changed.
 From the command line, `river launch [--project P | --item N] [--agent A]
-[--model M] [--effort E] [--tab|--window] [--dry-run]` does the same as the
+[--model M] [--effort E] [--option NAME=VALUE] [--tab|--window] [--dry-run]` does the same as the
 dialog (a manager session uses it); `--dry-run` prints the project, the item,
 and the command without opening a terminal.
 Start with the work left at "Next" spreads sessions: first the project with

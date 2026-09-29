@@ -540,6 +540,9 @@ def build_parser():
     x.add_argument("--agent", help="a launch_agents label (default: the first)")
     x.add_argument("--model", help="model for the session (the item's limits apply)")
     x.add_argument("--effort", help="effort level for the session")
+    x.add_argument("--option", action="append", default=[], metavar="NAME=VALUE",
+                   help="a launch profile option for this session, e.g. remote_control=off, permission_mode=plan, "
+                        "sandbox=read-only (repeatable)")
     g = x.add_mutually_exclusive_group()
     g.add_argument("--tab", dest="launch_in", action="store_const", const="tab")
     g.add_argument("--window", dest="launch_in", action="store_const", const="window")
@@ -1135,15 +1138,21 @@ def dispatch(conn, a, actor):
             return core.goal_reopen(conn, a.name, actor)
     if c == "launch":
         from . import server
+        opts = {}
+        for o in a.option:
+            k, sep, v = o.partition("=")
+            if not sep:
+                raise RiverError(f"--option {o!r} needs the form name=value, for example remote_control=off")
+            opts[k.strip()] = v.strip()
         if a.dry_run:
             t = core.launch_target(conn, a.project, a.agent, a.item, a.model, a.effort, a.launch_in,
-                                   spread=a.project is None and a.item is None)
+                                   spread=a.project is None and a.item is None, options=opts or None)
             return {**t, "dry_run": True, "would_push_to": core.waiting_agent_for(conn, t["project"], t["item"]["id"])}
         if a.item is not None:
             return server.dispatch_item(conn, a.item, agent=a.agent, actor=actor, model=a.model, effort=a.effort,
-                                        launch_in=a.launch_in)
+                                        launch_in=a.launch_in, options=opts or None)
         return server.launch_agent(conn, a.project, agent=a.agent, actor=actor, model=a.model, effort=a.effort,
-                                   launch_in=a.launch_in)
+                                   launch_in=a.launch_in, options=opts or None)
     if c == "stop":
         if a.kill:
             return core.kill_agent(conn, a.agent, a.reason, actor)
@@ -1379,9 +1388,12 @@ def dispatch(conn, a, actor):
     if c == "config":
         if a.ccmd == "get":
             if a.key:
-                return {"key": a.key, "value": core.mask(a.key, core.setting(
+                res = {"key": a.key, "value": core.mask(a.key, core.setting(
                     conn, a.key, item_id=a.item, agent=a.agent,
                     project_id=core._project(conn, a.project)["id"] if a.project else None, kind=a.kind))}
+                if a.key == "launch_agents" and core.launch_migration_note(conn):
+                    res["migrated"] = core.launch_migration_note(conn)
+                return res
             return core.config_list(conn)
         if a.ccmd == "set":
             return core.config_set(conn, a.key, a.value, a.project, a.item, a.agent, actor, a.kind)
@@ -2173,6 +2185,9 @@ def render(a, res):
                 print(f"{k} = {v} (default)")
             for o in res["overrides"]:
                 print(f"{o['key']} = {o['value']} ({o['scope']})")
+        elif "migrated" in res:
+            print(res["value"])
+            print(res["migrated"])
         else:
             print(json.dumps(res, ensure_ascii=False))
         return

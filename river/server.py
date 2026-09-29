@@ -91,15 +91,16 @@ def _can_open_terminal(runner, hint):
         raise RiverError(f"starting an agent from the page works on macOS and Windows only; start one yourself: {hint}")
 
 
-def launch_agent(conn, project=None, runner=None, agent=None, actor=None, model=None, effort=None, launch_in=None):
+def launch_agent(conn, project=None, runner=None, agent=None, actor=None, model=None, effort=None, launch_in=None,
+                 options=None):
     """Open a Terminal window in the project folder of the most important ready agent item and run
-    the command of the chosen launch_agents entry there (default `claude go --remote-control`), so one click starts one
+    the command of the chosen launch_agents entry there (default: the Claude Code profile), so one click starts one
     agent session. macOS and Windows."""
     # With no project named, Start spreads sessions: first a project with ready work and no agent yet.
     # A session that waits for work in that project (river wait) gets the item: no new session needed.
     # Else the new session gets a name and the item is pushed to it, so the next Start sees the project covered.
     import secrets
-    t = core.launch_target(conn, project, agent, None, model, effort, launch_in, spread=project is None)
+    t = core.launch_target(conn, project, agent, None, model, effort, launch_in, spread=project is None, options=options)
     waiting = core.waiting_agent_for(conn, t["project"], t["item"]["id"])
     if waiting:
         core.push(conn, t["item"]["id"], waiting, "from the Start button: you were waiting for work", actor)
@@ -112,12 +113,14 @@ def launch_agent(conn, project=None, runner=None, agent=None, actor=None, model=
     return {**t, "session_name": name}
 
 
-def dispatch_item(conn, item_id, runner=None, agent=None, actor=None, model=None, effort=None, launch_in=None):
+def dispatch_item(conn, item_id, runner=None, agent=None, actor=None, model=None, effort=None, launch_in=None,
+                  options=None):
     """Start work on one ready item: a session that waits for work in its project gets it (push);
     else river names a new session, reserves the item for it (push), and opens the chosen agent in the
     project folder with RIVER_AGENT set to that name, so its first river go takes this item."""
     import secrets
-    t = core.launch_target(conn, agent=agent, item=item_id, model=model, effort=effort, launch_in=launch_in)
+    t = core.launch_target(conn, agent=agent, item=item_id, model=model, effort=effort, launch_in=launch_in,
+                           options=options)
     waiting = core.waiting_agent_for(conn, t["project"], t["item"]["id"])
     if waiting:
         core.push(conn, t["item"]["id"], waiting, "from the page: Dispatch; you were waiting for work", actor)
@@ -131,7 +134,7 @@ def dispatch_item(conn, item_id, runner=None, agent=None, actor=None, model=None
 
 
 def open_agent_on(conn, item_id, runner=None, agent=None, person=None, actor=None, model=None, effort=None,
-                  launch_in=None):
+                  launch_in=None, options=None):
     """Open an agent session for one item from its drawer. A ready item: Dispatch. A person's item: a
     session that does it together with the person. An item that waits: a session that first takes what
     blocks it. The session learns which from RIVER_FOCUS, which its river go reads."""
@@ -144,18 +147,18 @@ def open_agent_on(conn, item_id, runner=None, agent=None, person=None, actor=Non
     if it["doer"] == "human" or mine:
         focus = f"help:{it['id']}" + (f"@{person}" if person else "")
     elif it["ready"]:
-        return dispatch_item(conn, it["id"], runner, agent, actor, model, effort, launch_in)
+        return dispatch_item(conn, it["id"], runner, agent, actor, model, effort, launch_in, options)
     else:
         focus = f"unblock:{it['id']}"
     p = core._project(conn, it["project"])
     if not p["path"]:
         raise RiverError(f"project {p['name']} has no folder, so river cannot start a session there: "
                          f"river project path {p['name']} <folder>")
-    return {**_open_focused(conn, p, focus, runner, agent, model, effort, launch_in),
+    return {**_open_focused(conn, p, focus, runner, agent, model, effort, launch_in, options),
             "item": {"id": it["id"], "title": it["title"]}}
 
 
-def open_needs_you(conn, runner=None, agent=None, person=None, model=None, effort=None, launch_in=None):
+def open_needs_you(conn, runner=None, agent=None, person=None, model=None, effort=None, launch_in=None, options=None):
     """Needs you, Open agent: a session that works through everything that waits on the person, with
     them (the Copy prompt text), in the folder of the most important such item's project."""
     ann = core.annotate(conn)
@@ -166,11 +169,12 @@ def open_needs_you(conn, runner=None, agent=None, person=None, model=None, effor
     p = next((x for x in projects if x["path"]), None)
     if p is None:
         raise RiverError("no project has a folder, so river cannot start a session: river project path <name> <folder>")
-    return _open_focused(conn, p, "needs:" + (f"@{person}" if person else ""), runner, agent, model, effort, launch_in)
+    return _open_focused(conn, p, "needs:" + (f"@{person}" if person else ""), runner, agent, model, effort, launch_in,
+                         options)
 
 
 def deploy_now(conn, target, review=False, runner=None, agent=None, actor=None, model=None, effort=None,
-               launch_in=None):
+               launch_in=None, options=None):
     """Targets tab, Deploy now (or Review and deploy): when the deploy item (or its review) is ready and
     the target has no owner to alert, open an agent in a folder of the target's projects that takes it."""
     r = core.deploy_now(conn, target, review, actor)
@@ -178,7 +182,7 @@ def deploy_now(conn, target, review=False, runner=None, agent=None, actor=None, 
         return r
     p = _target_folder(conn, target)
     return {**r, **_open_focused(conn, p, f"{'review' if review else 'deploy'}:{target}", runner, agent,
-                                 model, effort, launch_in)}
+                                 model, effort, launch_in, options)}
 
 
 def _target_folder(conn, target):
@@ -227,11 +231,12 @@ def open_monitors(conn, runner=None, db=None):
     return out
 
 
-def _open_focused(conn, p, focus, runner, agent, model=None, effort=None, launch_in=None):
+def _open_focused(conn, p, focus, runner, agent, model=None, effort=None, launch_in=None, options=None):
     """Open the chosen agent in a project folder with RIVER_FOCUS set; its river go reads it."""
     _can_open_terminal(runner, f"cd {p['path']}, set RIVER_FOCUS={focus}, then claude go")
     t = {"project": p["name"], "path": p["path"], "focus": focus,
-         **core._launch_agent_cmd(conn, p["id"], agent, model, effort), "launch_in": core._launch_in(conn, p["id"], launch_in)}
+         **core._launch_agent_cmd(conn, p["id"], agent, model, effort, options),
+         "launch_in": core._launch_in(conn, p["id"], launch_in)}
     _open_terminal(t, {"RIVER_FOCUS": focus, **t["env"]}, runner)
     return t
 
@@ -248,7 +253,7 @@ def manage_command(cmd):
     return out
 
 
-def start_manager(conn, runner=None, agent=None, actor=None, model=None, effort=None, launch_in=None):
+def start_manager(conn, runner=None, agent=None, actor=None, model=None, effort=None, launch_in=None, options=None):
     """Start manager (the page's Manager section): the chosen agent with manage in place of go, in the folder
     of the first project that has one. Refuses while a manager is active."""
     import secrets
@@ -259,7 +264,7 @@ def start_manager(conn, runner=None, agent=None, actor=None, model=None, effort=
     if p is None:
         raise RiverError("no project has a folder, so river cannot start a session: river project path <name> <folder>")
     _can_open_terminal(runner, f"cd {p['path']} && claude manage")
-    t = {"project": p["name"], "path": p["path"], **core._launch_agent_cmd(conn, p["id"], agent, model, effort),
+    t = {"project": p["name"], "path": p["path"], **core._launch_agent_cmd(conn, p["id"], agent, model, effort, options),
          "launch_in": core._launch_in(conn, p["id"], launch_in)}
     t["command"] = manage_command(t["command"])
     name = f"manager-{secrets.token_hex(2)}"
@@ -277,7 +282,9 @@ def open_chat(conn, agent, runner=None):
     a = core.agent_status(conn, agent)
     if a.get("session_url"):
         return {"agent": agent, "url": a["session_url"]}
-    why = "it has no web link (start Claude Code with --remote-control for one)"
+    why = ("it has no web link: Remote Control is off for Claude Code (river config set claude_remote_control on)"
+           if core.setting(conn, "claude_remote_control") == "off"
+           else "it has no web link (start Claude Code with --remote-control for one)")
     if a.get("pid") and a.get("host") == core.this_host() and core.pid_alive(a["pid"]):
         try:
             tty = subprocess.run(["ps", "-o", "tty=", "-p", str(a["pid"])], capture_output=True, text=True,
@@ -446,13 +453,12 @@ def update_apply(repo=REPO, restart=_restart_soon):
     return {**update_status(repo, fetch=False), "updated": True, "from": st["head"], "commits": st["commits"]}
 
 
-# Agent CLIs the setup guide offers for the Start button. Each gets an explicit first prompt, so it works
-# even where the agent does not read the project's instruction file. {river_dir} becomes the folder of the
-# queue: Codex's sandbox writes only in the project folder unless --add-dir names another one.
+# Agent CLIs the setup guide offers for the Start button. Claude Code and Codex are launch profiles: river
+# builds their commands from their options (core.LAUNCH_PLATFORMS). The others get an explicit first prompt,
+# so they work even where the agent does not read the project's instruction file.
 KNOWN_AGENTS = [
-    ("Claude Code", "claude", "claude --model {model} --effort {effort} go --remote-control"),
-    ("Codex", "codex", 'codex -m {model} -c model_reasoning_effort={effort} --add-dir {river_dir} '
-                       '"run river go in this folder and follow the briefing"'),
+    ("Claude Code", "claude", "@claude-code"),
+    ("Codex", "codex", "@codex"),
     ("Grok", "grok", 'grok "run river go in this folder and follow the briefing"'),
     ("OpenCode", "opencode", 'opencode --prompt "run river go in this folder and follow the briefing"'),
     ("Gemini", "gemini", 'gemini -i "run river go in this folder and follow the briefing"'),
@@ -462,8 +468,14 @@ KNOWN_AGENTS = [
 def _agent_cmd(cmd):
     """A KNOWN_AGENTS command with {river_dir} filled in for this computer."""
     import shlex
-    d = str(core.db_path().expanduser().resolve().parent)
+    d = core.river_dir()
     return cmd.replace("{river_dir}", f'"{d}"' if PLATFORM == "win32" else shlex.quote(d))
+
+
+def _shown_cmd(conn, cmd):
+    """What an entry runs, as the setup guide shows it: a profile's command with its current options."""
+    prof = core.parse_profile(cmd)
+    return core.build_command(prof[0], core.profile_options(conn, *prof)) if prof else _agent_cmd(cmd)
 
 
 def _block_state(path):
@@ -489,7 +501,7 @@ def setup_status(conn):
     have = {label for label, _ in agents}
     # Agent programs as a new terminal finds them (the app itself has only Finder's short PATH).
     # Agents start in a new Terminal window, so that is where their programs must be found (on Windows: PATH).
-    exes = sorted({exe for _, exe, _ in KNOWN_AGENTS} | {c.split()[0] for _, c in agents})
+    exes = sorted({exe for _, exe, _ in KNOWN_AGENTS} | {core.entry_exe(c) for _, c in agents})
     term = _login_shell_which(exes) if PLATFORM != "win32" else {e: shutil.which(e) for e in exes}
     return {
         "done": core.setting(conn, "setup_done") == "on",
@@ -503,9 +515,11 @@ def setup_status(conn):
         "skills": {n: ("installed" if (skills / n / "SKILL.md").is_file() else "missing") for n in ("river", "river-planner")},
         "launch_agents": [label for label, _ in agents],
         # Each Start button agent, and whether its program is on this computer (the first word of its command).
-        "start_agents": [{"label": label, "found": bool(term.get(cmd.split()[0]))} for label, cmd in agents],
-        "agent_clis": [{"label": label, "found": bool(term.get(exe)), "added": label in have, "command": _agent_cmd(cmd)}
-                       for label, exe, cmd in KNOWN_AGENTS],
+        "start_agents": [{"label": label, "found": bool(term.get(core.entry_exe(cmd)))} for label, cmd in agents],
+        "agent_clis": [{"label": label, "found": bool(term.get(exe)), "added": label in have,
+                        "command": _shown_cmd(conn, cmd)} for label, exe, cmd in KNOWN_AGENTS],
+        # The options of each launch profile the Start button uses, for toggles (Settings > Setup).
+        "launch_profiles": core.launch_profiles(conn),
         "notify_channels": core._channels(core.setting(conn, "notify_channels")),
         "ntfy_ready": bool(core.setting(conn, "ntfy_topic")),
         "river_cmd": river_command_status(),
@@ -661,7 +675,7 @@ def setup_agent_add(conn, label, actor=None):
     if label not in {a for a, _ in agents}:
         # The first agent is the Start button's default: when its program is not on this computer (the
         # default Claude Code on a Mac that has only Codex), the agent added now becomes the default.
-        first = agents[0][1].split()[0] if agents else None
+        first = core.entry_exe(agents[0][1]) if agents else None
         missing = first and PLATFORM != "win32" and not _login_shell_which([first])[first]
         agents = [(label, cmd)] + agents if missing else agents + [(label, cmd)]
         core.config_set(conn, "launch_agents", "; ".join(f"{a}={c}" for a, c in agents), actor=actor)
@@ -675,8 +689,9 @@ def setup_ntfy(conn, actor=None):
 
 # Operations the page may call. Each maps JSON args to one core function.
 def _launch_args(a):
-    """The launch dialog's choices: model, effort, and tab or window (each optional)."""
-    return {k: a.get(k) or None for k in ("model", "effort", "launch_in")}
+    """The launch dialog's choices: model, effort, tab or window, and profile options (each optional)."""
+    return {**{k: a.get(k) or None for k in ("model", "effort", "launch_in")},
+            "options": {k: str(v) for k, v in (a.get("options") or {}).items()} or None}
 
 
 OPS = {

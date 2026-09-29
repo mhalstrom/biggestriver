@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -73,9 +74,11 @@ DEFAULT_SETTINGS = {
     "auto_continue": "on",
     "due_warn_before": "3d",
     # Agents the page can start, as "Label=command" entries separated by ";". The first is the default.
-    # Claude Code starts with Remote Control, so the session has a web link that notifications open.
-    # {model} and {effort} take the launch dialog's choices; with no choice the flag before them drops out.
-    "launch_agents": "Claude Code=claude --model {model} --effort {effort} go --remote-control",
+    # "@claude-code" or "@codex" is a launch profile: river builds the command from the platform's options
+    # (the settings claude_* and codex_*, below; "@codex sandbox=read-only" sets one for that entry alone).
+    # Any other command is custom: {model} and {effort} take the launch dialog's choices, and with no
+    # choice the flag before them drops out.
+    "launch_agents": "Claude Code=@claude-code",
     "launch_in": "tab",
     # How river reaches a running session through its own platform, so a working agent sees a queue
     # instruction, a stop, or a message at once: "Label=ENV_VAR: command" entries separated by ";". river go
@@ -125,7 +128,40 @@ DEFAULT_SETTINGS = {
     "default_max_model": "",
 }
 
+# Agent platforms river can start from a launch profile ("Label=@claude-code" in launch_agents). Each option
+# maps to the CLI's own flags, as `claude --help` and `codex --help` name them. Codex has no Remote Control
+# flag for one session (codex remote-control runs a daemon), so it has no remote_control option. Each option
+# is also a setting, <prefix><option>, so a project can differ (most specific wins).
+LAUNCH_PLATFORMS = {
+    "claude-code": {"label": "Claude Code", "exe": "claude", "family": "claude", "prefix": "claude_", "options": {
+        "remote_control": {"kind": "toggle", "default": "on",
+                           "text": "Remote Control: the session gets a web link that notifications and Open chat use"},
+        "permission_mode": {"kind": "choice", "default": "",
+                            "choices": ["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"],
+                            "text": "permission mode (--permission-mode); empty: Claude Code's own setting"},
+        "args": {"kind": "text", "default": "", "text": "more arguments, put before the prompt"},
+        "prompt": {"kind": "text", "default": "go", "text": "the first prompt"},
+    }},
+    "codex": {"label": "Codex", "exe": "codex", "family": "openai", "prefix": "codex_", "options": {
+        "sandbox": {"kind": "choice", "default": "", "choices": ["read-only", "workspace-write", "danger-full-access"],
+                    "text": "sandbox (--sandbox); empty: Codex's own setting. river adds --add-dir for the queue folder"},
+        "approval": {"kind": "choice", "default": "", "choices": ["on-request", "never"],
+                     "text": "when Codex asks before it runs a command (--ask-for-approval); empty: Codex's own setting"},
+        "args": {"kind": "text", "default": "", "text": "more arguments, put before the prompt"},
+        "prompt": {"kind": "text", "default": "run river go in this folder and follow the briefing",
+                   "text": "the first prompt (Codex does not read CLAUDE.md)"},
+    }},
+}
+for _pl in LAUNCH_PLATFORMS.values():
+    for _o, _spec in _pl["options"].items():
+        DEFAULT_SETTINGS[_pl["prefix"] + _o] = _spec["default"]
+
 SCHEMA = """
+-- One-time data changes that already ran (key: the change).
+CREATE TABLE IF NOT EXISTS meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS targets (
   id                INTEGER PRIMARY KEY,
   name              TEXT NOT NULL UNIQUE,
@@ -560,6 +596,7 @@ def connect(path: Path | str | None = None) -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout=10000")
     conn.executescript(SCHEMA)
     _migrate(conn)
+    _migrate_launch_agents(conn)
     return conn
 
 
@@ -725,6 +762,8 @@ def config_set(conn, key, value, project=None, item=None, agent=None, actor=None
             raise RiverError(f"{key} takes a whole number")
     elif key == "launch_agents":
         parse_launch_agents(value)
+    elif _platform_setting(key):
+        _check_option(*_platform_setting(key), value)
     elif key == "model_ladder":
         parse_ladder(value)
     elif key == "native_message":
@@ -4882,7 +4921,8 @@ def prompt_for_all(conn, person=None):
 
 
 def parse_launch_agents(value):
-    """'Claude Code=claude go; Codex=codex "run river go"' -> [("Claude Code", "claude go"), ...]."""
+    """'Claude Code=@claude-code; Grok=grok "run river go"' -> [("Claude Code", "@claude-code"), ...]. An entry
+    that starts with @ is a launch profile; its platform and options are checked here."""
     out = []
     for part in (value or "").split(";"):
         if not part.strip():
@@ -4890,11 +4930,221 @@ def parse_launch_agents(value):
         label, sep, cmd = part.partition("=")
         if not sep or not label.strip() or not cmd.strip():
             raise RiverError(f"launch_agents entry {part.strip()!r} needs the form Label=command, for example "
-                             f"'Claude Code=claude go; Codex=codex \"run river go in this folder and follow the briefing\"'")
+                             f"'Claude Code=@claude-code; Codex=@codex; Grok=grok \"run river go in this folder and follow the briefing\"'")
+        parse_profile(cmd.strip())
         out.append((label.strip(), cmd.strip()))
     if not out:
         raise RiverError("launch_agents needs at least one Label=command entry")
     return out
+
+
+def parse_profile(cmd):
+    """'@codex sandbox=read-only' -> ("codex", {"sandbox": "read-only"}); a custom command -> None."""
+    import shlex
+    if not cmd.startswith("@"):
+        return None
+    try:
+        words = shlex.split(cmd[1:])
+    except ValueError as e:
+        raise RiverError(f"launch profile {cmd!r}: {e}")
+    if not words or words[0] not in LAUNCH_PLATFORMS:
+        raise RiverError(f"launch profile {cmd!r}: the platform is one of {', '.join('@' + p for p in LAUNCH_PLATFORMS)}")
+    opts = {}
+    for w in words[1:]:
+        k, sep, v = w.partition("=")
+        if not sep:
+            raise RiverError(f"launch profile {cmd!r}: {w!r} needs the form option=value")
+        _check_option(words[0], k, v)
+        opts[k] = v
+    return words[0], opts
+
+
+def _platform_setting(key):
+    """(platform, option) when the setting is a launch profile option, e.g. claude_remote_control."""
+    for name, pl in LAUNCH_PLATFORMS.items():
+        if key.startswith(pl["prefix"]) and key[len(pl["prefix"]):] in pl["options"]:
+            return name, key[len(pl["prefix"]):]
+    return None
+
+
+def _check_option(platform, opt, value):
+    spec = LAUNCH_PLATFORMS[platform]["options"].get(opt)
+    if spec is None:
+        raise RiverError(f"{platform} has no option {opt!r}; it has {', '.join(LAUNCH_PLATFORMS[platform]['options'])}")
+    if spec["kind"] == "toggle" and value not in ("on", "off"):
+        raise RiverError(f"{platform} {opt} is on or off")
+    if spec["kind"] == "choice" and value and value not in spec["choices"]:
+        raise RiverError(f"{platform} {opt} is one of {', '.join(spec['choices'])} (or empty for the CLI's own setting)")
+    if opt == "prompt" and not value.strip():
+        raise RiverError(f"{platform} prompt: the session needs a first prompt, for example {spec['default']!r}")
+    if ";" in value:
+        raise RiverError(f"{platform} {opt}: ';' separates launch_agents entries; leave it out")
+
+
+def _shell_quote(s):
+    import shlex
+    if sys.platform == "win32":
+        return f'"{s}"' if not s or re.search(r'[\s"&|<>^%]', s) else s
+    return shlex.quote(s)
+
+
+def river_dir():
+    """The folder of the queue, which an agent's sandbox must let it write (Codex --add-dir)."""
+    return str(db_path().expanduser().resolve().parent)
+
+
+def profile_options(conn, platform, inline=None, project_id=None, chosen=None):
+    """A profile's option values: the launch dialog's choice, else the entry's own, else the settings."""
+    pl = LAUNCH_PLATFORMS[platform]
+    for k, v in (chosen or {}).items():
+        spec = pl["options"].get(k)
+        if spec is None or spec["kind"] == "text":
+            raise RiverError(f"{pl['label']} has no option {k!r} to choose at launch; it has "
+                             f"{', '.join(o for o, sp in pl['options'].items() if sp['kind'] != 'text')}")
+        _check_option(platform, k, v)
+    return {k: (chosen or {}).get(k, (inline or {}).get(k, setting(conn, pl["prefix"] + k, project_id=project_id)))
+            for k in pl["options"]}
+
+
+def build_command(platform, opts, model=None, effort=None):
+    """The command line that starts a platform's CLI with these options."""
+    q = _shell_quote
+    if platform == "claude-code":
+        parts = ["claude"] + (["--model", model] if model else []) + (["--effort", effort] if effort else [])
+        parts += ["--permission-mode", opts["permission_mode"]] if opts.get("permission_mode") else []
+        parts += [opts["args"].strip()] if opts.get("args", "").strip() else []
+        # The prompt goes before --remote-control: that flag takes an optional session name after it.
+        parts.append(q(opts["prompt"]))
+        parts += ["--remote-control"] if opts.get("remote_control") == "on" else []
+    elif platform == "codex":
+        parts = ["codex"] + (["-m", model] if model else []) + (["-c", f"model_reasoning_effort={effort}"] if effort else [])
+        parts += ["--sandbox", opts["sandbox"]] if opts.get("sandbox") else []
+        parts += ["--ask-for-approval", opts["approval"]] if opts.get("approval") else []
+        parts += ["--add-dir", q(river_dir())]
+        parts += [opts["args"].strip()] if opts.get("args", "").strip() else []
+        parts.append(q(opts["prompt"]))
+    else:
+        raise RiverError(f"no command builder for {platform}")
+    return " ".join(parts)
+
+
+def entry_exe(cmd):
+    """The program a launch_agents command starts (a profile's CLI, else the first word)."""
+    prof = parse_profile(cmd)
+    if prof:
+        return LAUNCH_PLATFORMS[prof[0]]["exe"]
+    return cmd.split()[0] if cmd.split() else ""
+
+
+def profile_from_command(cmd):
+    """An old hand-written command that a profile can build exactly -> (platform, options); else None.
+    Unknown flags, a fixed model, or another --add-dir keep the command custom, so nothing is lost."""
+    import shlex
+    try:
+        w = shlex.split(cmd)
+    except ValueError:
+        return None
+    if not w:
+        return None
+    exe = Path(w[0]).name.lower()
+    platform = {"claude": "claude-code", "codex": "codex"}.get(exe)
+    if platform is None:
+        return None
+    opts, prompt, i = {}, None, 1
+    if platform == "claude-code":
+        opts["remote_control"] = "off"
+    choices = LAUNCH_PLATFORMS[platform]["options"]
+    while i < len(w):
+        t, nxt = w[i], (w[i + 1] if i + 1 < len(w) else None)
+        if platform == "claude-code" and t == "--model" and nxt == "{model}" or \
+                platform == "claude-code" and t == "--effort" and nxt == "{effort}" or \
+                platform == "codex" and t in ("-m", "--model") and nxt == "{model}" or \
+                platform == "codex" and t in ("-c", "--config") and nxt == "model_reasoning_effort={effort}":
+            i += 2
+        elif platform == "claude-code" and t == "--remote-control":
+            if nxt is not None and not nxt.startswith("-"):
+                return None  # a session name, or a prompt that the flag would take as one
+            opts["remote_control"] = "on"
+            i += 1
+        elif platform == "claude-code" and t == "--permission-mode" and nxt in choices["permission_mode"]["choices"]:
+            opts["permission_mode"] = nxt
+            i += 2
+        elif platform == "codex" and t in ("-s", "--sandbox") and nxt in choices["sandbox"]["choices"]:
+            opts["sandbox"] = nxt
+            i += 2
+        elif platform == "codex" and t in ("-a", "--ask-for-approval") and nxt in choices["approval"]["choices"]:
+            opts["approval"] = nxt
+            i += 2
+        elif platform == "codex" and t == "--add-dir" and nxt is not None and (
+                nxt == "{river_dir}" or os.path.realpath(os.path.expanduser(nxt)) == os.path.realpath(river_dir())):
+            i += 2
+        elif not t.startswith("-") and prompt is None and t.strip() and ";" not in t:
+            prompt = t
+            i += 1
+        else:
+            return None
+    if prompt is None:
+        return None
+    opts["prompt"] = prompt
+    return platform, opts
+
+
+def _migrate_launch_agents(conn):
+    """Turn hand-written launch_agents commands that a profile builds exactly into profiles (@claude-code,
+    @codex). An option that differs from the built-in default becomes a setting in the same scope, or, for a
+    second entry of the same platform there, part of the entry. The event says what changed."""
+    if conn.execute("SELECT 1 FROM meta WHERE key='launch_profiles'").fetchone():
+        return
+    rows = conn.execute("SELECT scope, value FROM settings WHERE key='launch_agents'").fetchall()
+    todo = []
+    for r in rows:
+        try:
+            agents = parse_launch_agents(r["value"])
+        except RiverError:
+            continue
+        if any(profile_from_command(c) for _, c in agents):
+            todo.append(r["scope"])
+    with tx(conn):
+        if conn.execute("SELECT 1 FROM meta WHERE key='launch_profiles'").fetchone():
+            return  # another process ran it just now
+        conn.execute("INSERT INTO meta(key, value) VALUES ('launch_profiles', ?)", (iso(now()),))
+        for scope in todo:
+            r = conn.execute("SELECT value FROM settings WHERE key='launch_agents' AND scope=?", (scope,)).fetchone()
+            if not r:
+                continue
+            agents, notes, base = parse_launch_agents(r["value"]), [], {}
+            out = []
+            for label, cmd in agents:
+                got = profile_from_command(cmd)
+                if not got:
+                    out.append((label, cmd))
+                    continue
+                platform, opts = got
+                pl = LAUNCH_PLATFORMS[platform]
+                if platform not in base:
+                    base[platform] = {}
+                    for k in pl["options"]:
+                        have = conn.execute("SELECT value FROM settings WHERE scope=? AND key=?",
+                                            (scope, pl["prefix"] + k)).fetchone()
+                        base[platform][k] = have["value"] if have else pl["options"][k]["default"]
+                        if not have and opts.get(k, base[platform][k]) != base[platform][k]:
+                            conn.execute("INSERT INTO settings(scope,key,value) VALUES (?,?,?)",
+                                         (scope, pl["prefix"] + k, opts[k]))
+                            base[platform][k] = opts[k]
+                            notes.append(f"{pl['prefix']}{k}={opts[k]}")
+                inline = {k: v for k, v in opts.items() if v != base[platform][k]}
+                out.append((label, "@" + platform + "".join(f" {k}={_shell_quote(v)}" for k, v in inline.items())))
+                notes.insert(0, f"{label}: {cmd} -> {out[-1][1]}")
+            new = "; ".join(f"{a}={c}" for a, c in out)
+            conn.execute("UPDATE settings SET value=? WHERE key='launch_agents' AND scope=?", (new, scope))
+            _event(conn, None, "river", f"launch_agents migrated to launch profiles ({scope}): " + "; ".join(notes))
+
+
+def launch_migration_note(conn):
+    """What the move to launch profiles changed, for river config get launch_agents."""
+    r = conn.execute("SELECT at, change FROM events WHERE change LIKE 'launch_agents migrated%' ORDER BY id DESC LIMIT 1"
+                     ).fetchone()
+    return f"{r['change']} (on {r['at']})" if r else None
 
 
 def waiting_agent_for(conn, project, item_id=None):
@@ -4929,7 +5179,8 @@ def covered_projects(conn, ann=None):
     return covered
 
 
-def launch_target(conn, project=None, agent=None, item=None, model=None, effort=None, launch_in=None, spread=False):
+def launch_target(conn, project=None, agent=None, item=None, model=None, effort=None, launch_in=None, spread=False,
+                  options=None):
     """Where and how a new agent session should start: the folder of the project that holds the most
     important ready item an agent can take (or of the project named, or of the one item named), and the
     command of the chosen launch_agents entry (the first when none is named). Refuses when nothing is ready there.
@@ -4975,7 +5226,7 @@ def launch_target(conn, project=None, agent=None, item=None, model=None, effort=
         if not ok:
             raise RiverError(f"#{top['id']} {why}; pick another model")
     return {"project": p["name"], "path": p["path"], "item": {"id": top["id"], "title": top["title"]},
-            "ready": len(pool), "why": why, **_launch_agent_cmd(conn, p["id"], agent, model, effort),
+            "ready": len(pool), "why": why, **_launch_agent_cmd(conn, p["id"], agent, model, effort, options),
             "launch_in": _launch_in(conn, p["id"], launch_in)}
 
 
@@ -4994,8 +5245,10 @@ def _launch_in(conn, project_id, choice=None):
     return choice or setting(conn, "launch_in", project_id=project_id)
 
 
-def _launch_agent_cmd(conn, project_id, agent, model=None, effort=None):
-    """The chosen launch_agents entry, with {model} and {effort} filled in. The session also gets RIVER_MODEL."""
+def _launch_agent_cmd(conn, project_id, agent, model=None, effort=None, options=None):
+    """The chosen launch_agents entry as a command: a profile builds it from its options (options: the
+    launch dialog's choices), a custom command gets {model} and {effort} filled in. The session also gets
+    RIVER_MODEL."""
     agents = parse_launch_agents(setting(conn, "launch_agents", project_id=project_id))
     pick = agents[0] if agent is None else next((a for a in agents if a[0] == agent), None)
     if pick is None:
@@ -5003,7 +5256,16 @@ def _launch_agent_cmd(conn, project_id, agent, model=None, effort=None):
     model = _check_model_name(model) if model else None
     if effort and not re.match(r"^[a-z][a-z0-9_-]{0,31}$", effort):
         raise RiverError(f"effort {effort!r}: a level such as low, medium, high")
-    return {"agent": pick[0], "command": fill_launch_command(pick[1], model, effort or None),
+    prof = parse_profile(pick[1])
+    if prof:
+        opts = profile_options(conn, prof[0], prof[1], project_id, options)
+        cmd = build_command(prof[0], opts, model, effort or None)
+    elif options:
+        raise RiverError(f"{pick[0]} is a custom command ({pick[1]}), so it has no launch options; "
+                         f"give it a profile in launch_agents (@claude-code or @codex) for them")
+    else:
+        opts, cmd = {}, fill_launch_command(pick[1], model, effort or None)
+    return {"agent": pick[0], "command": cmd, "platform": prof[0] if prof else None, "options": opts,
             "model": model, "effort": effort or None, "env": {"RIVER_MODEL": model} if model else {}}
 
 
@@ -5045,15 +5307,37 @@ def launch_options(conn):
     levels = _levels(setting(conn, "effort_levels"))
     out = []
     for label, cmd in parse_launch_agents(setting(conn, "launch_agents")):
-        exe = Path(cmd.split()[0]).name.lower() if cmd.split() else ""
-        fam = AGENT_FAMILIES.get(exe)
+        prof = parse_profile(cmd)
+        fam = LAUNCH_PLATFORMS[prof[0]]["family"] if prof else AGENT_FAMILIES.get(Path(entry_exe(cmd)).name.lower())
         fam = fam if fam in ladder else None
-        out.append({"label": label, "family": fam,
+        out.append({"label": label, "family": fam, "platform": prof[0] if prof else None,
                     "models": [{"name": m, "note": MODEL_NOTES.get(m, ""), "family": f}
                                for f, ms in ladder.items() if fam in (None, f) for m in ms],
                     "efforts": PLATFORM_EFFORTS.get(fam, levels),
-                    "takes_model": "{model}" in cmd, "takes_effort": "{effort}" in cmd})
+                    "takes_model": bool(prof) or "{model}" in cmd, "takes_effort": bool(prof) or "{effort}" in cmd,
+                    # The options the dialog can change for one launch, preset from the entry and the settings.
+                    "options": profile_option_list(conn, prof[0], prof[1], kinds=("toggle", "choice")) if prof else []})
     return out
+
+
+def profile_option_list(conn, platform, inline=None, project_id=None, kinds=("toggle", "choice", "text")):
+    """A platform's options with their values, for the page: [{name, setting, kind, choices, value, text}]."""
+    pl = LAUNCH_PLATFORMS[platform]
+    vals = profile_options(conn, platform, inline, project_id)
+    return [{"name": k, "setting": pl["prefix"] + k, "kind": sp["kind"], "choices": sp.get("choices", []),
+             "value": vals[k], "text": sp["text"], "fixed": k in (inline or {})}
+            for k, sp in pl["options"].items() if sp["kind"] in kinds]
+
+
+def launch_profiles(conn):
+    """Settings > Setup: each platform that a launch_agents entry uses, with all its options."""
+    used = []
+    for _, cmd in parse_launch_agents(setting(conn, "launch_agents")):
+        prof = parse_profile(cmd)
+        if prof and prof[0] not in used:
+            used.append(prof[0])
+    return [{"platform": p, "label": LAUNCH_PLATFORMS[p]["label"], "options": profile_option_list(conn, p)}
+            for p in used]
 
 
 def recent_events(conn, limit=40):

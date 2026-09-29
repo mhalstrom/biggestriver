@@ -57,6 +57,7 @@ Stop when the user tells you to, and tell the user what you did.
   agent platform's own messaging when river knows it).
 - `river stop <agent> --reason "..."`: a request; the agent commits, releases, and ends.
 - `river config set launch_agents|default_model|default_effort|default_min_model|default_max_model ...`
+- `river launch ... --option remote_control=off` (or `permission_mode=plan`, `sandbox=read-only`): a launch profile option for one session; the settings `claude_*` and `codex_*` hold the defaults
 - `river target give <target> --to <agent>`
 - Planning: everything in `river guide planner` (add, dep, prio, edit).
 

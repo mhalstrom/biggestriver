@@ -1,6 +1,8 @@
 // The launch dialog: every button that starts an agent opens it first, to pick the agent, the model, the
-// effort, the work (Start only), and a new tab or window. The server fills {model} and {effort} in the
-// agent's launch_agents command and sets RIVER_MODEL. The last choices stay in this browser.
+// effort, the agent's launch options (a profile: Remote Control, permission or sandbox mode), the work
+// (Start only), and a new tab or window. The server builds the command (a profile) or fills {model} and
+// {effort} in a custom one, and sets RIVER_MODEL. The last choices stay in this browser; options that
+// the person does not change are left to the server, so a project's own setting still applies.
 import { $, esc, store } from "../lib.js";
 import { makeDialog } from "./dialog.js";
 
@@ -66,7 +68,10 @@ function el() {
       dlg.close();
     }
   });
-  d.addEventListener("change", (e) => { if (e.target.id === "lAgent" || e.target.id === "lWork") draw(values()); });
+  d.addEventListener("change", (e) => {
+    if (e.target.id === "lAgent" || e.target.id === "lWork") draw(values());
+    else if (e.target.dataset && e.target.dataset.lopt) e.target.dataset.changed = "1";
+  });
   return d;
 }
 
@@ -78,7 +83,9 @@ function values() {
   return { agent: q("#lAgent") ? q("#lAgent").value : (S.launch_options[0] || {}).label,
            model: q("#lModel") ? q("#lModel").value : "", effort: q("#lEffort") ? q("#lEffort").value : "",
            launch_in: (d.querySelector('input[name="lIn"]:checked') || {}).value || "tab",
-           work: q("#lWork") ? q("#lWork").value : "" };
+           work: q("#lWork") ? q("#lWork").value : "",
+           options: Object.fromEntries([...d.querySelectorAll("[data-lopt][data-changed]")].map(x =>
+             [x.dataset.lopt, x.type === "checkbox" ? (x.checked ? "on" : "off") : x.value])) };
 }
 
 // The item the work choice points at (its recommendation and limits pick the model).
@@ -126,8 +133,9 @@ function draw(prev) {
         <label>Effort<select id="lEffort"><option value="">the agent's default</option>${opt.efforts.map(e =>
           `<option ${e === effort ? "selected" : ""}>${esc(e)}</option>`).join("")}</select></label>
       </div>
+      ${optionFields(opt)}
       <div class="muted" style="font-size:12px">${esc([rec, limits].filter(Boolean).join(" "))}
-        ${!opt.takes_model || !opt.takes_effort ? ` The ${esc(agent)} command has no ${[!opt.takes_model && "{model}", !opt.takes_effort && "{effort}"].filter(Boolean).join(" or ")} placeholder, so the agent starts with its own ${!opt.takes_model ? "model" : "effort"} (river still records the model you pick). Add it in Settings: launch_agents.` : ""}</div>
+        ${!opt.takes_model || !opt.takes_effort ? ` The ${esc(agent)} command has no ${[!opt.takes_model && "{model}", !opt.takes_effort && "{effort}"].filter(Boolean).join(" or ")} placeholder, so the agent starts with its own ${!opt.takes_model ? "model" : "effort"} (river still records the model you pick). Add it in Settings: launch_agents, or use a profile (@claude-code, @codex).` : ""}</div>
       <div class="actions" style="align-items:center"><span class="muted" style="font-size:12px">Open in:</span>
         <label style="display:flex;gap:4px;align-items:center"><input type="radio" name="lIn" value="tab" ${where === "tab" ? "checked" : ""}>a new tab</label>
         <label style="display:flex;gap:4px;align-items:center"><input type="radio" name="lIn" value="window" ${where === "window" ? "checked" : ""}>a new window</label></div>
@@ -136,6 +144,18 @@ function draw(prev) {
       <button class="btn" data-launch-cancel="1">Cancel</button>
       <button class="btn primary" data-launch-go="1">▶ ${esc(ctx.go || "Start")}</button>
     </div>`;
+}
+
+// A profile's options for this one launch: a toggle, or a choice with the CLI's own default first.
+// Preset from the settings; only the ones the person changes go to the server.
+export function optionFields(opt) {
+  const os = (opt && opt.options) || [];
+  if (!os.length) return "";
+  const name = (o) => o.name.replace(/_/g, " ").replace(/^./, c => c.toUpperCase());
+  return `<div class="actions" style="align-items:center;flex-wrap:wrap;gap:10px">${os.map(o => o.kind === "toggle"
+    ? `<label style="display:flex;gap:4px;align-items:center" title="${esc(o.text)}"><input type="checkbox" data-lopt="${esc(o.name)}" ${o.value === "on" ? "checked" : ""}>${esc(name(o))}</label>`
+    : `<label style="display:flex;gap:4px;align-items:center" title="${esc(o.text)}">${esc(name(o))}<select data-lopt="${esc(o.name)}">
+        <option value="" ${!o.value ? "selected" : ""}>the agent's own</option>${o.choices.map(c => `<option ${c === o.value ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></label>`).join("")}</div>`;
 }
 
 // Open the dialog. c: {title, go (button label), what (the work, as text), item (limits and recommendation),
@@ -154,5 +174,6 @@ export function chooseLaunch(state, c) {
 export function launchArgs(v) {
   const out = { agent: v.agent };
   for (const k of ["model", "effort", "launch_in"]) if (v[k]) out[k] = v[k];
+  if (v.options && Object.keys(v.options).length) out.options = v.options;
   return out;
 }

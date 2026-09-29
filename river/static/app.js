@@ -993,6 +993,18 @@ function renderSetup(st) {
           <a href="https://github.com/openai/codex" target="_blank" rel="noopener">Codex</a>.`
       : "Found on this Mac: " + addable.map(a => esc(a.label)).join(", ") + ". Add one to the Start button.",
     (none ? `<button class="btn" data-su="recheck">Check again</button>` : "") + addBtns));
+  // How river starts each profile agent (Claude Code, Codex): its options, as global settings.
+  const profs = st.launch_profiles || [];
+  const howStart = profs.length && extra(true, "How agents start",
+    profs.map(p => `<div style="margin:4px 0"><b>${esc(p.label)}</b> ${p.options.map(o => {
+      const name = o.name.replace(/_/g, " ");
+      return o.kind === "toggle"
+        ? `<label style="display:inline-flex;gap:4px;align-items:center;margin-right:10px" title="${esc(o.text)}"><input type="checkbox" data-su-opt="${esc(o.setting)}" ${o.value === "on" ? "checked" : ""}>${esc(name)}</label>`
+        : o.kind === "choice"
+        ? `<label style="display:inline-flex;gap:4px;align-items:center;margin-right:10px" title="${esc(o.text)}">${esc(name)}<select data-su-opt="${esc(o.setting)}"><option value="">the agent's own</option>${o.choices.map(c => `<option ${c === o.value ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></label>`
+        : `<label style="display:inline-flex;gap:4px;align-items:center;margin-right:10px" title="${esc(o.text)}">${esc(name)}<input data-su-opt="${esc(o.setting)}" value="${esc(o.value)}" style="width:${o.name === "prompt" ? 260 : 140}px"></label>`;
+    }).join("")}</div>`).join("")
+      + `<div class="muted" style="font-size:12px">For every project; set one project apart in Settings (for example claude_remote_control with the project scope). The launch dialog can change the toggles for one start.</div>`, "");
   // A first task, then an agent that takes it.
   const tasks = (S && S.items || []).filter(i => !["deploy", "review", "monitor"].includes(i.kind));
   const folderProjects = (S && S.projects || []).filter(p => p.path);
@@ -1010,7 +1022,7 @@ function renderSetup(st) {
         title: "Open a new Terminal window in the project folder and start the chosen agent there" })
       : `<span class="muted">Needs an agent and a task first.</span>`));
   // Extras: nice to have, not needed for a first result.
-  const more = [];
+  const more = howStart ? [howStart] : [];
   const missing = Object.entries(st.skills).filter(([, v]) => v !== "installed").map(([k]) => k);
   if (st.claude_home) more.push(extra(missing.length === 0, "Claude Code skills",
     missing.length ? "Teach Claude Code river's full workflow (missing: " + missing.join(", ") + ")." : "river and river-planner are installed.",
@@ -1058,6 +1070,13 @@ $("#setupSteps").addEventListener("click", async (e) => {
     }
     await openSetup();
   } catch (err) { /* act() showed the error */ }
+});
+$("#setupSteps").addEventListener("change", async (e) => {
+  const x = e.target.closest("[data-su-opt]"); if (!x) return;
+  const value = x.type === "checkbox" ? (x.checked ? "on" : "off") : x.value.trim();
+  try { await act("config_set", { key: x.dataset.suOpt, value }); toast(`${x.dataset.suOpt} = ${value || "(the agent's own)"}`); }
+  catch (err) { /* act() showed the error */ }
+  await openSetup();
 });
 $("#agents").addEventListener("change", (e) => { const s = e.target.closest("[data-give-item]"); if (s) giveChoice[s.dataset.giveItem] = s.value; });
 $("#setupClose").onclick = closeSetup;

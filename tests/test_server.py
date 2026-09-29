@@ -377,9 +377,13 @@ class LaunchAgent(unittest.TestCase):
         self.assertTrue(opts["Codex"]["takes_model"] and opts["Codex"]["takes_effort"])
         self.assertTrue(all(m["note"] for m in opts["Codex"]["models"]))
         self.assertEqual((opts["Mine"]["family"], len(opts["Mine"]["models"]), opts["Mine"]["takes_model"]), (None, 7, False))
-        codex = dict(core.parse_launch_agents(core.setting(self.c, "launch_agents")))["Codex"]
-        self.assertTrue(core.fill_launch_command(codex, "sol", "xhigh").startswith("codex -m sol -c model_reasoning_effort=xhigh --add-dir"))
-        self.assertTrue(core.fill_launch_command(codex, None, None).startswith("codex --add-dir"))
+        self.assertEqual([o["name"] for o in opts["Claude Code"]["options"]], ["remote_control", "permission_mode"])
+        self.assertEqual([o["name"] for o in opts["Codex"]["options"]], ["sandbox", "approval"])
+        self.assertEqual(opts["Mine"]["options"], [])
+        c = core.fill_launch_command('codex -m {model} -c model_reasoning_effort={effort} "go"', "sol", "xhigh")
+        self.assertEqual(c, 'codex -m sol -c model_reasoning_effort=xhigh "go"')
+        self.assertEqual(core.fill_launch_command('codex -m {model} -c model_reasoning_effort={effort} "go"', None, None),
+                         'codex "go"')
         self.assertEqual(core.fill_launch_command("x --v --effort={effort} go", None, None), "x --v go")
 
     def test_windows_opens_a_console_window_with_the_env_set(self):
@@ -581,9 +585,12 @@ class SetupGuide(unittest.TestCase):
         labels = server.setup_agent_add(self.c, "Codex")
         self.assertEqual(labels, ["Claude Code", "Codex"])
         # Codex's sandbox writes only in the project folder: the command lets it write the queue too.
-        codex = dict(core.parse_launch_agents(core.setting(self.c, "launch_agents")))["Codex"]
+        self.assertEqual(dict(core.parse_launch_agents(core.setting(self.c, "launch_agents")))["Codex"], "@codex")
+        codex = core._launch_agent_cmd(self.c, None, "Codex")["command"]
         self.assertRegex(codex, r"--add-dir [\"']?" + re.escape(str(core.db_path().resolve().parent)))
-        self.assertNotIn("{river_dir}", codex)
+        shown = {a["label"]: a["command"] for a in server.setup_status(self.c)["agent_clis"]}
+        self.assertEqual(shown["Codex"], codex)
+        self.assertEqual(shown["Claude Code"], "claude go --remote-control")
         with self.assertRaises(RiverError):
             server.setup_agent_add(self.c, "nope")
 
@@ -592,6 +599,153 @@ class SetupGuide(unittest.TestCase):
         self.assertTrue(server.setup_status(self.c)["done"])
         with self.assertRaises(RiverError):
             core.config_set(self.c, "setup_done", "maybe")
+
+
+class LaunchProfiles(unittest.TestCase):
+    """Claude Code and Codex commands built from options (launch profiles), and the move of old command strings."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        os.environ["RIVER_DB"] = os.path.join(self.dir.name, "t.db")
+        self.c = core.connect()
+        self.platform = server.PLATFORM
+        server.PLATFORM = "darwin"
+        core.project_add(self.c, "shop", path=self.dir.name)
+
+    def tearDown(self):
+        server.PLATFORM = self.platform
+        self.c.close()
+        os.environ.pop("RIVER_DB", None)
+        self.dir.cleanup()
+
+    def test_each_option_set_builds_the_real_flags(self):
+        claude = core.profile_options(self.c, "claude-code")
+        self.assertEqual(core.build_command("claude-code", claude), "claude go --remote-control")
+        self.assertEqual(core.build_command("claude-code", claude, "opus", "high"),
+                         "claude --model opus --effort high go --remote-control")
+        self.assertEqual(core.build_command("claude-code", {**claude, "remote_control": "off", "permission_mode": "plan",
+                                                            "args": "--verbose", "prompt": "run river go now"}, "opus"),
+                         "claude --model opus --permission-mode plan --verbose 'run river go now'")
+        rd = core.river_dir()
+        codex = core.profile_options(self.c, "codex")
+        self.assertEqual(core.build_command("codex", codex, "sol", "xhigh"),
+                         f"codex -m sol -c model_reasoning_effort=xhigh --add-dir {rd} "
+                         "'run river go in this folder and follow the briefing'")
+        self.assertEqual(core.build_command("codex", {**codex, "sandbox": "workspace-write", "approval": "never",
+                                                      "prompt": "go"}),
+                         f"codex --sandbox workspace-write --ask-for-approval never --add-dir {rd} go")
+
+    def test_options_come_from_settings_the_entry_and_the_dialog(self):
+        core.config_set(self.c, "launch_agents", "Claude Code=@claude-code; Plan=@claude-code permission_mode=plan; Codex=@codex")
+        core.config_set(self.c, "claude_remote_control", "off")
+        core.config_set(self.c, "claude_remote_control", "on", project="shop")  # most specific wins
+        pid = core._project(self.c, "shop")["id"]
+        self.assertEqual(core._launch_agent_cmd(self.c, None, None)["command"], "claude go")
+        self.assertEqual(core._launch_agent_cmd(self.c, pid, None)["command"], "claude go --remote-control")
+        self.assertEqual(core._launch_agent_cmd(self.c, pid, "Plan")["command"],
+                         "claude --permission-mode plan go --remote-control")
+        t = core._launch_agent_cmd(self.c, pid, "Plan", "opus", options={"remote_control": "off", "permission_mode": "auto"})
+        self.assertEqual((t["command"], t["platform"]), ("claude --model opus --permission-mode auto go", "claude-code"))
+        with self.assertRaisesRegex(RiverError, "no option 'args' to choose at launch"):
+            core._launch_agent_cmd(self.c, pid, None, options={"args": "--x"})
+        with self.assertRaisesRegex(RiverError, "sandbox is one of"):
+            core._launch_agent_cmd(self.c, pid, "Codex", options={"sandbox": "wide-open"})
+        core.config_set(self.c, "launch_agents", "Claude Code=@claude-code; Grok=grok go")
+        with self.assertRaisesRegex(RiverError, "custom command"):
+            core._launch_agent_cmd(self.c, pid, "Grok", options={"remote_control": "off"})
+        # Settings and entries are checked when set.
+        for key, value, msg in (("claude_remote_control", "yes", "on or off"), ("codex_approval", "always", "one of"),
+                                ("claude_prompt", " ", "first prompt"), ("launch_agents", "X=@gemini", "platform is one of"),
+                                ("launch_agents", "X=@codex colour=red", "no option 'colour'"),
+                                ("launch_agents", "X=@codex sandbox", "option=value")):
+            with self.assertRaisesRegex(RiverError, msg):
+                core.config_set(self.c, key, value)
+        # The page: the dialog's options per agent, and Setup's options per profile.
+        opts = {o["label"]: o for o in core.state(self.c)["launch_options"]}
+        self.assertEqual(opts["Claude Code"]["options"][0]["value"], "off")  # the global value
+        self.assertEqual((opts["Grok"]["options"], opts["Grok"]["takes_model"]), ([], False))
+        (prof,) = server.setup_status(self.c)["launch_profiles"]
+        self.assertEqual([o["setting"] for o in prof["options"]],
+                         ["claude_remote_control", "claude_permission_mode", "claude_args", "claude_prompt"])
+
+    def test_a_launch_with_options_through_a_fake_runner(self):
+        x = core.item_add(self.c, "shop", "work")["id"]
+        sent = []
+        server.TERMINAL_RUNNER = sent.append
+        self.addCleanup(setattr, server, "TERMINAL_RUNNER", None)
+        t = server.OPS["dispatch_item"](self.c, {"id": x, "model": "opus", "options": {"remote_control": "off"}}, "mark")
+        self.assertEqual(t["command"], "claude --model opus go")
+        self.assertIn(f"RIVER_AGENT={t['session_name']} RIVER_MODEL=opus claude --model opus go\"", sent[-1])
+        y = core.item_add(self.c, "shop", "more")["id"]
+        t = server.dispatch_item(self.c, y, runner=sent.append, options={"permission_mode": "acceptEdits"})
+        self.assertIn("claude --permission-mode acceptEdits go --remote-control", sent[-1])
+        # A manager: manage in place of go, the options still apply.
+        t = server.start_manager(self.c, runner=sent.append, options={"remote_control": "off"})
+        self.assertEqual(t["command"], "claude manage")
+        # Open chat says why a session has no web link.
+        core.register(self.c, "w1")
+        core.config_set(self.c, "claude_remote_control", "off")
+        self.assertIn("Remote Control is off", server.open_chat(self.c, "w1")["hint"])
+
+    def test_the_command_line_takes_options(self):
+        import contextlib
+        import io
+        from river import cli
+        core.item_add(self.c, "shop", "work")
+        with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(cli.run(["-q", "launch", "--dry-run", "--option", "remote_control=off",
+                                      "--option", "permission_mode=plan"]), 0)
+        self.assertIn("command: claude --permission-mode plan go   (in a new tab)", out.getvalue())
+
+    def migrate(self, value, scope="global"):
+        self.c.execute("INSERT INTO settings(scope,key,value) VALUES (?,?,?) "
+                       "ON CONFLICT(scope,key) DO UPDATE SET value=excluded.value", (scope, "launch_agents", value))
+        self.c.execute("DELETE FROM meta WHERE key='launch_profiles'")
+        self.c.close()
+        self.c = core.connect()
+        return self.c.execute("SELECT value FROM settings WHERE scope=? AND key='launch_agents'", (scope,)).fetchone()["value"]
+
+    def test_old_command_strings_become_profiles(self):
+        # The report: a value saved before the launch dialog never got {model} and {effort}.
+        self.assertEqual(self.migrate("Claude Code=claude go --remote-control"), "Claude Code=@claude-code")
+        self.assertEqual(core._launch_agent_cmd(self.c, None, None, "opus", "high")["command"],
+                         "claude --model opus --effort high go --remote-control")
+        self.assertIn("Claude Code: claude go --remote-control -> @claude-code", core.launch_migration_note(self.c))
+        # It runs once: a custom command set later stays as it is.
+        core.config_set(self.c, "launch_agents", "Claude Code=claude go")
+        self.c.close()
+        self.c = core.connect()
+        self.assertEqual(core.setting(self.c, "launch_agents"), "Claude Code=claude go")
+        # Options: the first entry of a platform sets the scope's settings, a second one keeps its own.
+        core.config_unset(self.c, "launch_agents")
+        rd = core.river_dir()
+        got = self.migrate(f"Claude Code=claude --model {{model}} --effort {{effort}} go; "
+                           f"Planner=claude --permission-mode plan go --remote-control; "
+                           f"Codex=codex -m {{model}} -c model_reasoning_effort={{effort}} --add-dir {rd} -s read-only "
+                           f"\"run river go and follow it\"; "
+                           f"Fixed=claude --model sonnet go; Odd=claude --verbose go; Grok=grok \"run river go\"", "project:shop")
+        self.assertEqual(got, "Claude Code=@claude-code; Planner=@claude-code remote_control=on permission_mode=plan; "
+                              "Codex=@codex; Fixed=claude --model sonnet go; Odd=claude --verbose go; Grok=grok \"run river go\"")
+        pid = core._project(self.c, "shop")["id"]
+        self.assertEqual(core.setting(self.c, "claude_remote_control", project_id=pid), "off")
+        self.assertEqual(core.setting(self.c, "claude_remote_control"), "on")  # other projects keep the default
+        self.assertEqual((core.setting(self.c, "codex_sandbox", project_id=pid),
+                          core.setting(self.c, "codex_prompt", project_id=pid)), ("read-only", "run river go and follow it"))
+        self.assertEqual(core._launch_agent_cmd(self.c, pid, "Codex", "sol")["command"],
+                         f"codex -m sol --sandbox read-only --add-dir {rd} 'run river go and follow it'")
+        self.assertEqual(core._launch_agent_cmd(self.c, pid, "Planner")["command"],
+                         "claude --permission-mode plan go --remote-control")
+        # A remote-control name, or no prompt: custom, since a profile would change them.
+        self.assertIsNone(core.profile_from_command("claude --remote-control mine go"))
+        self.assertIsNone(core.profile_from_command("claude --model {model}"))
+        self.assertIsNone(core.profile_from_command("codex --add-dir /elsewhere go"))
+        from river import cli
+        import contextlib
+        import io
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(cli.run(["config", "get", "launch_agents", "--project", "shop"]), 0)
+        self.assertIn("launch_agents migrated to launch profiles (project:shop)", out.getvalue())
+        self.assertIn("claude_remote_control=off", out.getvalue())
 
 
 class StartPushesToWaiting(unittest.TestCase):
