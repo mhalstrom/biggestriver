@@ -2920,3 +2920,57 @@ class NativeDelivery(Base):
         self.assertEqual(core.queue_list(self.c, "cc")["entries"][0]["native_status"], "sent")
         core.set_native(self.c, "cc", "Claude Code", os.path.join(d, "gone.sock"))
         self.assertTrue(core.deliver_native(self.c, "cc", "x").startswith("failed: exit 1:"))
+
+
+class Kill(Base):
+    """river stop --kill: emergency only; ends the agent's process on this host and releases what it held (#428)."""
+
+    def setUp(self):
+        super().setUp()
+        import subprocess
+        import sys
+        core.project_add(self.c, "a", path=self.dir.name)
+        for n in ("ag", "other"):
+            core.register(self.c, n)
+        core.register(self.c, "mark", human=True)
+        self.p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        self.addCleanup(lambda: (self.p.poll() is None and self.p.kill(), self.p.wait()))
+        cmd = core.proc_info(self.p.pid)[2]
+        core.set_process(self.c, "ag", self.p.pid, cmd)
+
+    def test_kill_ends_the_process_and_releases_everything(self):
+        x = self.add("a", "x")
+        after = self.add("a", "after", after=[x])
+        core.claim(self.c, x, "ag")
+        core.goal_add(self.c, "a", "g")
+        core.goal_own(self.c, "g", "ag")
+        with self.assertRaisesRegex(RiverError, "a person or a manager kills"):
+            core.kill_agent(self.c, "ag", "stuck", actor="other")
+        r = core.kill_agent(self.c, "ag", "stuck in a loop", actor="mark", sleep=lambda s: None)
+        self.p.wait(10)
+        self.assertTrue(r["killed"])
+        self.assertIsNotNone(self.p.returncode)
+        self.assertEqual([h["id"] for h in r["released"]], [x])
+        self.assertIn("Uncommitted work", r["warning"])
+        it = core.item_show(self.c, x)
+        self.assertEqual((it["status"], it["assignee"]), ("open", None))
+        self.assertIsNone(core.goal_show(self.c, "g")["owner"])
+        self.assertEqual(core.agent_status(self.c, "ag")["state"], "stopped")
+        self.assertTrue(any("killed ag (by mark: stuck in a loop)" in e["change"] for e in core.recent_events(self.c)))
+        self.assertNotEqual(after, x)
+
+    def test_refusals_and_a_dead_process_counts_as_gone(self):
+        core.set_process(self.c, "ag", self.p.pid, "something else")
+        with self.assertRaisesRegex(RiverError, "now runs another command"):
+            core.kill_agent(self.c, "ag", "stuck", actor="mark")
+        self.assertIsNone(self.p.poll())  # not killed
+        core.set_process(self.c, "ag", self.p.pid, "x", host="elsewhere")
+        with self.assertRaisesRegex(RiverError, "runs on elsewhere"):
+            core.kill_agent(self.c, "ag", "stuck", actor="mark")
+        with self.assertRaisesRegex(RiverError, "no recorded process"):
+            core.kill_agent(self.c, "other", "stuck", actor="mark")
+        core.set_process(self.c, "ag", self.p.pid, "x")
+        self.assertEqual(core.agent_status(self.c, "ag")["state"], "active")
+        self.p.kill()
+        self.p.wait(10)
+        self.assertEqual(core.agent_status(self.c, "ag")["state"], "gone")  # at once, not after gone_after

@@ -303,6 +303,15 @@ blocker trees, the agent registry, capacity, settings, and the web page.
   on its next river command, commits, releases its item, and ends. `river who`
   shows it as stopped. Remove the stop entry to withdraw it (`river queue
   remove <agent> e<id>`).
+- Emergency kill: `river go`, `register`, and `heartbeat` record the agent
+  CLI's process (the first ancestor of the river command that is not a shell)
+  and the host; `river who` shows them, and a session whose process on this
+  host has ended counts as gone at once. `river stop <agent> --kill --reason
+  "..."` ends that process (SIGTERM, then SIGKILL after 5 s; taskkill on
+  Windows) only on the same host and only while the PID still runs the
+  recorded command, then releases its items, goals, targets, and queue.
+  Uncommitted work in its folder is lost. Use it only when a stop request
+  does not work.
 - Agents can take over or clear a person's item, with a notice and Undo.
   Each person's item has a copyable agent prompt (`river prompt`).
 - Messages between agents: alerts, questions and answers, notes, river

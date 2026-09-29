@@ -531,6 +531,8 @@ def build_parser():
 
     x = sub.add_parser("stop", help="ask an agent to stop: it commits, releases its item, and ends (not a kill)")
     x.add_argument("agent"); x.add_argument("--reason", required=True, help="why; the agent sees it")
+    x.add_argument("--kill", action="store_true",
+                   help="emergency only: end its process on this host now and release what it holds (uncommitted work is lost)")
     q = sub.add_parser("queue", help="one agent's own ordered queue: items it takes first, and instructions")
     qs = q.add_subparsers(dest="qcmd", required=True)
     x = qs.add_parser("add", help="add an item (at the end, --first, or --before <id>) or an instruction (--message)")
@@ -820,6 +822,15 @@ def _run(args, conn):
     return 0
 
 
+def _record_process(conn, name):
+    """The agent CLI process that runs this command (for river who and river stop --kill)."""
+    if not name or not conn.execute("SELECT 1 FROM agents WHERE name=? AND kind='ai'", (name,)).fetchone():
+        return
+    pid, cmd = core.agent_process()
+    if pid:
+        core.set_process(conn, name, pid, cmd)
+
+
 def ask_server_for_monitors(conn, timeout=5):
     """A deploy item was just claimed and its target has a monitor text: ask the river serve of this queue
     to open a session for the monitor item. Returns what it opened, or {"error": ...} when no server runs."""
@@ -1106,6 +1117,8 @@ def dispatch(conn, a, actor):
         if g == "reopen":
             return core.goal_reopen(conn, a.name, actor)
     if c == "stop":
+        if a.kill:
+            return core.kill_agent(conn, a.agent, a.reason, actor)
         return core.stop_agent(conn, a.agent, a.reason, actor)
     if c == "queue":
         if a.qcmd == "add":
@@ -1196,6 +1209,7 @@ def dispatch(conn, a, actor):
         res = core.go(conn, os.getcwd(), actor, a.project, a.role, a.session, os.environ.get("RIVER_FOCUS"), a.model)
         # The platform's own messaging reaches this session at once (native_message): record its address.
         core.set_native(conn, res["agent"], *core.native_from_env(conn, os.environ))
+        _record_process(conn, res["agent"])
         res["old_blocks"] = old_blocks(conn, os.getcwd())
         return res
     if c == "plan":
@@ -1307,7 +1321,10 @@ def dispatch(conn, a, actor):
             return {"thread_id": None, "messages": core.item_messages(conn, a.item)}
         return core.thread(conn, a.id, actor)
     if c == "register":
-        return core.register(conn, a.name, a.human, a.note, a.session)
+        res = core.register(conn, a.name, a.human, a.note, a.session)
+        if not a.human:
+            _record_process(conn, a.name)
+        return res
     if c == "session":
         if not actor:
             raise RiverError("set RIVER_AGENT or pass --as <name>")
@@ -1321,6 +1338,7 @@ def dispatch(conn, a, actor):
     if c == "who":
         return core.who(conn, a.item, a.project, a.file, os.getcwd())
     if c == "heartbeat":
+        _record_process(conn, actor)
         return {"ok": True}
     if c == "capacity":
         return core.capacity(conn)
@@ -1854,6 +1872,12 @@ def render(a, res):
     if c == "queue":
         _print_queue(res)
         return
+    if c == "stop" and "killed" in res:
+        print(f"{'killed' if res['killed'] else 'found dead'}: {res['agent']} (PID {res['pid']}); released "
+              + (", ".join(f"#{h['id']}" for h in res["released"]) or "no items")
+              + (f"; queued items back: {', '.join('#' + str(i) for i in res['queued_back'])}" if res["queued_back"] else "")
+              + f". {res['warning']}")
+        return
     if c == "stop":
         print(f"asked {res['agent']} to stop ({res['reason']}); it ends {res['ends']}"
               + (f"; native delivery: {res['native']}" if res.get("native") else "")
@@ -2021,7 +2045,8 @@ def render(a, res):
             note = f" — {ag['note']}" if ag["note"] else ""
             print(f"{ag['name']} ({ag['kind']}, {ag['state']}){note}"
                   + (f"\n    session: {ag['session']}" + (f" [{ag['session_ref']}]" if ag.get("session_ref") else "")
-                     if ag.get("session") else "") + f"\n    holds: {holds}"
+                     if ag.get("session") else "")
+                  + (f"\n    process: PID {ag['pid']} on {ag['host']}" if ag.get("pid") else "") + f"\n    holds: {holds}"
                   + (f"\n    owns: {', '.join(o['name'] for o in ag['owns'])}" if ag.get("owns") else ""))
             for t in ag.get("touching", []):
                 print(f"    touches: #{t['id']} {', '.join(t['paths'])}")

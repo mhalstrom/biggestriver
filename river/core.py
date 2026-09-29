@@ -267,6 +267,9 @@ CREATE TABLE IF NOT EXISTS agents (
   session_ref    TEXT,
   session_url    TEXT,                       -- web link to the agent's session (Claude Code Remote Control)
   model          TEXT,                       -- the model the session runs (RIVER_MODEL, river go --model)
+  pid            INTEGER,                    -- the agent CLI process that runs river, its host, and its command line
+  host           TEXT,
+  pid_cmd        TEXT,
   platform       TEXT,                       -- the agent CLI (a native_message label) and the session's address in it
   native_address TEXT,
   stop_at        TEXT,                       -- river stop: when, who, and why; the session ends after it
@@ -578,9 +581,11 @@ def _migrate(conn):
         conn.execute("ALTER TABLE agents ADD COLUMN session_url TEXT")
     if "model" not in acols:
         conn.execute("ALTER TABLE agents ADD COLUMN model TEXT")
-    for col in ("stop_at", "stop_by", "stop_reason", "platform", "native_address"):
+    for col in ("stop_at", "stop_by", "stop_reason", "platform", "native_address", "host", "pid_cmd"):
         if col not in acols:
             conn.execute(f"ALTER TABLE agents ADD COLUMN {col} TEXT")
+    if "pid" not in acols:
+        conn.execute("ALTER TABLE agents ADD COLUMN pid INTEGER")
     if "auto" not in {r["name"] for r in conn.execute("PRAGMA table_info(deps)")}:
         conn.execute("ALTER TABLE deps ADD COLUMN auto INTEGER NOT NULL DEFAULT 0")
     icols = {r["name"] for r in conn.execute("PRAGMA table_info(items)")}
@@ -2887,6 +2892,131 @@ def _drop_queue(conn, agent, why, items_only=False):
     return [r["item_id"] for r in rows]
 
 
+# ---------------------------------------------------------------- agent processes
+
+SHELLS = {"sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "env", "timeout", "cmd.exe", "powershell.exe",
+          "pwsh", "pwsh.exe", "sandbox-exec", "script"}
+
+
+def this_host():
+    import socket
+    return socket.gethostname()
+
+
+def pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OSError):
+        return True
+    return True
+
+
+def proc_info(pid):
+    """(parent pid, program name, command line) of a process, from ps; None when it does not run or no ps."""
+    import subprocess
+    try:
+        out = subprocess.run(["ps", "-o", "ppid=,comm=", "-p", str(pid)], capture_output=True, text=True, timeout=5)
+        args = subprocess.run(["ps", "-o", "args=", "-p", str(pid)], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    line = out.stdout.strip()
+    if out.returncode or not line:
+        return None
+    ppid, _, comm = line.partition(" ")
+    return int(ppid), os.path.basename(comm.strip()), args.stdout.strip()
+
+
+def agent_process(start=None):
+    """The agent CLI process that runs this river command: the first ancestor above the shell(s) that is not
+    a shell (SHELLS). Returns (pid, command line), or (None, None) when ps is missing (Windows) or it finds none."""
+    pid = start or os.getppid()
+    for _ in range(12):
+        info = proc_info(pid)
+        if info is None:
+            return None, None
+        ppid, comm, args = info
+        if comm.lower().lstrip("-") not in SHELLS:
+            return pid, args
+        if ppid <= 1:
+            return None, None
+        pid = ppid
+    return None, None
+
+
+def set_process(conn, name, pid, cmd, host=None):
+    with tx(conn):
+        conn.execute("UPDATE agents SET pid=?, pid_cmd=?, host=? WHERE name=?", (pid, cmd, host or this_host(), name))
+
+
+def kill_agent(conn, agent, reason, actor=None, grace=5.0, sleep=None):
+    """Emergency only (the normal path is river stop): end the agent's process on this host, then release
+    everything it held. Checks that the PID still runs the recorded command, so a reused PID is not killed."""
+    import signal
+    import subprocess
+    import time
+    sleep = sleep or time.sleep
+    if not reason or not reason.strip():
+        raise RiverError("say why: river stop <agent> --kill --reason \"...\"")
+    why = may_change_queue(conn, actor, agent)
+    if why:
+        raise RiverError(f"refused: a person or a manager kills an agent ({why})")
+    ag = _agent(conn, agent)
+    if not ag["pid"]:
+        raise RiverError(f"{agent} has no recorded process (river go records it); ask it to stop instead: "
+                         f"river stop {agent} --reason \"...\"")
+    if ag["host"] != this_host():
+        raise RiverError(f"{agent} runs on {ag['host']}, not on this host ({this_host()}); kill it there")
+    killed = False
+    if pid_alive(ag["pid"]):
+        info = proc_info(ag["pid"])
+        if info is not None and ag["pid_cmd"] and info[2] != ag["pid_cmd"]:
+            raise RiverError(f"refused: PID {ag['pid']} now runs another command ({info[2][:80]}), not {agent}'s; "
+                             f"nothing was killed")
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(ag["pid"]), "/T", "/F"], capture_output=True)
+        else:
+            os.kill(ag["pid"], signal.SIGTERM)
+            waited = 0.0
+            while pid_alive(ag["pid"]) and waited < grace:
+                sleep(0.2)
+                waited += 0.2
+                try:
+                    os.waitpid(ag["pid"], os.WNOHANG)  # a child of this process (tests): reap it
+                except (ChildProcessError, OSError):
+                    pass
+            if pid_alive(ag["pid"]):
+                os.kill(ag["pid"], signal.SIGKILL)
+        killed = True
+    with tx(conn):
+        held = [dict(r) for r in conn.execute(
+            "SELECT id, title FROM items WHERE assignee=? AND status IN ('in_progress','held')", (agent,))]
+        for h in held:
+            conn.execute("UPDATE items SET status='open', assignee=NULL, claimed_at=NULL, lease_expires_at=NULL, "
+                         "hold_expires_at=NULL, needs_check=1 WHERE id=?", (h["id"],))
+            _event(conn, h["id"], actor, f"released: {agent} killed by {actor}: {reason.strip()}")
+            for d in conn.execute("SELECT DISTINCT i.id, i.assignee FROM deps x JOIN items i ON i.id=x.item_id "
+                                  "WHERE x.blocked_by=? AND i.assignee IS NOT NULL AND i.assignee<>? "
+                                  "AND i.status IN ('in_progress','held')", (h["id"], agent)).fetchall():
+                _send(conn, "notice", "river", f"#{h['id']} {h['title']}, which your #{d['id']} waits on, is open again: "
+                      f"its agent {agent} was killed ({reason.strip()})", to=d["assignee"], item_id=d["id"])
+        conn.execute("UPDATE items SET reserved_for=NULL, reserved_until=NULL, reserved_by=NULL "
+                     "WHERE reserved_for=? AND status='open'", (agent,))
+        for g in conn.execute("SELECT name FROM goals WHERE owner=?", (agent,)).fetchall():
+            conn.execute("UPDATE goals SET owner=NULL, owner_expires_at=NULL, owner_lease=NULL WHERE name=?", (g["name"],))
+            _event(conn, None, "river", f"goal {g['name']} released: {agent} killed")
+        for t in conn.execute("SELECT name FROM targets WHERE owner=?", (agent,)).fetchall():
+            conn.execute("UPDATE targets SET owner=NULL, owner_expires_at=NULL WHERE name=?", (t["name"],))
+            _event(conn, None, "river", f"target {t['name']} released: {agent} killed")
+        queued = _drop_queue(conn, agent, "was killed")
+        conn.execute("UPDATE agents SET stop_at=?, stop_by=?, stop_reason=?, role='stopped', note='killed' WHERE name=?",
+                     (iso(now()), actor, "killed: " + reason.strip(), agent))
+        _event(conn, None, actor, f"killed {agent} (by {actor}: {reason.strip()})")
+    return {"agent": agent, "pid": ag["pid"], "killed": killed, "released": held, "queued_back": queued,
+            "warning": "Uncommitted work in the agent's folder is not saved: look at git status there."}
+
+
 # ---------------------------------------------------------------- native delivery
 
 NATIVE_RUNNER = None  # tests set a fake: f(args) -> (returncode, output)
@@ -3419,6 +3549,9 @@ def _agent(conn, name):
 def _agent_state(conn, a):
     if "stop_at" in a.keys() and a["stop_at"]:
         return "stopped"
+    # Its process on this host has ended: gone at once, not after gone_after.
+    if "pid" in a.keys() and a["pid"] and a["host"] == this_host() and not pid_alive(a["pid"]):
+        return "gone"
     age = now() - parse_iso(a["last_seen"])
     if age > parse_duration(setting(conn, "gone_after", agent=a["name"])):
         return "gone"
