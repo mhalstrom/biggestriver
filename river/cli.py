@@ -424,6 +424,8 @@ def build_parser():
     x = tgs.add_parser("add"); x.add_argument("name")
     x.add_argument("--description", default="", help="how and where it deploys")
     x = tgs.add_parser("describe", help="set how a target deploys"); x.add_argument("name"); x.add_argument("text")
+    x = tgs.add_parser("monitor", help="what a session watches after each deploy (health links, logs, for how long)")
+    x.add_argument("name"); x.add_argument("text", nargs="?", help="the monitor text; \"\" removes it; none shows it")
     x = tgs.add_parser("show", help="a target, its owner, and its projects"); x.add_argument("name")
     x = tgs.add_parser("own", help="become the one owner of a target (runs its deploys)"); x.add_argument("name")
     x.add_argument("--takeover", metavar="WHY", help="take the target from an owner who is away or gone; "
@@ -776,6 +778,11 @@ def _run(args, conn):
     if args.cmd not in ("go", "plan"):
         core.activity(conn, actor)
     res = dispatch(conn, args, actor)
+    monitors = None
+    if args.cmd in ("go", "claim", "next") and core.pending_monitors(conn):
+        monitors = ask_server_for_monitors(conn)
+        if isinstance(res, dict) and args.cmd == "go":
+            res["monitors_opened"] = monitors
     me = res.get("agent") if args.cmd in ("go", "plan") and isinstance(res, dict) else actor
     core.record_session_url(conn, me, core.session_url_from_env())
     with core.tx(conn):
@@ -784,6 +791,9 @@ def _run(args, conn):
         print(json.dumps(res, indent=2, default=str))
     else:
         render(args, res)
+    if monitors is not None and args.cmd != "go" and not args.json:
+        for line in _monitor_lines(monitors):
+            print(line, file=sys.stderr)
     sys.stdout.flush()
     if not (args.cmd in ("wait", "unregister") and conn.execute("SELECT 1 FROM agents WHERE name=?", (actor,)).fetchone() is None):
         _footer(conn, res["agent"] if args.cmd in ("go", "plan") else actor)
@@ -792,6 +802,40 @@ def _run(args, conn):
         if h:
             print(h, file=sys.stderr)
     return 0
+
+
+def ask_server_for_monitors(conn, timeout=5):
+    """A deploy item was just claimed and its target has a monitor text: ask the river serve of this queue
+    to open a session for the monitor item. Returns what it opened, or {"error": ...} when no server runs."""
+    import urllib.error
+    import urllib.request
+    port = core.setting(conn, "serve_port")
+    body = json.dumps({"op": "open_monitors", "args": {"db": str(core.db_path())}}).encode()
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/api/action", data=body,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read())["result"]
+    except urllib.error.HTTPError as e:
+        try:
+            why = json.loads(e.read()).get("error")
+        except ValueError:
+            why = str(e)
+        return {"error": why, "pending": core.pending_monitors(conn)}
+    except (OSError, ValueError) as e:
+        return {"error": f"no river serve answers on port {port} ({e.__class__.__name__})",
+                "pending": core.pending_monitors(conn)}
+
+
+def _monitor_lines(m):
+    """What happened to the monitor of a deploy that just started."""
+    if isinstance(m, dict):
+        return [f"monitor #{p['id']}: no session opened ({m['error']}). Start one in a folder of target "
+                f"{p['target']}: RIVER_FOCUS=monitor:{p['id']} claude go   (or another agent: river go reads RIVER_FOCUS)"
+                for p in m.get("pending", [])]
+    return [f"monitor #{x['id']}: " + (f"no session opened: {x['error']}" if x.get("error") else
+            f"river serve opened {x['agent']} in {x['project']}" + (f" ({x['model']})" if x.get("model") else "")
+            + " to follow the deploy") for x in m]
 
 
 def _hint(a, res, actor):
@@ -1032,6 +1076,8 @@ def dispatch(conn, a, actor):
             return core.target_describe(conn, a.name, a.text, actor)
         if a.tcmd == "show":
             return core.target_show(conn, a.name)
+        if a.tcmd == "monitor":
+            return core.target_show(conn, a.name) if a.text is None else core.target_monitor(conn, a.name, a.text, actor)
         if a.tcmd == "own":
             return core.target_own(conn, a.name, actor, a.takeover)
         if a.tcmd == "release":
@@ -1422,7 +1468,7 @@ def render_go(b):
         out.append("")
     if it:
         out.append(f"YOUR ITEM #{it['id']}: {it['title']}")
-        if it.get("found_during"):
+        if it.get("found_during") and it.get("kind") != "monitor":
             out.append(f"  (found during #{it['found_during']}; now it is the most important ready item)")
         if it["notes"]:
             out.append(f"  notes: {it['notes']}")
@@ -1454,11 +1500,34 @@ def render_go(b):
             out.append("  ships:")
             for d in b["ships"]:
                 out.append(f"    #{d['id']} {d['title']} ({d['status']})")
+            if b.get("monitor_item"):
+                mi = b["monitor_item"]
+                out.append(f"  monitor #{mi['id']} follows this deploy ({mi['status'].replace('_', ' ')}"
+                           + (f" by {mi['assignee']}" if mi["assignee"] else "") + "); it alerts you if something fails.")
+                out += ["  " + x for x in _monitor_lines(b.get("monitors_opened") or [])]
+            elif not t.get("monitor"):
+                out.append(f"  no monitor: to have a session follow each deploy: {r} target monitor {t['name']} "
+                           f"\"<what to watch, for how long>\"")
             for n in b.get("next_deploy", []):
                 out.append(f"  next deploy #{n['id']} is collecting: " + (", ".join(f"#{d['id']}" for d in n["waits_on_detail"]) or "nothing yet"))
             out += ["",
                     "Deploy as the target description says, run its checks, then put the release id or",
                     f"deployed commit in the output: {r} done {it['id']} --output \"<release id, checks passed>\""]
+        if b["role"] == "monitor":
+            m = b["monitor"]
+            d = m["deploy"]
+            who = m["deployer"] or "the target owner"
+            out += ["",
+                    f"You follow deploy #{d['id']} of target {m['target']} ({d['status'].replace('_', ' ')}"
+                    + (f", by {m['deployer']}" if m["deployer"] else "") + "). The context above says what to watch and for how long.",
+                    f"Watch that long. Your lease lasts 30 minutes: run {r} heartbeat at least every 20 minutes.",
+                    f"All is well: {r} done {it['id']} --output \"<what you checked, for how long, what you saw>\"",
+                    "Something fails:",
+                    f"  1. {r} alert {m['deployer'] or '<deployer>'} \"<what fails, since when>\" --item {d['id']}",
+                    f"  2. {r} add \"Roll back {m['target']} (deploy #{d['id']})?\" --doer human --found-during {it['id']} \\",
+                    f"       --context \"<the evidence: links, log lines, numbers; the rollback you propose: the exact commands>\"",
+                    f"  3. {r} done {it['id']} --output \"problem: <what>; alerted {who}; rollback proposed in #<new id>\"",
+                    f"  Do not roll back yourself: {m['person']} decides."]
         if b["role"] == "reviewer":
             out.append(f"  release {it.get('target')}: the deploy waits on this review. It covers:")
             for d in it["waits_on_detail"]:
@@ -1715,6 +1784,8 @@ def render(a, res):
             return
         print(res["name"])
         print("  " + (res["description"] or f"(no description: river target describe {res['name']} \"how it deploys\")"))
+        print("  monitor: " + (res.get("monitor") or f"none (a session follows each deploy when you set one: "
+                                                      f"river target monitor {res['name']} \"<what to watch, for how long>\")"))
         if res["owner"]:
             left = core._short(core.parse_iso(res["owner_expires_at"]) - core.now())
             print(f"  owner: {res['owner']} ({left} left; any command by {res['owner']} renews it)")

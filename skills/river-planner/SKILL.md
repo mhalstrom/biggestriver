@@ -61,6 +61,7 @@ river target add <name> --description "how it deploys"  # where projects ship to
 river project target <name> <target>                   # each project has at most one
 river target show <target>                             # its projects and owner
 river target own <target>                              # one owner per target runs its deploys
+river target monitor <target> "<what to watch, for how long>"   # a session follows each deploy
 river target give <target> --to <agent>                # or: river target release <target>
 ```
 

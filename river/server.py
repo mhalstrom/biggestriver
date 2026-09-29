@@ -166,13 +166,55 @@ def deploy_now(conn, target, review=False, runner=None, agent=None, actor=None, 
     r = core.deploy_now(conn, target, review, actor)
     if not r["ready"] or r.get("alerted"):
         return r
+    p = _target_folder(conn, target)
+    return {**r, **_open_focused(conn, p, f"{'review' if review else 'deploy'}:{target}", runner, agent,
+                                 model, effort, launch_in)}
+
+
+def _target_folder(conn, target):
+    """A folder to start a session for a target: the first of its projects that has one."""
     p = next((core._project(conn, x["name"]) for x in core.target_show(conn, target)["projects"]
               if core._project(conn, x["name"])["path"]), None)
     if p is None:
         raise RiverError(f"no project of target {target} has a folder, so river cannot start a session there: "
                          f"river project path <name> <folder>")
-    return {**r, **_open_focused(conn, p, f"{'review' if review else 'deploy'}:{target}", runner, agent,
-                                 model, effort, launch_in)}
+    return p
+
+
+def _agent_for(conn, model):
+    """The launch_agents entry that runs this model: the first of its family, else the first of no known family."""
+    opts = core.launch_options(conn)
+    fam = core._family(core.parse_ladder(core.setting(conn, "model_ladder")), model)[0] if model else None
+    pick = (next((o for o in opts if fam and o["family"] == fam), None)
+            or next((o for o in opts if o["family"] is None), None) or opts[0])
+    return pick["label"], pick
+
+
+def open_monitors(conn, runner=None, db=None):
+    """Open a session for each monitor item nobody holds yet (a deploy just started): in a folder of the
+    target's projects, with RIVER_FOCUS=monitor:<id>, the item's model and effort (a monitor defaults to
+    sonnet, low). The command asks the running server for this after it claims a deploy item; db must name
+    this server's queue, so a test queue never opens sessions from the real one."""
+    if db is not None and str(Path(db).expanduser().resolve()) != str(core.db_path().expanduser().resolve()):
+        raise RiverError("this river serve uses another queue")
+    out = []
+    ann = None
+    for m in core.pending_monitors(conn):
+        ann = ann or core.annotate(conn)
+        it = ann[m["id"]]
+        try:
+            p = _target_folder(conn, m["target"])
+            agent, opt = _agent_for(conn, it["model"])
+            model = it["model"] if any(x["name"] == it["model"] for x in opt["models"]) else None
+            effort = it["effort"] if it["effort"] in opt["efforts"] else None
+            t = _open_focused(conn, p, f"monitor:{m['id']}", runner, agent, model, effort)
+        except RiverError as e:
+            out.append({"id": m["id"], "error": str(e)})
+            continue
+        with core.tx(conn):
+            core._event(conn, m["id"], "river", f"monitor session opened ({t['agent']} in {p['name']})")
+        out.append({"id": m["id"], "agent": t["agent"], "project": p["name"], "model": model})
+    return out
 
 
 def _open_focused(conn, p, focus, runner, agent, model=None, effort=None, launch_in=None):
@@ -618,6 +660,7 @@ OPS = {
     "open_needs_you": lambda c, a, who: open_needs_you(c, agent=a.get("agent"), person=a.get("person"), **_launch_args(a)),
     "deploy_now": lambda c, a, who: deploy_now(c, a["target"], bool(a.get("review")), agent=a.get("agent"), actor=who,
                                                **_launch_args(a)),
+    "open_monitors": lambda c, a, who: open_monitors(c, db=a.get("db")),
     "decline_message": lambda c, a, who: core.decline_message(c, int(a["msg"]), a.get("note"), who),
     "update": lambda c, a, who: _no_update_in_app() or update_apply(),
     "restart": lambda c, a, who: _no_update_in_app() or (_restart_soon(), {"restarting": True})[1],
@@ -774,6 +817,11 @@ class Handler(BaseHTTPRequestHandler):
                 result = op(conn, body.get("args", {}), actor)
                 with core.tx(conn):
                     core.sync_needs_you(conn)
+                if body.get("op") in ("claim", "next_claim") and core.pending_monitors(conn):
+                    try:  # a person claimed a deploy item on the page: its monitor starts too
+                        open_monitors(conn)
+                    except RiverError as e:
+                        print(f"monitor: {e}", flush=True)
                 return self._send(200, {"ok": True, "result": result})
             finally:
                 conn.close()

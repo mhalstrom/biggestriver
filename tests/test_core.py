@@ -2624,3 +2624,63 @@ class Models(Base):
         self.assertEqual(core.agent_model(self.c, "s1"), "sonnet")
         b2 = core.go(self.c, self.dir.name, "s2", model="opus")
         self.assertEqual(b2["item"]["id"], big)
+
+
+class Monitor(Base):
+    """A target's monitor text: claiming a deploy adds a monitor item; its session follows the deploy (#321)."""
+
+    def setUp(self):
+        super().setUp()
+        core.target_add(self.c, "web", "push, then smoke test")
+        core.project_add(self.c, "site", target="web", path=self.dir.name)
+        for n in ("dev", "ops", "mon", "big"):
+            core.register(self.c, n)
+        core.register(self.c, "mark", human=True)
+        w = self.add("site", "page")
+        core.claim(self.c, w, "dev")
+        core.done(self.c, w, "abc", "dev", ship_it=True)
+        self.deploy = core.item_show(self.c, w)["unblocks"][0]
+
+    def monitors(self):
+        return [r["id"] for r in self.c.execute("SELECT id FROM items WHERE kind='monitor'")]
+
+    def test_no_monitor_text_no_monitor_item(self):
+        core.target_own(self.c, "web", "ops")
+        b = core.go(self.c, self.dir.name, "ops")
+        self.assertEqual((b["role"], b["monitor_item"]), ("deployer", None))
+        self.assertEqual(self.monitors(), [])
+
+    def test_claiming_a_deploy_adds_one_monitor_with_a_weak_model(self):
+        core.target_monitor(self.c, "web", "check https://example.test/health for 15 minutes")
+        self.assertEqual(core.target_show(self.c, "web")["monitor"], "check https://example.test/health for 15 minutes")
+        core.target_own(self.c, "web", "ops")
+        b = core.go(self.c, self.dir.name, "ops")
+        (m,) = self.monitors()
+        self.assertEqual(b["monitor_item"]["id"], m)
+        a = core.annotate(self.c)[m]
+        self.assertEqual((a["found_during"], a["target"], a["doer"], a["ready"]), (self.deploy, "web", "ai", True))
+        self.assertIn("example.test/health", a["context"])
+        self.assertIn("ships #", a["context"])
+        self.assertEqual((a["model"], a["effort"], a["max_model"], a["max_model_from"]), ("sonnet", "low", "sonnet", "kind:monitor"))
+        self.assertEqual([p["id"] for p in core.pending_monitors(self.c)], [m])
+        view = core.targets_view(self.c)[0]
+        self.assertEqual(view["pending"][0]["monitors"][0]["id"], m)
+        # A person's own setting for monitors wins over the built-in default.
+        core.config_set(self.c, "default_max_model", "opus", kind="monitor")
+        self.assertEqual(core.annotate(self.c)[m]["max_model"], "opus")
+
+    def test_the_monitor_session_gets_its_briefing(self):
+        core.target_monitor(self.c, "web", "watch the error rate for 10 minutes")
+        core.target_own(self.c, "web", "ops")
+        core.go(self.c, self.dir.name, "ops")
+        (m,) = self.monitors()
+        refused = core.go(self.c, self.dir.name, "big", focus=f"monitor:{m}", model="fable")
+        self.assertIn("allows at most sonnet", refused["focus_note"])
+        core.set_agent_model(self.c, "big", None)
+        b = core.go(self.c, self.dir.name, "mon", focus=f"monitor:{m}", model="sonnet")
+        self.assertEqual((b["role"], b["item"]["id"]), ("monitor", m))
+        self.assertEqual(b["monitor"]["deploy"]["id"], self.deploy)
+        self.assertEqual((b["monitor"]["deployer"], b["monitor"]["person"]), ("ops", "mark"))
+        self.assertEqual(core.pending_monitors(self.c), [])
+        again = core.go(self.c, self.dir.name, "mon")
+        self.assertEqual((again["role"], again.get("resumed")), ("monitor", True))

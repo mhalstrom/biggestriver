@@ -281,6 +281,13 @@ blocker trees, the agent registry, capacity, settings, and the web page.
 - Needs you: one list of what waits on a person, most important first, with
   notifications by phone (ntfy), email (SMTP), macOS banner, and browser.
 - Planning and shipping: `river plan`, deploy targets, `river ship`.
+- Deploy monitoring: `river target monitor <target> "<what to watch, for how
+  long>"`. When a deploy item is claimed, river adds a monitor item for that
+  release (sonnet, low effort, at most sonnet, unless settings for
+  `--kind monitor` say otherwise), and the running `river serve` opens a
+  session for it (`RIVER_FOCUS=monitor:<id>`). The session watches, then
+  finishes the item, or alerts the deployer and adds a person's item with the
+  evidence and a proposed rollback. The Targets tab shows the monitor of each deploy.
 - Review before release (`river config set review on`): each release gets one
   review item that waits on everything it ships, and the deploy waits on the
   review. `review_prompt` holds your review process (for example

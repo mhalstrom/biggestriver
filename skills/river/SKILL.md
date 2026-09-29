@@ -68,6 +68,10 @@ work at that effort; a different model may still take it.
    deploy item, which only the target owner takes. The owner's `river go`
    gives it the ready deploy item first (role DEPLOYER), with what it ships;
    `river go --role deployer` also takes a free target of the folder's projects.
+   When the target has a monitor text (`river target monitor`), claiming the
+   deploy adds a monitor item, and `river serve` opens a session for it
+   (role MONITOR): it watches, then finishes, or alerts the deployer and adds
+   a person's item with a proposed rollback. It never rolls back by itself.
    With the setting `review` on, the deploy item first waits on one review
    of the whole release. `river go` gives a ready review before new work
    (role REVIEWER; `--role reviewer` takes any). Follow the review process in

@@ -111,6 +111,7 @@ CREATE TABLE IF NOT EXISTS targets (
   id                INTEGER PRIMARY KEY,
   name              TEXT NOT NULL UNIQUE,
   description       TEXT NOT NULL DEFAULT '',
+  monitor           TEXT NOT NULL DEFAULT '',  -- what a session watches after each deploy (river target monitor)
   owner             TEXT,
   owner_expires_at  TEXT,
   created_at        TEXT NOT NULL
@@ -578,6 +579,8 @@ def _migrate(conn):
         conn.execute("ALTER TABLE items ADD COLUMN reserved_for TEXT")
         conn.execute("ALTER TABLE items ADD COLUMN hold_expires_at TEXT")
         conn.execute("ALTER TABLE items ADD COLUMN replan INTEGER NOT NULL DEFAULT 0")
+    if "monitor" not in {r["name"] for r in conn.execute("PRAGMA table_info(targets)")}:
+        conn.execute("ALTER TABLE targets ADD COLUMN monitor TEXT NOT NULL DEFAULT ''")
     if "owner_lease" not in {r["name"] for r in conn.execute("PRAGMA table_info(goals)")}:
         conn.execute("ALTER TABLE goals ADD COLUMN owner_lease TEXT")
     if "held_at" not in {r["name"] for r in conn.execute("PRAGMA table_info(items)")}:
@@ -843,8 +846,13 @@ def _model_defaults(conn):
     return rows
 
 
+# Built-in defaults per item kind, below every setting: a monitor watches, so a weak model is enough.
+KIND_MODELS = {"monitor": {"model": "sonnet", "effort": "low", "max_model": "sonnet"}}
+
+
 def _item_models(it, project, defaults, ladder_text=DEFAULT_SETTINGS["model_ladder"]):
-    """Effective model, effort, and limits of an item: its own, else the most specific default_* setting."""
+    """Effective model, effort, and limits of an item: its own, else the most specific default_* setting,
+    else the built-in default of its kind (KIND_MODELS)."""
     scopes = [f"item:{it['id']}", f"kind:{it['kind']}", f"project:{project}", "global"]
     out = {}
     for f in MODEL_FIELDS:
@@ -859,6 +867,10 @@ def _item_models(it, project, defaults, ladder_text=DEFAULT_SETTINGS["model_ladd
                 if v:
                     out[f], out[f + "_from"] = v, sc
                 break
+        else:
+            v = KIND_MODELS.get(it["kind"], {}).get(f)
+            if v:
+                out[f], out[f + "_from"] = v, f"kind:{it['kind']}"
     # A default limit that contradicts the item's own limit gives way to it.
     lo, hi = out["min_model"], out["max_model"]
     if lo and hi and (out["min_model_from"] == "item") != (out["max_model_from"] == "item"):
@@ -1280,6 +1292,46 @@ def target_describe(conn, name, text, actor=None):
     return target_show(conn, name)
 
 
+def target_monitor(conn, name, text, actor=None):
+    """What to watch after each deploy of the target: health links, logs, error rates, and for how long.
+    With it set, claiming a deploy item adds a monitor item, and river serve opens a session for it."""
+    with tx(conn):
+        _target(conn, name)
+        conn.execute("UPDATE targets SET monitor=? WHERE name=?", (text.strip(), name))
+        _event(conn, None, actor, f"target {name} monitor " + ("changed" if text.strip() else "removed"))
+    return target_show(conn, name)
+
+
+def _add_monitor(conn, dep, actor):
+    """When a deploy starts: a monitor item for this release, if the target has a monitor text and none exists."""
+    tg = conn.execute("SELECT * FROM targets WHERE name=?", (dep["target"],)).fetchone()
+    if not tg or not tg["monitor"] or conn.execute(
+            "SELECT 1 FROM items WHERE kind='monitor' AND found_during=?", (dep["id"],)).fetchone():
+        return None
+    ships = conn.execute("SELECT i.id, i.title FROM deps d JOIN items i ON i.id=d.blocked_by WHERE d.item_id=? "
+                         "AND i.kind NOT IN ('review') ORDER BY i.id", (dep["id"],)).fetchall()
+    context = (tg["monitor"] + "\nRelease: deploy #" + str(dep["id"]) + " of " + tg["name"]
+               + (" ships " + "; ".join(f"#{r['id']} {r['title']}" for r in ships) if ships else ""))
+    top = conn.execute("SELECT COALESCE(MAX(rank),0) m FROM items WHERE project_id=?", (dep["project_id"],)).fetchone()["m"]
+    cur = conn.execute(
+        "INSERT INTO items(project_id,title,notes,priority,rank,doer,context,kind,target,found_during,created_at) "
+        "VALUES (?,?,?,?,?,'ai',?,'monitor',?,?,?)",
+        (dep["project_id"], f"Monitor the {tg['name']} deploy #{dep['id']}",
+         "Follow the deploy as the target's monitor text says; done when all is well, else alert and propose a rollback.",
+         dep["priority"], top + 1, context, tg["name"], dep["id"], iso(now())))
+    _event(conn, cur.lastrowid, actor, f"monitor for deploy #{dep['id']} ({tg['name']}) added")
+    _event(conn, dep["id"], actor, f"found work: #{cur.lastrowid} monitor")
+    return cur.lastrowid
+
+
+def pending_monitors(conn):
+    """Monitor items that no session holds and for which river opened no session yet."""
+    return [dict(r) for r in conn.execute(
+        "SELECT i.id, i.target, i.found_during FROM items i WHERE i.kind='monitor' AND i.status='open' "
+        "AND i.assignee IS NULL AND i.reserved_for IS NULL AND NOT EXISTS (SELECT 1 FROM events e "
+        "WHERE e.item_id=i.id AND e.change LIKE 'monitor session opened%') ORDER BY i.id")]
+
+
 def target_own(conn, name, actor=None, takeover=None):
     """Become the one owner of a target. Refused while another agent owns it, unless that owner is
     away or gone and `takeover` says why: then the target moves now and the old owner is told."""
@@ -1383,6 +1435,11 @@ def targets_view(conn, ann=None):
     review = lambda a: next(({"id": b, "status": ann[b]["status"], "assignee": ann[b]["assignee"]}
                              for b in a["waits_on"] if b in ann and ann[b]["kind"] == "review"
                              and ann[b]["status"] in OPEN_STATES), None)
+    monitors = {}
+    for a in ann.values():
+        if a["kind"] == "monitor" and a["found_during"]:
+            monitors.setdefault(a["found_during"], []).append(
+                {"id": a["id"], "status": a["status"], "assignee": a["assignee"], "output": a["output"]})
     out = []
     for t in target_list(conn):
         deploys = [a for a in ann.values() if a["kind"] == "deploy" and a["target"] == t["name"]]
@@ -1394,11 +1451,13 @@ def targets_view(conn, ann=None):
                 "SELECT name FROM projects WHERE target=? AND archived=0 AND name<>? ORDER BY rank, id",
                 (t["name"], f"deploy-{t['name']}"))],
             pending=[{"id": a["id"], "title": a["title"], "status": a["status"], "assignee": a["assignee"],
-                      "ready": a["ready"], "ships": ships(a), "review": review(a)} for a in pending],
+                      "ready": a["ready"], "ships": ships(a), "review": review(a),
+                      "monitors": monitors.get(a["id"], [])} for a in pending],
             last_deploy=({"id": last["id"], "title": last["title"], "closed_at": last["closed_at"],
                           "output": last["output"], "ships": ships(last)} if last else None),
             history=[{"id": a["id"], "title": a["title"], "closed_at": a["closed_at"], "output": a["output"],
-                      "ships": ships(a), "done_by": _done_by(conn, a["id"])} for a in reversed(done[-10:])]))
+                      "ships": ships(a), "done_by": _done_by(conn, a["id"]), "monitors": monitors.get(a["id"], [])}
+                     for a in reversed(done[-10:])]))
     return out
 
 
@@ -3067,6 +3126,8 @@ def _claim_row(conn, item_id, actor):
                      "WHERE kind='alert' AND item_id=? AND to_agent=? AND state='open'", (iso(t), item_id, actor))
     _event(conn, item_id, actor, f"claimed (lease {_short(ttl)})")
     _goal_notice(conn, item_id, actor, "claimed")
+    if it["kind"] == "deploy":
+        _add_monitor(conn, it, actor)
     return ag
 
 
@@ -4276,7 +4337,7 @@ def launch_target(conn, project=None, agent=None, item=None, model=None, effort=
     important ready item an agent can take (or of the project named, or of the one item named), and the
     command of the chosen launch_agents entry (the first when none is named). Refuses when nothing is ready there."""
     ann = annotate(conn)
-    pool = sorted((a for a in ann.values() if a["ready"] and a["doer"] != "human" and a["kind"] not in ("deploy", "review")
+    pool = sorted((a for a in ann.values() if a["ready"] and a["doer"] != "human" and a["kind"] not in ("deploy", "review", "monitor")
                    and not a["reserved_for"] and not a["project_archived"]
                    and (project is None or a["project"] == project)), key=lambda a: a["sort_key"])
     if item is not None:
@@ -4440,6 +4501,25 @@ def _goal_brief(conn, name, actor):
 
 
 def go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None, model=None):
+    """One call for a fresh agent session; see _go. A session that gets a monitor item has role monitor,
+    and its brief says which deploy it follows and whom to alert."""
+    brief = _go(conn, cwd, actor, project, role, session, focus, model)
+    it = brief.get("item")
+    if it and it["kind"] == "monitor":
+        brief["role"] = "monitor"
+        brief["monitor"] = _monitor_brief(conn, it)
+        _set_role_note(conn, brief["agent"], "monitor", it["id"])
+    return brief
+
+
+def _monitor_brief(conn, it):
+    dep = _item(conn, it["found_during"]) if it["found_during"] else None
+    deployer = dep and (dep["assignee"] or _done_by(conn, dep["id"]))
+    return {"deploy": {"id": dep["id"], "title": dep["title"], "status": dep["status"]} if dep else None,
+            "deployer": deployer, "target": it["target"], "person": _person(conn)}
+
+
+def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None, model=None):
     """One call for a fresh agent session: find the project, name the session, pick a role, and brief it.
 
     focus (RIVER_FOCUS, set when the page opens an agent): "help:<id>@<person>" briefs the session to do a
@@ -4568,6 +4648,15 @@ def go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None,
                          why=f"the page opened this session to do #{f['id']} together with {person}")
             _set_role_note(conn, actor, "helper", f["id"])
             return brief
+        if f["status"] == "open" and kind == "monitor" and f["kind"] == "monitor":
+            try:
+                item = claim(conn, f["id"], actor)
+            except RiverError as e:
+                brief["focus_note"] = f"The page opened this session to monitor #{f['id']}, but: {e}"
+            else:
+                brief.update(role="monitor", item=item, why=f"river opened this session to follow deploy "
+                                                            f"#{f['found_during']} of {f['target']}")
+                return brief
         if f["status"] in OPEN_STATES and kind == "unblock":
             got = try_claim(unblocks=str(f["id"]))
             if got:
@@ -4755,7 +4844,10 @@ def _deploy_brief(conn, item):
     t = dict(_target(conn, item["target"]))
     nxt = conn.execute("SELECT id FROM items WHERE kind='deploy' AND target=? AND status='open' AND id<>? ORDER BY id",
                        (t["name"], item["id"])).fetchall()
-    return {"target": {"name": t["name"], "description": t["description"], "owner": t["owner"]},
+    mon = conn.execute("SELECT id, title, status, assignee FROM items WHERE kind='monitor' AND found_during=?",
+                       (item["id"],)).fetchone()
+    return {"target": {"name": t["name"], "description": t["description"], "owner": t["owner"], "monitor": t["monitor"]},
+            "monitor_item": dict(mon) if mon else None,
             "ships": item["waits_on_detail"],
             "next_deploy": [item_show(conn, r["id"]) for r in nxt]}
 

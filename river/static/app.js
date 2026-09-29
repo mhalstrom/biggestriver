@@ -154,20 +154,26 @@ function agentSession(a) {
   return `${a.model ? `<span class="chip c-p" title="the model this session runs (RIVER_MODEL)">${esc(a.model)}</span> ` : ""}${a.session ? `<span title="Claude Code session">${esc(a.session)}${a.session_ref ? " [" + esc(a.session_ref) + "]" : ""}</span>` : ""}${a.session_url ? ` <a class="link" href="${esc(a.session_url)}" target="_blank" rel="noopener">open</a>` : ""}`;
 }
 
+// The monitor sessions that followed a deploy (river target monitor).
+function monitorLines(d) {
+  return (d.monitors || []).map(m => `<div class="muted" style="font-size:12px">monitor <span class="link" data-open="${m.id}">#${m.id}</span> (${esc(m.status.replace("_", " "))}${m.assignee ? " · " + esc(m.assignee) : ""})${m.output ? ": " + esc(clip(m.output, 200)) : ""}</div>`).join("");
+}
+
 function renderTargets() {
   const T = S.targets || [];
   const shipList = (s) => s.map(x => `<span class="link" data-open="${x.id}">#${x.id}</span> ${esc(clip(x.title, 50))} <span class="muted">(${esc(x.status.replace("_", " "))})</span>`).join("; ") || '<span class="muted">nothing yet</span>';
   $("#targets").innerHTML = T.map(t => nyCard(`<b>${esc(t.name)}</b>
         ${ownerChip(t.owner)}${t.owner ? `<span class="muted" style="font-size:12px">${t.owner_expires_at ? left(t.owner_expires_at) + " left" : ""}</span>` : ""}
         <span class="muted" style="font-size:12px">${t.project_names.length ? "projects: " + t.project_names.map(esc).join(", ") : "no projects"}</span>`, `${t.description ? `<div class="ny-c">${esc(clip(t.description, 300))}</div>` : ""}
-      ${t.pending.map(d => `<div class="st" style="margin-top:4px"><span class="link" data-open="${d.id}">#${d.id}</span> ${d.ready ? "ready to deploy" : d.status === "open" ? "collecting" : esc(d.status.replace("_", " ")) + (d.assignee ? " · " + esc(d.assignee) : "")}: ${shipList(d.ships)}${d.review ? `<div class="muted" style="font-size:12px">first a review: <span class="link" data-open="${d.review.id}">#${d.review.id}</span> (${esc(d.review.status.replace("_", " "))}${d.review.assignee ? " · " + esc(d.review.assignee) : ""})</div>` : ""}</div>`).join("") || '<div class="st muted">No pending ship requests.</div>'}
+      <div class="muted" style="font-size:12px">${t.monitor ? "monitor after each deploy: " + esc(clip(t.monitor, 200)) : `no monitor (a session follows each deploy when you set one: river target monitor ${esc(t.name)} "&lt;what to watch, for how long&gt;")`}</div>
+      ${t.pending.map(d => `<div class="st" style="margin-top:4px"><span class="link" data-open="${d.id}">#${d.id}</span> ${d.ready ? "ready to deploy" : d.status === "open" ? "collecting" : esc(d.status.replace("_", " ")) + (d.assignee ? " · " + esc(d.assignee) : "")}: ${shipList(d.ships)}${d.review ? `<div class="muted" style="font-size:12px">first a review: <span class="link" data-open="${d.review.id}">#${d.review.id}</span> (${esc(d.review.status.replace("_", " "))}${d.review.assignee ? " · " + esc(d.review.assignee) : ""})</div>` : ""}${monitorLines(d)}</div>`).join("") || '<div class="st muted">No pending ship requests.</div>'}
       <div class="actions" style="margin-top:6px">${t.pending.some(d => d.status === "open" && d.ships.length)
         ? agentStart(S.launch_agents, [
             { label: "Deploy now", cls: "btn primary", attrs: `data-deploy="${esc(t.name)}"`, title: "Start the deploy now: the owner gets an alert, or the chosen agent opens to take it" },
             { label: "Review and deploy", attrs: `data-deploy="${esc(t.name)}" data-review="1"`, title: "First one review of everything it ships (review steps per project), then the deploy" }])
         : '<span class="muted" style="font-size:12px">Nothing to deploy: ship items first (river ship &lt;id&gt;, or done --ship).</span>'}</div>
       <div class="st" style="margin-top:6px"><b>Deploys</b></div>
-      ${(t.history || []).map(h => `<div class="st" style="margin-top:4px"><span class="link" data-open="${h.id}">#${h.id}</span> ${ago(h.closed_at)}${h.done_by ? " by " + esc(h.done_by) : ""}${h.output ? ": " + esc(clip(h.output, 200)) : ""}<div class="muted" style="font-size:12px">shipped ${shipList(h.ships)}</div></div>`).join("") || '<div class="st muted">Never deployed.</div>'}`)).join("") || `<div class="muted">No deploy targets. Add one: river target add &lt;name&gt; --description "how it deploys"</div>`;
+      ${(t.history || []).map(h => `<div class="st" style="margin-top:4px"><span class="link" data-open="${h.id}">#${h.id}</span> ${ago(h.closed_at)}${h.done_by ? " by " + esc(h.done_by) : ""}${h.output ? ": " + esc(clip(h.output, 200)) : ""}<div class="muted" style="font-size:12px">shipped ${shipList(h.ships)}</div>${monitorLines(h)}</div>`).join("") || '<div class="st muted">Never deployed.</div>'}`)).join("") || `<div class="muted">No deploy targets. Add one: river target add &lt;name&gt; --description "how it deploys"</div>`;
 }
 
 function renderBlocked() {
@@ -191,7 +197,7 @@ function renderTakeovers() {
 // The status strip: counts you click to go where they are.
 function renderStrip() {
   if (!S) return;
-  const ready = S.items.filter(i => i.ready && i.doer !== "human" && !["deploy", "review"].includes(i.kind)).length;
+  const ready = S.items.filter(i => i.ready && i.doer !== "human" && !["deploy", "review", "monitor"].includes(i.kind)).length;
   const running = S.items.filter(i => ["in_progress", "held"].includes(i.status)).length;
   const blocked = S.items.filter(i => i.blocked_reason && !["done", "dropped"].includes(i.status)).length;
   const T = (S.takeovers || []).length, slots = S.capacity ? S.capacity.spare_slots : 0;
@@ -877,7 +883,7 @@ const readyDialog = makeDialog($("#readyDlg"));
 function openReady() { readyDialog.open(); renderReady(); $("#readyClose").focus(); }
 function renderReady() {
   if (!S || !readyDialog.isOpen()) return;
-  const rows = S.items.filter(i => i.ready && i.doer !== "human" && !["deploy", "review"].includes(i.kind)).sort(itemOrder);
+  const rows = S.items.filter(i => i.ready && i.doer !== "human" && !["deploy", "review", "monitor"].includes(i.kind)).sort(itemOrder);
   $("#readyList").innerHTML = rows.map(i => `<div class="rrow"><div>
       <div class="t"><span class="link" data-open="${i.id}">#${i.id} ${esc(i.title)}</span></div>
       <div class="sub">${projectChip(i.project)}${prioNumChip(i.effective_priority ?? i.priority, "priority")}${doerChip(i)}
@@ -962,7 +968,7 @@ function renderSetup(st) {
       : "Found on this Mac: " + addable.map(a => esc(a.label)).join(", ") + ". Add one to the Start button.",
     (none ? `<button class="btn" data-su="recheck">Check again</button>` : "") + addBtns));
   // A first task, then an agent that takes it.
-  const tasks = (S && S.items || []).filter(i => !["deploy", "review"].includes(i.kind));
+  const tasks = (S && S.items || []).filter(i => !["deploy", "review", "monitor"].includes(i.kind));
   const folderProjects = (S && S.projects || []).filter(p => p.path);
   out.push(step(tasks.length > 0, "Add a first task",
     tasks.length ? `${tasks.length} task${tasks.length === 1 ? "" : "s"} on the list.`
