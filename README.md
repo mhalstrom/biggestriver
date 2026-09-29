@@ -163,6 +163,10 @@ river config set lease_ttl 7d --agent alex       # people keep claims longer
 river config set max_leases 3 --agent alex
 ```
 
+`max_leases` (1) limits how many items an agent holds. Items that serve its
+own outcome count apart, against `goal_max_leases` (3): items of a goal it
+owns, items such an item waits on, and the deploy items of a target it owns.
+
 ### Model and effort
 
 An item can recommend a model and an effort level, and it can set hard limits:

@@ -2684,3 +2684,46 @@ class Monitor(Base):
         self.assertEqual(core.pending_monitors(self.c), [])
         again = core.go(self.c, self.dir.name, "mon")
         self.assertEqual((again["role"], again.get("resumed")), ("monitor", True))
+
+
+class GoalLeases(Base):
+    """Items of the agent's own goals and targets count against goal_max_leases, apart from max_leases (#414)."""
+
+    def test_goal_work_counts_apart(self):
+        core.project_add(self.c, "a")
+        core.register(self.c, "o")
+        core.goal_add(self.c, "a", "ship")
+        core.goal_own(self.c, "ship", "o")
+        plain, other = self.add("a", "plain"), self.add("a", "other")
+        g = [core.item_add(self.c, "a", f"g{n}", goals=["ship"])["id"] for n in range(4)]
+        prereq = self.add("a", "prereq")
+        core.dep_add(self.c, g[3], [prereq])
+        core.claim(self.c, plain, "o")
+        with self.assertRaisesRegex(RiverError, r"max_leases 1"):
+            core.claim(self.c, other, "o")
+        core.claim(self.c, g[0], "o")  # a goal item: the owner takes it although it holds plain
+        core.claim(self.c, prereq, "o")  # it unblocks a goal item: goal work too
+        core.claim(self.c, g[1], "o")
+        with self.assertRaisesRegex(RiverError, r"goal_max_leases 3"):
+            core.claim(self.c, g[2], "o")
+        core.config_set(self.c, "goal_max_leases", "4", agent="o")
+        core.claim(self.c, g[2], "o")
+
+    def test_a_target_owner_takes_its_deploy_while_it_holds_work(self):
+        core.target_add(self.c, "web")
+        core.project_add(self.c, "site", target="web")
+        for n in ("dev", "ops", "x"):
+            core.register(self.c, n)
+        w = self.add("site", "page")
+        core.claim(self.c, w, "dev")
+        core.done(self.c, w, "abc", "dev", ship_it=True)
+        dep = core.item_show(self.c, w)["unblocks"][0]
+        core.target_own(self.c, "web", "ops")
+        busy = self.add("site", "busy")
+        core.claim(self.c, busy, "ops")
+        core.claim(self.c, dep, "ops")
+        self.assertEqual(core.item_show(self.c, dep)["assignee"], "ops")
+        # give: the same rule for the one who receives
+        core.claim(self.c, self.add("site", "x's work"), "x")
+        with self.assertRaisesRegex(RiverError, r"max_leases 1"):
+            core.give(self.c, busy, "x", "ops")

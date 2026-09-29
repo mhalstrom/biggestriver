@@ -120,6 +120,9 @@ without a goal stay in the normal queue.
   leases on them last `goal_lease` (4h) instead of `lease_ttl`. A person's
   items in the goal stay on the person's list. Each river command renews the
   claim; `river goal own <name> --lease 6h` picks another length.
+- Your goal's items, the items they wait on, and the deploy items of a target
+  you own count against `goal_max_leases` (3), apart from `max_leases` (1).
+  So you can take an urgent prerequisite of your goal while you hold other work.
 - Stop owning: `river goal release <name>`, or `river goal give <name> --to <agent>`.
   After `goal_lease` without a command the goal is free again, its items are
   open to every agent, and you get a notice.

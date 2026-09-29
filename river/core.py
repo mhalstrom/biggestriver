@@ -47,6 +47,10 @@ DEFAULT_SETTINGS = {
     "replan_threshold": "3",
     "default_prerequisite_mode": "release",
     "max_leases": "1",
+    # Items that serve the agent's own outcome count apart, against goal_max_leases: items of a goal it owns,
+    # items such an item waits on, and the deploy items of a target it owns. So an owner can take an urgent
+    # prerequisite, or run its deploy, while it holds other work.
+    "goal_max_leases": "3",
     "away_after": "1h",
     "gone_after": "24h",
     "question_nudge_after": "30m",
@@ -662,7 +666,7 @@ def config_set(conn, key, value, project=None, item=None, agent=None, actor=None
         raise RiverError(f"unknown setting {key!r}; known: {', '.join(sorted(DEFAULT_SETTINGS))}")
     if key.endswith(("_ttl", "_after", "_before", "_interval", "_window")) or key in ("wait_max", "wait_step", "human_wait_max", "goal_lease"):
         parse_duration(value)
-    elif key in ("keep_prereq_limit", "replan_threshold", "max_leases", "serve_port", "smtp_port"):
+    elif key in ("keep_prereq_limit", "replan_threshold", "max_leases", "goal_max_leases", "serve_port", "smtp_port"):
         if not value.isdigit():
             raise RiverError(f"{key} takes a whole number")
     elif key == "launch_agents":
@@ -1823,6 +1827,36 @@ def _reachable(conn, start, edges_sql):
     return seen
 
 
+def _goal_work(conn, item_id, actor):
+    """Whether an item serves the actor's own outcome: it carries a goal the actor owns, an open item of such
+    a goal waits on it, or it deploys a target the actor owns. Such items count toward goal_max_leases."""
+    if not actor:
+        return False
+    it = _item(conn, item_id)
+    if it["kind"] == "deploy" and conn.execute("SELECT 1 FROM targets WHERE name=? AND owner=?",
+                                               (it["target"], actor)).fetchone():
+        return True
+    tagged = {r[0] for r in conn.execute(
+        "SELECT ig.item_id FROM item_goals ig JOIN goals g ON g.id=ig.goal_id WHERE g.owner=? AND g.status='open' "
+        "AND g.owner_expires_at >= ?", (actor, iso(now())))}
+    if not tagged:
+        return False
+    if it["id"] in tagged:
+        return True
+    return bool(tagged & _reachable(conn, it["id"], "SELECT d.item_id FROM deps d JOIN items i ON i.id=d.item_id "
+                                    "WHERE d.blocked_by=? AND d.kind<>'conflicts' AND i.status IN ('open','in_progress','held')"))
+
+
+def _lease_room(conn, item_id, actor, states=("in_progress", "held")):
+    """(held, limit, key): the items the actor holds that count against the same limit as this item."""
+    goal = _goal_work(conn, item_id, actor)
+    key = "goal_max_leases" if goal else "max_leases"
+    rows = conn.execute(f"SELECT id FROM items WHERE assignee=? AND status IN ({','.join('?' * len(states))})",
+                        (actor, *states)).fetchall()
+    held = sum(1 for r in rows if _goal_work(conn, r["id"], actor) == goal)
+    return held, int(setting(conn, key, agent=actor)), key
+
+
 def _link(conn, a, b):
     """Any dependency row between two items, in either direction."""
     return conn.execute("SELECT * FROM deps WHERE (item_id=? AND blocked_by=?) OR (item_id=? AND blocked_by=?)",
@@ -2193,10 +2227,9 @@ def give(conn, item_id, to, actor=None):
         if it["assignee"] == actor and it["status"] in ("in_progress", "held"):
             if rec["role"] == "planner":
                 raise RiverError(f"{to} is a planner session and takes no work")
-            limit = int(setting(conn, "max_leases", agent=to))
-            n = conn.execute("SELECT COUNT(*) c FROM items WHERE assignee=? AND status='in_progress'", (to,)).fetchone()["c"]
+            n, limit, key = _lease_room(conn, it["id"], to, ("in_progress",))
             if it["status"] == "in_progress" and n >= limit:
-                raise RiverError(f"refused: {to} already holds {n} item(s) (max_leases {limit}); they can release one first")
+                raise RiverError(f"refused: {to} already holds {n} item(s) ({key} {limit}); they can release one first")
             ttl = _lease_for(conn, it["id"], to)
             if it["status"] == "in_progress":
                 conn.execute("UPDATE items SET assignee=?, claimed_at=?, lease_expires_at=? WHERE id=?",
@@ -3092,16 +3125,14 @@ def _claim_row(conn, item_id, actor):
         if g:
             raise RiverError(f"refused: #{item_id} is reserved for {g['owner']}, who owns goal {g['name']}. "
                              f"Offer help: river offer \"<what you can take>\" --goal {g['name']}")
-    limit = int(setting(conn, "max_leases", agent=actor))
     # A hold does not use up a lease when the agent takes one of its own reserved prerequisites.
-    count_sql = ("SELECT COUNT(*) c FROM items WHERE assignee=? AND status='in_progress'"
-                 if it0["reserved_for"] == actor else
-                 "SELECT COUNT(*) c FROM items WHERE assignee=? AND status IN ('in_progress','held')")
-    held = conn.execute(count_sql, (actor,)).fetchone()["c"]
+    held, limit, key = _lease_room(conn, item_id, actor, ("in_progress",) if it0["reserved_for"] == actor
+                                   else ("in_progress", "held"))
     if held >= limit:
-        raise RiverError(f"refused: {actor} already holds {held} item(s) (max_leases {limit}). "
+        what = "items of its own goals and targets" if key == "goal_max_leases" else "item(s)"
+        raise RiverError(f"refused: {actor} already holds {held} {what} ({key} {limit}). "
                          f"Finish one (river done <id>), release one (river release <id>), "
-                         f"or raise the limit (river config set max_leases <n> --agent {actor})")
+                         f"or raise the limit (river config set {key} <n> --agent {actor})")
     why = _model_refusal(conn, it0, actor)
     if why:
         raise RiverError(f"refused: #{item_id} {why}. Take other work (river go), or a session with an allowed "
