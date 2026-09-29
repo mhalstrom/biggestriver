@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import sys
 import tempfile
 import unittest
 
@@ -161,6 +162,50 @@ class ChatApp(unittest.TestCase):
         new = os.path.join(self.dir.name, "fresh", "claude_desktop_config.json")
         cli.setup_claude_desktop(new)
         self.assertEqual(list(load(new)["mcpServers"]), ["river"])
+
+    @unittest.skipUnless(sys.version_info >= (3, 11), "tomllib is new in Python 3.11")
+    def test_setup_merges_into_the_codex_config_that_chatgpt_shares(self):
+        from river import cli
+        f = os.path.join(self.dir.name, ".codex", "config.toml")
+        os.makedirs(os.path.dirname(f))
+        old = ('model = "sol"\n\n[mcp_servers.node_repl]\ncommand = "/x/node"\nargs = []\n\n'
+               '[mcp_servers.node_repl.env]\nA = "1"\n\n[apps.x.tools."y.z"]\napproval_mode = "approve"\n')
+        with open(f, "w") as fh:
+            fh.write(old)
+        self.assertIn("Work or Codex mode", cli.setup_codex_config(f))
+        with open(f) as fh:
+            text = fh.read()
+        self.assertTrue(text.startswith(old.rstrip("\n")))  # every other line stays as it was
+        import tomllib
+        data = tomllib.loads(text)
+        self.assertEqual(data["mcp_servers"]["node_repl"]["env"], {"A": "1"})
+        self.assertEqual(data["mcp_servers"]["river"]["env"], {"RIVER_DB": str(core.db_path().resolve()), "RIVER_CHAT": "1"})
+        self.assertEqual(data["mcp_servers"]["river"]["args"][-1], "mcp")
+        self.assertIn("nothing changed", cli.setup_codex_config(f))
+        # A changed river entry is replaced, not doubled.
+        with open(f, "w") as fh:
+            fh.write(text.replace('"RIVER_CHAT" = "1"', "").replace("RIVER_CHAT = \"1\"", 'RIVER_CHAT = "0"'))
+        cli.setup_codex_config(f)
+        with open(f) as fh:
+            text = fh.read()
+        self.assertEqual(text.count("[mcp_servers.river]"), 1)
+        self.assertIn('RIVER_CHAT = "1"', text)
+        self.assertIn("took river out", cli.setup_codex_config(f, remove=True))
+        with open(f) as fh:
+            self.assertEqual(fh.read().rstrip("\n"), old.rstrip("\n"))
+        self.assertIn("nothing changed", cli.setup_codex_config(f, remove=True))
+        with open(f, "w") as fh:
+            fh.write("[broken")
+        with self.assertRaisesRegex(core.RiverError, "not valid TOML"):
+            cli.setup_codex_config(f)
+
+    def test_a_session_in_a_project_folder_is_not_a_chat(self):
+        # The Codex CLI reads the same config: its river mcp runs with RIVER_CHAT=1 in the project folder.
+        os.makedirs(os.path.join(self.dir.name, "site"))
+        srv = mcp.Server()
+        go = self.call(srv, "go", {"cwd": os.path.join(self.dir.name, "site")})
+        self.assertIn(f"YOUR ITEM #{self.code}: fix the header", go)
+        self.assertNotIn("IN A CHAT", go)
 
 
 if __name__ == "__main__":

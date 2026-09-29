@@ -5464,6 +5464,9 @@ def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None
             _project(conn, n)
     else:
         names = projects_for_dir(conn, cwd)
+        # A session in a project folder is not a chat, even with RIVER_CHAT set: the Codex CLI reads the same
+        # MCP config as the ChatGPT app, and its sessions run in the project folder.
+        chat = chat and not names
         if not names and chat:
             names = [p["name"] for p in project_list(conn)]
             if not names:

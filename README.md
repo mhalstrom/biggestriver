@@ -270,6 +270,20 @@ A chat has no folder and no shell, so river runs it as a chat session
   coding agent. The result goes into the queue: a short one in
   `done --output`, a long one in the item's notes first.
 
+A session whose folder belongs to a project is never a chat, even with
+`RIVER_CHAT=1`: it works as usual.
+
+### ChatGPT desktop app
+
+`river setup-agent --chatgpt-desktop` adds river to `~/.codex/config.toml`
+(`[mcp_servers.river]`; the other tables stay, and the old file is kept as
+`.bak`). The ChatGPT desktop app shares that file with the Codex CLI.
+Restart the app. Its Work and Codex modes run on this computer and reach
+river; plain Chat mode reaches only remote servers, so it does not. In a
+chat, river works as it does for the Claude desktop app (above). Codex CLI
+sessions see the river server too, and in a project folder they work as
+usual. `--remove` takes river out again.
+
 ## Outside trackers
 
 River works next to an issue tracker (GitHub Issues, Jira, Linear, and

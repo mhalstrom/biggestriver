@@ -118,6 +118,8 @@ SETUP = """Setting up agents to use river
 6. Optional, the Claude desktop app: plan, manage, and answer what waits on
    you from a chat (river runs it with no folder):
      river setup-agent --claude-desktop    then quit and reopen the app
+   The ChatGPT desktop app (Work and Codex modes) the same way:
+     river setup-agent --chatgpt-desktop   then restart the app
 """
 
 HINTS = {
@@ -736,8 +738,11 @@ def build_parser():
     x.add_argument("--append", metavar="FILE", help="append the block to this file if it is not there yet")
     x.add_argument("--claude-desktop", action="store_true",
                    help="add river (river mcp) to the Claude desktop app's MCP servers, leaving the others as they are")
-    x.add_argument("--remove", action="store_true", help="with --claude-desktop: take river out again")
-    x.add_argument("--config", help="with --claude-desktop: the app's config file (default: where the app keeps it)")
+    x.add_argument("--chatgpt-desktop", "--codex", dest="codex", action="store_true",
+                   help="add river (river mcp) to ~/.codex/config.toml, which the ChatGPT desktop app (Work and Codex "
+                        "modes) and the Codex CLI share, leaving the other servers as they are")
+    x.add_argument("--remove", action="store_true", help="with --claude-desktop or --chatgpt-desktop: take river out again")
+    x.add_argument("--config", help="with --claude-desktop or --chatgpt-desktop: the config file (default: where the app keeps it)")
     return p
 
 
@@ -749,6 +754,76 @@ def claude_desktop_config_path():
         return Path(os.environ.get("APPDATA") or Path("~/AppData/Roaming").expanduser(), "Claude",
                     "claude_desktop_config.json")
     return Path("~/.config/Claude/claude_desktop_config.json").expanduser()
+
+
+def _toml_river_block(entry):
+    """The [mcp_servers.river] tables for an entry. A JSON string is also a valid TOML basic string."""
+    lines = ["[mcp_servers.river]", f"command = {json.dumps(entry['command'])}",
+             "args = [" + ", ".join(json.dumps(a) for a in entry["args"]) + "]", "", "[mcp_servers.river.env]"]
+    lines += [f"{k} = {json.dumps(v)}" for k, v in entry["env"].items()]
+    return "\n".join(lines) + "\n"
+
+
+def _toml_without_river(text):
+    """The config text without its [mcp_servers.river] table and subtables; every other line stays."""
+    import re
+    out, skip = [], False
+    for line in text.splitlines(keepends=True):
+        m = re.match(r"^\s*\[\[?\s*([^\]]+?)\s*\]\]?\s*(#.*)?$", line)
+        if m:
+            name = m.group(1).replace('"', "").replace("'", "").replace(" ", "")
+            skip = name == "mcp_servers.river" or name.startswith("mcp_servers.river.")
+        if not skip:
+            out.append(line)
+    return "".join(out)
+
+
+def _toml_load(text, f):
+    try:
+        import tomllib
+    except ImportError:  # Python before 3.11: river cannot check the file, so it changes it only by lines
+        return None
+    try:
+        return tomllib.loads(text)
+    except tomllib.TOMLDecodeError as e:
+        raise RiverError(f"{f} is not valid TOML ({e}); fix it first, river does not overwrite it")
+
+
+def setup_codex_config(path=None, remove=False):
+    """Add (or remove) river in ~/.codex/config.toml, which the ChatGPT desktop app shares with the Codex CLI.
+    Only the [mcp_servers.river] tables change; the old file is kept as config.toml.bak."""
+    f = Path(path).expanduser() if path else Path(os.environ.get("CODEX_HOME") or "~/.codex").expanduser() / "config.toml"
+    old = f.read_text() if f.exists() else ""
+    before = _toml_load(old, f)
+    had = before is not None and "river" in (before.get("mcp_servers") or {}) or "[mcp_servers.river]" in old
+    base = _toml_without_river(old)
+    if remove:
+        if not had:
+            return f"{f} has no river entry; nothing changed"
+        new = base
+    else:
+        entry = claude_desktop_entry()
+        if before is not None and (before.get("mcp_servers") or {}).get("river") == entry:
+            return f"river is already in {f}; nothing changed"
+        new = base.rstrip("\n") + ("\n\n" if base.strip() else "") + _toml_river_block(entry)
+    after = _toml_load(new, f)
+    if after is not None:
+        others = lambda d: {k: v for k, v in (d or {}).items() if k != "mcp_servers"}
+        servers = lambda d: {k: v for k, v in ((d or {}).get("mcp_servers") or {}).items() if k != "river"}
+        if others(after) != others(before) or servers(after) != servers(before) or (
+                not remove and after["mcp_servers"]["river"] != entry):
+            raise RiverError(f"river could not add its entry to {f} without changing other settings; add it by hand: "
+                             f"codex mcp add river --env RIVER_CHAT=1 -- river mcp")
+    if old:
+        f.with_name(f.name + ".bak").write_text(old)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(new)
+    if remove:
+        return f"took river out of {f} (the old file: {f.name}.bak). Restart the ChatGPT desktop app."
+    return (f"added river to {f}" + (f" (the old file: {f.name}.bak)" if old else "") + ".\n"
+            "Restart the ChatGPT desktop app, then use Work or Codex mode (plain Chat mode does not reach servers "
+            "on this computer). Ask it, for example: \"plan my next work with river\" or \"what waits on me in river?\". "
+            "Codex CLI sessions see river too; in a project folder they work as usual.")
 
 
 def claude_desktop_entry():
@@ -858,11 +933,16 @@ def run(argv=None):
         mcp.serve()
         return 0
     if args.cmd == "setup-agent":
+        if args.claude_desktop and args.codex:
+            raise RiverError("one app at a time: --claude-desktop or --chatgpt-desktop")
         if args.claude_desktop:
             print(setup_claude_desktop(args.config, args.remove))
             return 0
+        if args.codex:
+            print(setup_codex_config(args.config, args.remove))
+            return 0
         if args.remove or args.config:
-            raise RiverError("--remove and --config go with --claude-desktop")
+            raise RiverError("--remove and --config go with --claude-desktop or --chatgpt-desktop")
         if not args.append:
             print(AGENT_SNIPPET)
             return 0
