@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sys
+import threading
 
 from . import __version__, cli
 from .core import RiverError
@@ -77,9 +78,20 @@ CHAT_INSTRUCTIONS = ("Biggest River is the user's work queue for AI agents. In t
                      "for other river commands use the river tool with the words after `river`.")
 
 
+# One river command at a time: a call changes the process's folder and captures its stdout, and river serve
+# answers HTTP requests on several threads.
+_CALL_LOCK = threading.Lock()
+
+
 class Server:
-    def __init__(self):
-        self.agent = os.environ.get("RIVER_AGENT")
+    """chat: a session with no folder (default: RIVER_CHAT=1); go, plan, and manage get --chat. folders: whether a
+    tool call may name a cwd (not over HTTP: a web chat has no folder on this computer)."""
+
+    def __init__(self, chat=None, folders=True):
+        # Over HTTP the session is a new chat: not the agent whose environment started river serve.
+        self.agent = os.environ.get("RIVER_AGENT") if folders else None
+        self.chat = os.environ.get("RIVER_CHAT") == "1" if chat is None else chat
+        self.folders = folders
 
     def argv(self, name, a):
         if name == "river":
@@ -111,6 +123,8 @@ class Server:
             words = ["manage"] + (["--takeover", a["takeover"]] if a.get("takeover") else [])
         else:
             raise RiverError(f"unknown tool {name!r}")
+        if self.chat and words and words[0] in ("go", "plan", "manage") and "--chat" not in words:
+            words = words[:1] + ["--chat"] + words[1:]
         who = a.get("as") or self.agent
         if who and "--as" not in words:
             words = ["--as", who] + words
@@ -119,12 +133,22 @@ class Server:
     def call(self, name, a):
         """Run one river command in-process; return (text, is_error)."""
         words = self.argv(name, a)
+        if a.get("cwd") and not self.folders:
+            raise RiverError("this session has no folder on this computer; leave out cwd")
+        with _CALL_LOCK:
+            return self._call(words, a)
+
+    def _call(self, words, a):
         out, err = io.StringIO(), io.StringIO()
         old = os.getcwd()
+        # Over HTTP, river's own default name ($RIVER_AGENT of river serve) is not this chat's.
+        env_agent = os.environ.pop("RIVER_AGENT", None) if not self.folders else None
         code = 0
         try:
             if a.get("cwd"):
                 os.chdir(os.path.expanduser(a["cwd"]))
+            elif not self.folders:  # river serve may run in a project folder; a web chat is in none
+                os.chdir(os.path.abspath(os.sep))
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                 try:
                     code = cli.run(words) or 0
@@ -138,6 +162,8 @@ class Server:
             code = 2
         finally:
             os.chdir(old)
+            if env_agent is not None:
+                os.environ["RIVER_AGENT"] = env_agent
         text = out.getvalue() + err.getvalue()
         m = re.search(r"^You are (?:river agent|the river MANAGER) (\S+?)(?: \(|\.)", text, re.M)
         if m:
@@ -152,7 +178,7 @@ class Server:
             result = {"protocolVersion": msg.get("params", {}).get("protocolVersion") or PROTOCOL,
                       "capabilities": {"tools": {}},
                       "serverInfo": {"name": "biggest-river", "version": __version__},
-                      "instructions": CHAT_INSTRUCTIONS if os.environ.get("RIVER_CHAT") == "1" else INSTRUCTIONS}
+                      "instructions": CHAT_INSTRUCTIONS if self.chat else INSTRUCTIONS}
         elif method == "tools/list":
             result = {"tools": TOOLS}
         elif method == "tools/call":
@@ -184,3 +210,72 @@ def serve(stdin=None, stdout=None):
         if reply is not None:
             stdout.write(json.dumps(reply) + "\n")
             stdout.flush()
+
+
+# ---------------------------------------------------------------- Streamable HTTP (river serve, /mcp)
+
+HTTP_SESSIONS = {}
+_SESSIONS_LOCK = threading.Lock()
+LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
+# Headers that proxies and tunnels add: a request that has one did not come from this computer directly.
+PROXY_HEADERS = ("forwarded", "x-forwarded-for", "x-forwarded-host", "x-real-ip", "cf-connecting-ip", "cf-ray",
+                 "cf-ipcountry", "true-client-ip")
+
+
+def _host_only(value):
+    v = (value or "").strip().lower()
+    if v.startswith("["):
+        return v[1:v.find("]")] if "]" in v else v
+    return v.rsplit(":", 1)[0] if v.count(":") == 1 else v
+
+
+def local_refusal(client_ip, headers):
+    """Why a /mcp request is refused, or None. Until the endpoint has OAuth (#438) it answers only requests
+    made on this computer, straight to river serve: never through a tunnel or proxy, whose requests also
+    arrive from 127.0.0.1. The Origin check stops a web page from calling it (DNS rebinding)."""
+    h = {k.lower(): v for k, v in headers.items()}
+    if client_ip not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+        return "only this computer may call /mcp"
+    if any(x in h for x in PROXY_HEADERS):
+        return "/mcp has no sign-in yet, so it refuses requests through a tunnel or proxy"
+    if _host_only(h.get("host")) not in LOCAL_HOSTS:
+        return "/mcp answers only on 127.0.0.1 or localhost"
+    origin = h.get("origin")
+    if origin and _host_only(origin.split("://", 1)[-1].split("/", 1)[0]) not in LOCAL_HOSTS:
+        return "cross-origin request refused"
+    return None
+
+
+def http_post(body, session_id=None):
+    """One POST to /mcp: returns (status, reply or None, headers). A JSON-RPC request gets its reply; a
+    notification or a response gets 202 and no body. initialize starts a session (Mcp-Session-Id)."""
+    import secrets
+    try:
+        msg = json.loads(body or b"")
+    except ValueError:
+        return 400, {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}}, {}
+    if not isinstance(msg, dict):
+        return 400, {"jsonrpc": "2.0", "id": None,
+                     "error": {"code": -32600, "message": "send one JSON-RPC message per request"}}, {}
+    headers = {}
+    if msg.get("method") == "initialize":
+        session_id = secrets.token_urlsafe(24)
+        with _SESSIONS_LOCK:
+            HTTP_SESSIONS[session_id] = Server(chat=True, folders=False)
+        headers["Mcp-Session-Id"] = session_id
+    with _SESSIONS_LOCK:
+        srv = HTTP_SESSIONS.get(session_id) if session_id else None
+    if srv is None:
+        if not session_id:
+            return 400, {"jsonrpc": "2.0", "id": msg.get("id"),
+                         "error": {"code": -32600, "message": "no Mcp-Session-Id: initialize first"}}, {}
+        return 404, {"jsonrpc": "2.0", "id": msg.get("id"),
+                     "error": {"code": -32001, "message": "unknown session: initialize again"}}, {}
+    if "method" not in msg or msg.get("id") is None:
+        return 202, None, headers  # a notification, or a response to a request of ours (we send none)
+    return 200, srv.handle(msg), headers
+
+
+def http_delete(session_id):
+    with _SESSIONS_LOCK:
+        return HTTP_SESSIONS.pop(session_id or "", None) is not None

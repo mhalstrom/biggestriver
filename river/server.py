@@ -808,6 +808,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?")[0]
+        if path == "/mcp":
+            return self._mcp("GET")
         if path in ("/", "/index.html"):
             return self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
         if path == "/api/state":
@@ -904,7 +906,41 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, *got)
         return self._send(404, {"error": "not found"})
 
+    def _mcp(self, method):
+        """/mcp: river's MCP tools over Streamable HTTP, for this computer only (mcp.local_refusal)."""
+        from . import mcp
+        why = mcp.local_refusal(self.client_address[0], dict(self.headers.items()))
+        if why:
+            return self._send(403, {"error": why})
+        sid = self.headers.get("Mcp-Session-Id")
+        if method == "GET":  # no stream of server messages: river sends none
+            self.send_response(405)
+            self.send_header("Allow", "POST, DELETE")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if method == "DELETE":
+            return self._send(200 if mcp.http_delete(sid) else 404, {})
+        code, reply, headers = mcp.http_post(self.rfile.read(int(self.headers.get("Content-Length", 0))), sid)
+        data = b"" if reply is None else json.dumps(reply).encode()
+        self.send_response(code)
+        for k, v in headers.items():
+            self.send_header(k, v)
+        if data:
+            self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_DELETE(self):
+        if self.path.split("?")[0] == "/mcp":
+            return self._mcp("DELETE")
+        return self._send(404, {"error": "not found"})
+
     def do_POST(self):
+        if self.path.split("?")[0] == "/mcp":
+            return self._mcp("POST")
         if self.path != "/api/action":
             return self._send(404, {"error": "not found"})
         # Same-origin check: the page is the only intended caller.

@@ -273,6 +273,16 @@ A chat has no folder and no shell, so river runs it as a chat session
 A session whose folder belongs to a project is never a chat, even with
 `RIVER_CHAT=1`: it works as usual.
 
+### Over HTTP
+
+`river serve` also answers MCP at `http://127.0.0.1:<port>/mcp` (Streamable
+HTTP, JSON replies, one session per `initialize`). Each session is a chat with
+no folder and gets its own agent name. It has no sign-in yet, so it answers
+only requests made on this computer straight to river serve: a request with
+a proxy or tunnel header (`X-Forwarded-For`, `CF-Connecting-IP`, ...), another
+`Host`, or a foreign `Origin` gets 403. Sign-in and a tunnel for claude.ai and
+the phone apps come later.
+
 ### ChatGPT desktop app
 
 `river setup-agent --chatgpt-desktop` adds river to `~/.codex/config.toml`

@@ -208,5 +208,86 @@ class ChatApp(unittest.TestCase):
         self.assertNotIn("IN A CHAT", go)
 
 
+class HttpEndpoint(unittest.TestCase):
+    """/mcp in river serve: the same tools over Streamable HTTP, for this computer only until it has sign-in."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        os.environ["RIVER_DB"] = os.path.join(self.dir.name, "t.db")
+        os.environ.pop("RIVER_AGENT", None)
+        os.environ.pop("RIVER_CHAT", None)
+        os.environ["RIVER_AGENT"] = "whoever-started-serve"
+        self.addCleanup(os.environ.pop, "RIVER_AGENT", None)
+        c = core.connect()
+        core.project_add(c, "site", path=self.dir.name)
+        self.code = core.item_add(c, "site", "fix the header", priority=0, touches="src/header.js")["id"]
+        self.text = core.item_add(c, "site", "write the launch post")["id"]
+        c.close()
+        self.old = os.getcwd()
+        os.chdir(self.dir.name)  # river serve started in a project folder: a web chat is still in none
+
+    def tearDown(self):
+        os.chdir(self.old)
+        os.environ.pop("RIVER_DB", None)
+        mcp.HTTP_SESSIONS.clear()
+        self.dir.cleanup()
+
+    def request(self, method, body=None, headers=None, client="127.0.0.1"):
+        from river import server
+        h = server.Handler.__new__(server.Handler)
+        data = json.dumps(body).encode() if body is not None else b""
+        hdrs = {"Host": "127.0.0.1:8765", "Content-Length": str(len(data)), **(headers or {})}
+        import email.message
+        msg = email.message.Message()
+        for k, v in hdrs.items():
+            msg[k] = v
+        h.headers, h.path, h.client_address, h.rfile, h.wfile = msg, "/mcp", (client, 5000), io.BytesIO(data), io.BytesIO()
+        out = {"headers": {}}
+        h.send_response = lambda code, msg=None: out.update(code=code)
+        h.send_header = lambda k, v: out["headers"].update({k: v})
+        h.end_headers = lambda: None
+        getattr(h, "do_" + method)()
+        raw = h.wfile.getvalue()
+        return out["code"], (json.loads(raw) if raw else None), out["headers"]
+
+    def test_a_session_over_http(self):
+        code, r, hd = self.request("POST", {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+        self.assertEqual(code, 200)
+        self.assertIn("no folder, no shell", r["result"]["instructions"])
+        sid = {"Mcp-Session-Id": hd["Mcp-Session-Id"]}
+        code, r, _ = self.request("POST", {"jsonrpc": "2.0", "method": "notifications/initialized"}, sid)
+        self.assertEqual((code, r), (202, None))
+        code, r, _ = self.request("POST", {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                                           "params": {"name": "go", "arguments": {}}}, sid)
+        text = r["result"]["content"][0]["text"]
+        self.assertIn(f"YOUR ITEM #{self.text}: write the launch post", text)  # a chat: the code item waits
+        self.assertIn("IN A CHAT", text)
+        self.assertRegex(text, r"You are river agent chat-")
+        code, r, _ = self.request("POST", {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                                           "params": {"name": "done", "arguments": {"id": self.text, "output": "posted"}}}, sid)
+        self.assertFalse(r["result"]["isError"])  # as the agent go named in this session
+        _, r, _ = self.request("POST", {"jsonrpc": "2.0", "id": 4, "method": "tools/call",
+                                        "params": {"name": "go", "arguments": {"cwd": "/tmp"}}}, sid)
+        self.assertIn("no folder on this computer", r["result"]["content"][0]["text"])
+        self.assertEqual(self.request("GET", headers=sid)[0], 405)
+        self.assertEqual(self.request("DELETE", headers=sid)[0], 200)
+        self.assertEqual(self.request("POST", {"jsonrpc": "2.0", "id": 5, "method": "tools/list"}, sid)[0], 404)
+        self.assertEqual(self.request("POST", {"jsonrpc": "2.0", "id": 6, "method": "tools/list"})[0], 400)
+
+    def test_only_this_computer_straight_to_river_serve(self):
+        init = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+        for headers, client, why in (
+                ({"CF-Connecting-IP": "203.0.113.9"}, "127.0.0.1", "tunnel or proxy"),  # cloudflared connects locally
+                ({"X-Forwarded-For": "203.0.113.9"}, "127.0.0.1", "tunnel or proxy"),
+                ({"Host": "river.example.com"}, "127.0.0.1", "only on 127.0.0.1"),
+                ({"Origin": "https://evil.example"}, "127.0.0.1", "cross-origin"),
+                ({}, "192.168.1.20", "only this computer")):
+            code, r, _ = self.request("POST", init, headers, client)
+            self.assertEqual(code, 403)
+            self.assertIn(why, r["error"])
+        self.assertEqual(self.request("POST", init, {"Host": "localhost:8765", "Origin": "http://localhost:8765"})[0], 200)
+        self.assertEqual(mcp._host_only("[::1]:8765"), "::1")
+
+
 if __name__ == "__main__":
     unittest.main()
