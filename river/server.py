@@ -99,37 +99,39 @@ def launch_agent(conn, project=None, runner=None, agent=None, actor=None, model=
     # With no project named, Start spreads sessions: first a project with ready work and no agent yet.
     # A session that waits for work in that project (river wait) gets the item: no new session needed.
     # Else the new session gets a name and the item is pushed to it, so the next Start sees the project covered.
-    import secrets
     t = core.launch_target(conn, project, agent, None, model, effort, launch_in, spread=project is None, options=options)
     waiting = core.waiting_agent_for(conn, t["project"], t["item"]["id"])
     if waiting:
         core.push(conn, t["item"]["id"], waiting, "from the Start button: you were waiting for work", actor)
         return {**t, "pushed_to": waiting}
     _can_open_terminal(runner, "cd <project folder> && claude go")
-    name = f"{t['project']}-{secrets.token_hex(2)}"
-    core.register(conn, name, note=f"started from the page for #{t['item']['id']}")
-    core.push(conn, t["item"]["id"], name, "from the page: Start opened this session for it", actor)
-    _open_terminal(t, {"RIVER_AGENT": name, **t["env"]}, runner)
-    return {**t, "session_name": name}
+    return _start_for_item(conn, t, runner, actor, "Start opened this session for it")
 
 
 def dispatch_item(conn, item_id, runner=None, agent=None, actor=None, model=None, effort=None, launch_in=None,
                   options=None):
     """Start work on one ready item: a session that waits for work in its project gets it (push);
     else river names a new session, reserves the item for it (push), and opens the chosen agent in the
-    project folder with RIVER_AGENT set to that name, so its first river go takes this item."""
-    import secrets
+    project folder with RIVER_AGENT set to that name and RIVER_FOCUS=item:<id>, so its first river go takes it."""
     t = core.launch_target(conn, agent=agent, item=item_id, model=model, effort=effort, launch_in=launch_in,
                            options=options)
     waiting = core.waiting_agent_for(conn, t["project"], t["item"]["id"])
     if waiting:
         core.push(conn, t["item"]["id"], waiting, "from the page: Dispatch; you were waiting for work", actor)
         return {**t, "pushed_to": waiting}
-    _can_open_terminal(runner, f"cd <project folder> && claude go, then river push {t['item']['id']} --to <its name>")
+    _can_open_terminal(runner, f"cd <project folder> && RIVER_FOCUS=item:{t['item']['id']} claude go")
+    return _start_for_item(conn, t, runner, actor, "Dispatch started this session for it")
+
+
+def _start_for_item(conn, t, runner, actor, why):
+    """Name a new session, reserve the item for it (push), and open the agent with RIVER_AGENT and
+    RIVER_FOCUS=item:<id>: its first river go claims that item, or says why not. A session that never runs
+    a river command is a manager finding (not connected) and does not count as the project's agent."""
+    import secrets
     name = f"{t['project']}-{secrets.token_hex(2)}"
-    core.register(conn, name, note=f"started from the page for #{t['item']['id']}")
-    core.push(conn, t["item"]["id"], name, "from the page: Dispatch started this session for it", actor)
-    _open_terminal(t, {"RIVER_AGENT": name, **t["env"]}, runner)
+    core.register(conn, name, note=f"{core.STARTED_NOTE} #{t['item']['id']}")
+    core.push(conn, t["item"]["id"], name, f"from the page: {why}", actor)
+    _open_terminal(t, {"RIVER_AGENT": name, "RIVER_FOCUS": f"item:{t['item']['id']}", **t["env"]}, runner)
     return {**t, "session_name": name}
 
 

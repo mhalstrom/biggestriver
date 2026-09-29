@@ -109,6 +109,9 @@ DEFAULT_SETTINGS = {
     # The manager (river manage): an agent that waits for work longer than wait_too_long is a finding, and
     # river manage --watch wakes at least every manage_every to report what changed.
     "wait_too_long": "20m",
+    # A session the page (or river launch) started that runs no river command within connect_within is a
+    # finding (not connected): its agent did not start, or waits on a prompt in its terminal.
+    "connect_within": "5m",
     "manage_every": "5m",
     # river cleanup lists a ready item that nobody claimed for this long.
     "stale_after": "14d",
@@ -762,7 +765,7 @@ def config_set(conn, key, value, project=None, item=None, agent=None, actor=None
     if key not in DEFAULT_SETTINGS:
         raise RiverError(f"unknown setting {key!r}; known: {', '.join(sorted(DEFAULT_SETTINGS))}")
     if key.endswith(("_ttl", "_after", "_before", "_interval", "_window")) or key in (
-            "wait_max", "wait_step", "human_wait_max", "goal_lease", "wait_too_long", "manage_every"):
+            "wait_max", "wait_step", "human_wait_max", "goal_lease", "wait_too_long", "manage_every", "connect_within"):
         parse_duration(value)
     elif key in ("keep_prereq_limit", "replan_threshold", "max_leases", "goal_max_leases", "serve_port", "smtp_port"):
         if not value.isdigit():
@@ -3618,6 +3621,16 @@ def _agent_state(conn, a):
     return "active"
 
 
+# The note of a session that river started for an item (Start, Dispatch, river launch).
+STARTED_NOTE = "started from the page for"
+
+
+def not_connected(conn, a):
+    """A session river started for an item that has run no river command since, for longer than connect_within."""
+    return (a["kind"] == "ai" and (a["note"] or "").startswith(STARTED_NOTE) and a["last_seen"] == a["registered_at"]
+            and not a["stop_at"] and now() - parse_iso(a["registered_at"]) > parse_duration(setting(conn, "connect_within")))
+
+
 def agent_status(conn, name):
     a = dict(_agent(conn, name))
     a["state"] = _agent_state(conn, a)
@@ -5225,7 +5238,7 @@ def covered_projects(conn, ann=None):
     there, waits for work there (river wait), or has an item there pushed to it (a Start just opened it)."""
     ann = ann if ann is not None else annotate(conn)
     live = {r["name"] for r in conn.execute("SELECT * FROM agents WHERE kind='ai'")
-            if _agent_state(conn, r) not in ("gone", "stopped")}
+            if _agent_state(conn, r) not in ("gone", "stopped") and not not_connected(conn, r)}
     covered = {}
     for a in sorted(ann.values(), key=lambda a: a["id"]):
         if a["status"] in ("in_progress", "held") and a["assignee"] in live:
@@ -5514,7 +5527,8 @@ def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None
 
     focus (RIVER_FOCUS, set when the page opens an agent): "help:<id>@<person>" briefs the session to do a
     person's item together with the person (the Copy prompt text); "needs:@<person>" the same for everything
-    that waits on the person; "unblock:<id>" takes work that unblocks that item first."""
+    that waits on the person; "unblock:<id>" takes work that unblocks that item first; "item:<id>" (Start,
+    Dispatch) claims that item, or says why not."""
     if role is not None and role not in ROLES:
         raise RiverError(f"role is one of {', '.join(ROLES)}")
     if project:
@@ -5679,6 +5693,17 @@ def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None
             else:
                 brief.update(role="monitor", item=item, why=f"river opened this session to follow deploy "
                                                             f"#{f['found_during']} of {f['target']}")
+                return brief
+        # Start or Dispatch opened this session for one item: claim it, or say why not.
+        if kind == "item" and f["status"] in OPEN_STATES and f["assignee"] != actor:
+            try:
+                item = claim(conn, f["id"], actor)
+            except RiverError as e:
+                brief["focus_note"] = (f"THE PAGE STARTED THIS SESSION FOR #{f['id']} {f['title']}, BUT YOU CANNOT "
+                                       f"TAKE IT: {e}. River gives you other work instead; tell the user.")
+            else:
+                brief.update(role="worker", item=item, why=f"the page started this session for #{f['id']}")
+                _set_role_note(conn, actor, "worker", item["id"])
                 return brief
         if f["status"] in OPEN_STATES and kind == "unblock":
             got = try_claim(unblocks=str(f["id"]))
@@ -5994,6 +6019,12 @@ def manager_findings(conn):
                 "in": a["waiting_in"]} for a in agents
                if a["role"] == "waiting" and a["waiting_since"] and a["state"] == "active"
                and t - parse_iso(a["waiting_since"]) > too_long]
+    unconnected = []
+    for r in conn.execute("SELECT * FROM agents WHERE kind='ai' ORDER BY name"):
+        if not_connected(conn, r):
+            it = next((x for x in ann.values() if x["reserved_for"] == r["name"] and x["status"] == "open"), None)
+            unconnected.append({"agent": r["name"], "since": _short(t - parse_iso(r["registered_at"])),
+                                "item": {"id": it["id"], "title": it["title"]} if it else None})
     covered = covered_projects(conn, ann)
     pool = sorted((x for x in ann.values() if x["ready"] and x["doer"] != "human" and not x["reserved_for"]
                    and x["kind"] not in ("deploy", "review", "monitor") and not x["project_archived"]),
@@ -6013,6 +6044,7 @@ def manager_findings(conn):
         f"SELECT id, from_agent, to_agent, body, item_id FROM messages WHERE kind='question' AND state='open' "
         f"AND to_agent IN ({','.join('?' * len(humans))}) ORDER BY id", humans)] if humans else []
     return {"stuck": stuck, "lost_leases": lost, "waiting_too_long": waiting, "uncovered": uncovered,
+            "not_connected": unconnected,
             "targets": targets, "questions": questions,
             "human_ready": [{"id": x["id"], "title": x["title"]} for x in sorted(
                                (x for x in ann.values() if x["ready"] and x["doer"] == "human" and not x["project_archived"]),
@@ -6021,7 +6053,8 @@ def manager_findings(conn):
 
 def _finding_keys(f):
     return sorted({f"stuck:{x['agent']}" for x in f["stuck"]} | {f"lost:{x['id']}" for x in f["lost_leases"]}
-                  | {f"waiting:{x['agent']}" for x in f["waiting_too_long"]} | {f"uncovered:{x['project']}" for x in f["uncovered"]}
+                  | {f"waiting:{x['agent']}" for x in f["waiting_too_long"]}
+                  | {f"unconnected:{x['agent']}" for x in f.get("not_connected", [])} | {f"uncovered:{x['project']}" for x in f["uncovered"]}
                   | {f"target:{x['target']}" for x in f["targets"]} | {f"question:{x['id']}" for x in f["questions"]}
                   | {f"human:{x['id']}" for x in f["human_ready"]})
 

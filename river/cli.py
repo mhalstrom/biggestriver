@@ -1627,6 +1627,10 @@ def _findings_lines(f, r):
     for x in f["waiting_too_long"]:
         out.append(f"  WAITS TOO LONG {x['agent']} ({x['waited']} in {x['in']}): give it work ({r} queue add "
                    f"{x['agent']} <id>) or stop it ({r} stop {x['agent']} --reason \"no work\")")
+    for x in f.get("not_connected", []):
+        out.append(f"  NOT CONNECTED {x['agent']}: started {x['since']} ago" + (f" for #{x['item']['id']} {_cut(x['item']['title'], 40)}" if x["item"] else "")
+                   + f", and ran no river command: its agent did not start or waits on a prompt in its terminal. "
+                   f"Tell the user; then {r} stop {x['agent']} --reason \"did not start\" and launch again")
     for x in f["uncovered"]:
         out.append(f"  NO AGENT in {x['project']}: {x['ready']} ready, top #{x['top']['id']} {_cut(x['top']['title'], 40)}."
                    f"  {r} launch --project {x['project']}")

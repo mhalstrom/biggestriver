@@ -146,7 +146,7 @@ class LaunchAgent(unittest.TestCase):
                 del os.environ["RIVER_DB"]
             else:
                 os.environ["RIVER_DB"] = old
-        self.assertRegex(sent[0], r"RIVER_DB=\S*q\.db'? RIVER_AGENT=\S+ claude go")  # the path is quoted when it needs it
+        self.assertRegex(sent[0], r"RIVER_DB=\S*q\.db'? RIVER_AGENT=\S+ RIVER_FOCUS=item:\d+ claude go")  # the path is quoted when it needs it
 
     def test_dispatch_starts_a_named_session_for_one_item(self):
         core.project_add(self.c, "shop", path=self.dir.name)
@@ -156,8 +156,8 @@ class LaunchAgent(unittest.TestCase):
         t = server.dispatch_item(self.c, x, runner=sent.append)
         name = t["session_name"]
         self.assertEqual((t["item"]["id"], core._item(self.c, x)["reserved_for"]), (x, name))
-        self.assertIn(f"RIVER_AGENT={name} claude go", sent[0])
-        b = core.go(self.c, self.dir.name, name)  # the new session's first go takes that item, not the top one
+        self.assertIn(f"RIVER_AGENT={name} RIVER_FOCUS=item:{x} claude go", sent[0])
+        b = core.go(self.c, self.dir.name, name, focus=f"item:{x}")  # its first go takes that item, not the top one
         self.assertEqual(b["item"]["id"], x)
         with self.assertRaises(RiverError):
             server.dispatch_item(self.c, x, runner=sent.append)  # held now
@@ -167,6 +167,40 @@ class LaunchAgent(unittest.TestCase):
                            (core.iso(core.now()),))
         r = server.dispatch_item(self.c, top, runner=sent.append)
         self.assertEqual((r["pushed_to"], len(sent)), ("idle", 1))  # a waiting session gets it; no new Terminal
+
+    def test_a_started_session_takes_its_item_or_says_why_and_one_that_never_connects_is_a_finding(self):
+        core.project_add(self.c, "shop", path=self.dir.name)
+        core.item_add(self.c, "shop", "first", priority=0)
+        x = core.item_add(self.c, "shop", "second", priority=3)["id"]
+        y = core.item_add(self.c, "shop", "third", priority=3)["id"]
+        sent = []
+        t = server.dispatch_item(self.c, x, runner=sent.append)
+        # The push is gone (cancelled, or it ran out): the focus still takes the item.
+        with core.tx(self.c):
+            self.c.execute("UPDATE items SET reserved_for=NULL, reserved_until=NULL WHERE id=?", (x,))
+        b = core.go(self.c, self.dir.name, t["session_name"], focus=f"item:{x}")
+        self.assertEqual((b["role"], b["item"]["id"]), ("worker", x))
+        t2 = server.dispatch_item(self.c, y, runner=sent.append)  # a second session, for the check below
+        # Someone else holds it: go says so loudly and gives other work.
+        core.register(self.c, "late")
+        b = core.go(self.c, self.dir.name, "late", focus=f"item:{x}")
+        self.assertIn(f"STARTED THIS SESSION FOR #{x}", b["focus_note"])
+        self.assertNotEqual(b["item"]["id"], x)
+        core.done(self.c, b["item"]["id"], output="ok", actor="late")
+        # After the item is done, the focus that stays in the session's environment says nothing.
+        core.done(self.c, x, output="ok", actor=t["session_name"])
+        b = core.go(self.c, self.dir.name, t["session_name"], focus=f"item:{x}")
+        self.assertNotIn("focus_note", b)
+        # A session that runs no river command: a finding after connect_within, and not the project's agent.
+        self.assertEqual(core.manager_findings(self.c)["not_connected"], [])
+        self.assertIn("shop", core.covered_projects(self.c))
+        old = core.iso(core.now() - core.parse_duration("6m"))
+        with core.tx(self.c):
+            self.c.execute("UPDATE agents SET registered_at=?, last_seen=? WHERE name=?", (old, old, t2["session_name"]))
+            self.c.execute("UPDATE agents SET last_seen=? WHERE name IN (?, 'late')", (old, t["session_name"]))
+        (nc,) = core.manager_findings(self.c)["not_connected"]
+        self.assertEqual((nc["agent"], nc["item"]["id"]), (t2["session_name"], y))
+        self.assertNotIn("shop", core.covered_projects(self.c))
 
     def test_open_agent_on_a_person_item_or_a_waiting_item(self):
         from river import cli
@@ -395,7 +429,8 @@ class LaunchAgent(unittest.TestCase):
         sent = []
         t = server.dispatch_item(self.c, x, runner=sent.append)
         self.assertEqual(sent[0], {"args": "cmd /k claude go --remote-control", "cwd": t["path"],
-                                   "env": {"RIVER_DB": str(core.db_path()), "RIVER_AGENT": t["session_name"]}})
+                                   "env": {"RIVER_DB": str(core.db_path()), "RIVER_AGENT": t["session_name"],
+                                           "RIVER_FOCUS": f"item:{x}"}})
         server.PLATFORM = "linux"
         core.item_add(self.c, "shop", "more work")
         with self.assertRaisesRegex(RiverError, "macOS and Windows"):
@@ -714,7 +749,7 @@ class LaunchProfiles(unittest.TestCase):
         self.addCleanup(setattr, server, "TERMINAL_RUNNER", None)
         t = server.OPS["dispatch_item"](self.c, {"id": x, "model": "opus", "options": {"remote_control": "off"}}, "mark")
         self.assertEqual(t["command"], "claude --model opus go")
-        self.assertIn(f"RIVER_AGENT={t['session_name']} RIVER_MODEL=opus claude --model opus go\"", sent[-1])
+        self.assertIn(f"RIVER_AGENT={t['session_name']} RIVER_FOCUS=item:{x} RIVER_MODEL=opus claude --model opus go\"", sent[-1])
         y = core.item_add(self.c, "shop", "more")["id"]
         t = server.dispatch_item(self.c, y, runner=sent.append, options={"permission_mode": "acceptEdits"})
         self.assertIn("claude --permission-mode acceptEdits go --remote-control", sent[-1])

@@ -192,7 +192,13 @@ On the page, every button that starts an agent (Start, Dispatch, Open agent,
 Claim next with an agent, Deploy now) opens one dialog: the agent, the model
 (only the agent's family, inside the item's limits, the recommendation
 preselected), the effort, the agent's launch options, the work, and a new tab
-or window. The session gets `RIVER_MODEL`.
+or window. The session gets `RIVER_MODEL`. Start and Dispatch (and
+`river launch`) name the new session (`RIVER_AGENT`), reserve the item for it,
+and set `RIVER_FOCUS=item:<id>`: the session's first `river go` claims that
+item, or says in capitals why it cannot and gives other work. A session that
+runs no river command within `connect_within` (5m) shows to the manager as
+NOT CONNECTED (its agent did not start, or waits on a prompt in its
+terminal), and its project counts as having no agent.
 
 Claude Code and Codex start from launch profiles: a launch_agents entry
 `Claude Code=@claude-code` or `Codex=@codex`, and river builds the command
