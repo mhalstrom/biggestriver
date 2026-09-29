@@ -529,6 +529,8 @@ def build_parser():
     x = sub.add_parser("plan", help="start a planner session: overview, open questions, and the planner's rules")
     x.add_argument("--project", help="project name(s) to focus on (default: this folder's, else all)")
 
+    x = sub.add_parser("stop", help="ask an agent to stop: it commits, releases its item, and ends (not a kill)")
+    x.add_argument("agent"); x.add_argument("--reason", required=True, help="why; the agent sees it")
     q = sub.add_parser("queue", help="one agent's own ordered queue: items it takes first, and instructions")
     qs = q.add_subparsers(dest="qcmd", required=True)
     x = qs.add_parser("add", help="add an item (at the end, --first, or --before <id>) or an instruction (--message)")
@@ -788,6 +790,9 @@ def _run(args, conn):
     actor = args.actor
     if args.cmd not in ("go", "plan"):
         core.activity(conn, actor)
+    st = core.stop_request(conn, actor) if args.cmd not in ("go", "wait", "stop") else None
+    if st and not args.json:
+        print(_stop_banner(actor, st), file=sys.stderr)
     res = dispatch(conn, args, actor)
     monitors = None
     if args.cmd in ("go", "claim", "next") and core.pending_monitors(conn):
@@ -847,6 +852,12 @@ def _monitor_lines(m):
     return [f"monitor #{x['id']}: " + (f"no session opened: {x['error']}" if x.get("error") else
             f"river serve opened {x['agent']} in {x['project']}" + (f" ({x['model']})" if x.get("model") else "")
             + " to follow the deploy") for x in m]
+
+
+def _stop_banner(me, st):
+    return (f"STOP REQUESTED by {st['stop_by'] or 'someone'}: {st['stop_reason']}. Take no new work. Commit finished "
+            f"work, release or hand back your item with a note (river --as {me} release <id> --note \"...\"), "
+            f"then run river --as {me} go once more: it ends the session.")
 
 
 def _print_queue(res):
@@ -1093,6 +1104,8 @@ def dispatch(conn, a, actor):
             return core.goal_done(conn, a.name, a.result, actor, a.drop_open)
         if g == "reopen":
             return core.goal_reopen(conn, a.name, actor)
+    if c == "stop":
+        return core.stop_agent(conn, a.agent, a.reason, actor)
     if c == "queue":
         if a.qcmd == "add":
             return core.queue_add(conn, a.agent, a.id, a.message, a.first, a.before, actor)
@@ -1502,6 +1515,20 @@ def render_go(b):
         out.append(f"  You own this outcome: add the items it needs ({r} add \"<title>\" tags them with it), take them, "
                    f"and when done-when holds: {r} goal done {gb['name']} --result \"<one line>\"")
         out.append("")
+    if b["role"] == "stopped":
+        st = b["stop"]
+        out.append(f"STOP REQUESTED by {st['stop_by'] or 'someone'}: {st['stop_reason']}")
+        if b["ended"]:
+            out += ["You hold nothing now. River released your goals and targets and gave your queued items back.",
+                    "End this session now: stop, and tell the user it has ended and why (the reason above)."]
+        else:
+            out.append("You still hold: " + ", ".join(f"#{h['id']} {h['title']}" for h in b["stop_holds"]))
+            out += ["1. Commit the work that is finished (tests first, as the project says).",
+                    f"2. Finished: {r} done <id> --output \"<commit>\". Not finished: {r} release <id> --note "
+                    "\"<what is done, what is left>\", or hand it on: river give <id> --to <agent>.",
+                    f"3. Run {r} go again: it ends the session. Take no new work."]
+        print("\n".join(out).rstrip())
+        return
     it = b.get("item")
     if b.get("model_skipped"):
         out.append(f"Skipped for your model {b.get('model')} (min/max model limits; another session takes them): "
@@ -1721,7 +1748,12 @@ def render_cleanup(rows, r="river"):
 
 def render_wait(res):
     r = f"river --as {res['agent']}"
-    if res["result"] == "work":
+    if res["result"] == "stop":
+        st = res["stop"]
+        print(f"STOP: {st['stop_by'] or 'someone'} asked this session to stop: {st['stop_reason']}. "
+              + ("River released your goals and targets. End this session now, and tell the user it has ended and why."
+                 if res["ended"] else f"You still hold work: run {r} go, and follow it."))
+    elif res["result"] == "work":
         print(f"WORK: {res['why']}. Run now: {r} go")
     elif res["result"] == "again":
         print(f"No work yet. Run again at once: {r} wait   (this session ends by itself in {res['left']} without work)")
@@ -1818,6 +1850,10 @@ def render(a, res):
         return
     if c == "queue":
         _print_queue(res)
+        return
+    if c == "stop":
+        print(f"asked {res['agent']} to stop ({res['reason']}); it ends {res['ends']}"
+              + ("; it holds " + ", ".join(f"#{h['id']}" for h in res["holds"]) if res["holds"] else ""))
         return
     if c == "target":
         if isinstance(res, list):

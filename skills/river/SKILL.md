@@ -256,6 +256,19 @@ A person or a manager can give you your own queue (`river queue add <you> <id>`,
   it gets an entry.
 - When your session is gone or stops, your queued items go back to the main queue.
 
+## When river says STOP
+
+A person or a manager can ask you to stop (`river stop <you> --reason "..."`).
+Every river command then prints STOP REQUESTED first, `river wait` returns
+STOP, and claims are refused. Then:
+
+1. Commit the work that is finished.
+2. `river done <id> --output "<commit>"` when the item is finished; else
+   `river release <id> --note "<what is done, what is left>"`, or hand it on
+   with `river give <id> --to <agent>`.
+3. Run `river --as <you> go` once more: with nothing held it ends the session
+   (river releases your goals and targets). Stop, and tell the user why.
+
 ## Pushed items
 
 Someone can push an item to you (`river push <id> --to <you> --note "..."`):

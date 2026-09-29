@@ -2795,3 +2795,57 @@ class AgentQueue(Base):
         self.assertIn("s1 is gone", core.inbox(self.c, "boss")[0]["body"])
         core.unregister(self.c, "s2")
         self.assertIsNone(core.annotate(self.c)[y]["reserved_for"])
+
+
+class Stop(Base):
+    """river stop: a request at the front of the agent's queue; the agent commits, releases, and ends (#427)."""
+
+    def setUp(self):
+        super().setUp()
+        core.project_add(self.c, "a", path=self.dir.name)
+        for n in ("s1", "s2"):
+            core.register(self.c, n)
+        core.register(self.c, "mark", human=True)
+
+    def test_a_waiting_agent_ends_at_once(self):
+        core.goal_add(self.c, "a", "g")
+        core.goal_own(self.c, "g", "s1")
+        x = self.add("a", "x")
+        core.queue_add(self.c, "s1", x, actor="mark")
+        self.c.execute("UPDATE agents SET role='waiting' WHERE name='s1'")
+        with self.assertRaisesRegex(RiverError, "may not stop another"):
+            core.stop_agent(self.c, "s1", "no", actor="s2")
+        r = core.stop_agent(self.c, "s1", "project paused", actor="mark")
+        self.assertTrue(r["waiting"])
+        self.assertEqual(core.queue_list(self.c, "s1")["entries"][0]["kind"], "stop")
+        w = core.wait(self.c, self.dir.name, "s1", step="1m", sleep=lambda s: None)
+        self.assertEqual((w["result"], w["ended"], w["stop"]["stop_reason"]), ("stop", True, "project paused"))
+        self.assertIsNone(core.goal_show(self.c, "g")["owner"])
+        self.assertIsNone(core.annotate(self.c)[x]["queued_for"])
+        self.assertEqual(core.agent_status(self.c, "s1")["state"], "stopped")
+        with self.assertRaisesRegex(RiverError, "asked to stop"):
+            core.claim(self.c, x, "s1")
+
+    def test_a_working_agent_releases_then_ends(self):
+        x, y = self.add("a", "x"), self.add("a", "y")
+        core.claim(self.c, x, "s1")
+        r = core.stop_agent(self.c, "s1", "wrong approach", actor="mark")
+        self.assertFalse(r["waiting"])
+        self.assertIn("after its next river command", r["ends"])
+        b = core.go(self.c, self.dir.name, "s1")
+        self.assertEqual((b["role"], b["ended"], [h["id"] for h in b["stop_holds"]]), ("stopped", False, [x]))
+        self.assertEqual(core.item_show(self.c, x)["status"], "in_progress")  # no new claim, the item stays
+        from river import cli
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            cli.render_go(b)
+        self.assertIn("STOP REQUESTED by mark: wrong approach", out.getvalue())
+        self.assertIn('release <id> --note "<what is done', out.getvalue())
+        core.release(self.c, x, "half done", "s1")
+        b = core.go(self.c, self.dir.name, "s1")
+        self.assertTrue(b["ended"])
+        self.assertEqual(core.item_show(self.c, y)["status"], "open")
+        # A person withdraws the stop: remove the stop entry.
+        with self.assertRaisesRegex(RiverError, "refused"):
+            core.queue_remove(self.c, "s1", "e%d" % core.queue_list(self.c, "s1")["entries"][0]["entry"], actor="s1")
+        core.queue_remove(self.c, "s1", "e%d" % core.queue_list(self.c, "s1")["entries"][0]["entry"], actor="mark")
+        self.assertIsNone(core.stop_request(self.c, "s1"))

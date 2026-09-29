@@ -255,6 +255,9 @@ CREATE TABLE IF NOT EXISTS agents (
   session_ref    TEXT,
   session_url    TEXT,                       -- web link to the agent's session (Claude Code Remote Control)
   model          TEXT,                       -- the model the session runs (RIVER_MODEL, river go --model)
+  stop_at        TEXT,                       -- river stop: when, who, and why; the session ends after it
+  stop_by        TEXT,
+  stop_reason    TEXT,
   registered_at  TEXT NOT NULL,
   last_seen      TEXT NOT NULL
 );
@@ -560,6 +563,9 @@ def _migrate(conn):
         conn.execute("ALTER TABLE agents ADD COLUMN session_url TEXT")
     if "model" not in acols:
         conn.execute("ALTER TABLE agents ADD COLUMN model TEXT")
+    for col in ("stop_at", "stop_by", "stop_reason"):
+        if col not in acols:
+            conn.execute(f"ALTER TABLE agents ADD COLUMN {col} TEXT")
     if "auto" not in {r["name"] for r in conn.execute("PRAGMA table_info(deps)")}:
         conn.execute("ALTER TABLE deps ADD COLUMN auto INTEGER NOT NULL DEFAULT 0")
     icols = {r["name"] for r in conn.execute("PRAGMA table_info(items)")}
@@ -2790,11 +2796,14 @@ def _queue_entry(conn, agent, ref):
 def queue_remove(conn, agent, ref, actor=None):
     with tx(conn):
         r = _queue_entry(conn, agent, ref)
-        own_note = actor == agent and r["kind"] != "item"
+        own_note = actor == agent and r["kind"] == "message"
         why = None if own_note else may_change_queue(conn, actor, agent)
         if why:
             raise RiverError(f"refused: {why}")
         conn.execute("DELETE FROM queue_entries WHERE id=?", (r["id"],))
+        if r["kind"] == "stop":
+            conn.execute("UPDATE agents SET stop_at=NULL, stop_by=NULL, stop_reason=NULL WHERE name=?", (agent,))
+            _event(conn, None, actor, f"stop of {agent} withdrawn")
         _event(conn, r["item_id"], actor, f"removed from the queue of {agent}" if r["item_id"] else
                f"queue {agent}: {r['kind']} e{r['id']} removed")
     return queue_list(conn, agent)
@@ -2837,10 +2846,11 @@ def _queue_ready(conn, agent, ann=None):
         if r["item_id"] in ann and ann[r["item_id"]]["ready"]]
 
 
-def _drop_queue(conn, agent, why):
-    """The agent is gone or stopped: its queued items go back to the main queue; an active manager hears it."""
+def _drop_queue(conn, agent, why, items_only=False):
+    """The agent is gone or stopped: its queued items go back to the main queue; an active manager hears it.
+    items_only keeps the instructions (a stop entry stays, so a person can withdraw the stop)."""
     rows = conn.execute("SELECT item_id FROM queue_entries WHERE agent=? AND item_id IS NOT NULL", (agent,)).fetchall()
-    conn.execute("DELETE FROM queue_entries WHERE agent=?", (agent,))
+    conn.execute("DELETE FROM queue_entries WHERE agent=?" + (" AND item_id IS NOT NULL" if items_only else ""), (agent,))
     for r in rows:
         _event(conn, r["item_id"], "river", f"back to the main queue ({agent} {why})")
     if rows:
@@ -2849,6 +2859,64 @@ def _drop_queue(conn, agent, why):
                 _send(conn, "notice", "river", f"{agent} {why}; its queued items went back to the main queue: "
                       + ", ".join(f"#{r['item_id']}" for r in rows), to=m["name"])
     return [r["item_id"] for r in rows]
+
+
+def stop_agent(conn, agent, reason, actor=None):
+    """river stop: a request, not a kill. A stop entry goes to the front of the agent's queue; a waiting agent
+    ends at once (river wait returns STOP), a working one on its next river command, after it commits and
+    releases its item. A person or a manager may stop any agent; an agent may stop only itself."""
+    if not reason or not reason.strip():
+        raise RiverError("say why: river stop <agent> --reason \"...\"")
+    if actor != agent:
+        why = may_change_queue(conn, actor, agent)
+        if why:
+            raise RiverError(f"refused: an agent may not stop another; a person or a manager stops agents ({why})")
+    with tx(conn):
+        ag = _agent(conn, agent)
+        if ag["kind"] != "ai":
+            raise RiverError(f"{agent} is a person")
+        if ag["stop_at"]:
+            raise RiverError(f"{agent} is already asked to stop (by {ag['stop_by']}: {ag['stop_reason']})")
+        t = iso(now())
+        conn.execute("UPDATE agents SET stop_at=?, stop_by=?, stop_reason=? WHERE name=?", (t, actor, reason.strip(), agent))
+        conn.execute("INSERT INTO queue_entries(agent,pos,body,kind,added_by,created_at) VALUES (?,?,?,'stop',?,?)",
+                     (agent, _queue_pos(conn, agent, first=True), reason.strip(), actor, t))
+        _event(conn, None, actor, f"stopped {agent} (by {actor}: {reason.strip()})")
+        holds = [dict(r) for r in conn.execute(
+            "SELECT id, title, status FROM items WHERE assignee=? AND status IN ('in_progress','held') ORDER BY id", (agent,))]
+        for h in holds:
+            _event(conn, h["id"], actor, f"stop requested for {agent}: {reason.strip()}")
+        _send(conn, "alert", actor or "river", f"STOP requested: {reason.strip()}. Commit finished work, release or "
+              f"hand back your item with a note, then end this session.", to=agent)
+    waiting = ag["role"] == "waiting" and not holds
+    return {"agent": agent, "reason": reason.strip(), "waiting": waiting, "holds": holds,
+            "ends": "now: river wait returns STOP within seconds" if waiting
+            else "after its next river command, once it commits and releases its item"}
+
+
+def stop_request(conn, name):
+    """The stop asked for this agent, or None."""
+    r = conn.execute("SELECT stop_at, stop_by, stop_reason FROM agents WHERE name=?", (name,)).fetchone() if name else None
+    return dict(r) if r and r["stop_at"] else None
+
+
+def _finish_stop(conn, agent):
+    """The stopped agent holds nothing now: release its goals and targets, give its queued items back."""
+    with tx(conn):
+        if conn.execute("SELECT 1 FROM items WHERE assignee=? AND status IN ('in_progress','held')", (agent,)).fetchone():
+            return False
+        for g in conn.execute("SELECT name FROM goals WHERE owner=?", (agent,)).fetchall():
+            conn.execute("UPDATE goals SET owner=NULL, owner_expires_at=NULL, owner_lease=NULL WHERE name=?", (g["name"],))
+            _event(conn, None, "river", f"goal {g['name']} released: {agent} stopped")
+        for t in conn.execute("SELECT name FROM targets WHERE owner=?", (agent,)).fetchall():
+            conn.execute("UPDATE targets SET owner=NULL, owner_expires_at=NULL WHERE name=?", (t["name"],))
+            _event(conn, None, "river", f"target {t['name']} released: {agent} stopped")
+        _drop_queue(conn, agent, "stopped", items_only=True)
+        conn.execute("UPDATE agents SET role='stopped', note='stopped', waiting_since=NULL, waiting_in=NULL "
+                     "WHERE name=?", (agent,))
+        if not conn.execute("SELECT 1 FROM events WHERE actor='river' AND change=?", (f"{agent} ended (stopped)",)).fetchone():
+            _event(conn, None, "river", f"{agent} ended (stopped)")
+    return True
 
 
 # ---------------------------------------------------------------- registry and leases
@@ -3230,6 +3298,8 @@ def _agent(conn, name):
 
 
 def _agent_state(conn, a):
+    if "stop_at" in a.keys() and a["stop_at"]:
+        return "stopped"
     age = now() - parse_iso(a["last_seen"])
     if age > parse_duration(setting(conn, "gone_after", agent=a["name"])):
         return "gone"
@@ -3300,6 +3370,9 @@ def _claim_row(conn, item_id, actor):
     if not actor:
         raise RiverError("claiming needs an agent name: set RIVER_AGENT or pass --as <name>")
     ag = _agent(conn, actor)
+    if ag["stop_at"]:
+        raise RiverError(f"refused: {actor} is asked to stop (by {ag['stop_by']}: {ag['stop_reason']}); it takes no "
+                         f"new work. Commit finished work, release your item, then end the session")
     if ag["role"] == "planner":
         raise RiverError(f"refused: {actor} is a planner session; planners change the plan and do not take work. "
                          f"To work instead, run: river --as {actor} go")
@@ -4570,7 +4643,8 @@ def covered_projects(conn, ann=None):
     """Projects that have an agent, with one of its sessions: a session that is not gone and holds an item
     there, waits for work there (river wait), or has an item there pushed to it (a Start just opened it)."""
     ann = ann if ann is not None else annotate(conn)
-    live = {r["name"] for r in conn.execute("SELECT * FROM agents WHERE kind='ai'") if _agent_state(conn, r) != "gone"}
+    live = {r["name"] for r in conn.execute("SELECT * FROM agents WHERE kind='ai'")
+            if _agent_state(conn, r) not in ("gone", "stopped")}
     covered = {}
     for a in sorted(ann.values(), key=lambda a: a["id"]):
         if a["status"] in ("in_progress", "held") and a["assignee"] in live:
@@ -4863,6 +4937,14 @@ def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None
              "humans": [r["name"] for r in conn.execute("SELECT name FROM agents WHERE kind='human' ORDER BY name")]}
 
     brief["unsynced"] = unsynced(conn, actor)
+    stop = stop_request(conn, actor)
+    if stop:
+        holds = [item_show(conn, r["id"]) for r in conn.execute(
+            "SELECT id FROM items WHERE assignee=? AND status IN ('in_progress','held') ORDER BY id", (actor,))]
+        ended = not holds and _finish_stop(conn, actor)
+        brief.update(role="stopped", item=None, stop=stop, stop_holds=holds, ended=ended,
+                     why=f"stop requested by {stop['stop_by']}: {stop['stop_reason']}")
+        return brief
     brief["queue_instructions"] = queue_instructions(conn, actor)
     brief["model"] = agent_model(conn, actor)
     brief["model_skipped"] = skipped = []
@@ -5191,6 +5273,14 @@ def wait(conn, cwd, actor, project=None, step=None, sleep=None, poll=3.0):
         raise RiverError("waiting needs an agent name: pass --as <name>")
     _agent(conn, actor)
     names = [n.strip() for n in project.split(",") if n.strip()] if project else projects_for_dir(conn, cwd)
+
+    def stopped():
+        st = stop_request(conn, actor)
+        if st:
+            return {"result": "stop", "agent": actor, "stop": st, "ended": _finish_stop(conn, actor)}
+    st = stopped()
+    if st:
+        return st
     with tx(conn):
         held = conn.execute("SELECT id FROM items WHERE assignee=? AND status IN ('in_progress','held')",
                             (actor,)).fetchall()
@@ -5204,6 +5294,9 @@ def wait(conn, cwd, actor, project=None, step=None, sleep=None, poll=3.0):
     step = parse_duration(step or setting(conn, "wait_step", agent=actor))
     deadline = min(now() + step, since + limit)
     while True:
+        st = stopped()
+        if st:
+            return st
         why = _work_for(conn, actor, names)
         if why:
             return {"result": "work", "why": why, "agent": actor}

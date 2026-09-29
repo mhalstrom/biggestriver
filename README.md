@@ -288,6 +288,11 @@ blocker trees, the agent registry, capacity, settings, and the web page.
   accept, and keeps its items from other agents. Instructions show at the top
   of its `river go`. A person or a manager changes queues; when the session is
   gone or stops, its items go back to the main queue.
+- Stop an agent: `river stop <agent> --reason "..."` puts a stop request at
+  the front of its queue. A waiting agent ends at once; a working one sees it
+  on its next river command, commits, releases its item, and ends. `river who`
+  shows it as stopped. Remove the stop entry to withdraw it (`river queue
+  remove <agent> e<id>`).
 - Agents can take over or clear a person's item, with a notice and Undo.
   Each person's item has a copyable agent prompt (`river prompt`).
 - Messages between agents: alerts, questions and answers, notes, river
