@@ -10,7 +10,9 @@ description: Plan work with the user into Biggest River queue items with depende
 When the user says "plan", run `river plan` in the project folder. It names
 you, makes you a planner (you change the plan; claims refuse), and prints the
 overview and the open questions. Then talk with the user before you add
-anything:
+anything. (To also run the other agents, launch them, fill their queues, and
+stop stuck ones, the user starts a manager session instead: `river manage`,
+rules in `river guide manager`.)
 
 1. **Ask for the outcome first.** "What must be true when this is done, and by
    when?" One or two sentences. Do not add items until you have it. Put the

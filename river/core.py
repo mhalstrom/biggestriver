@@ -103,6 +103,10 @@ DEFAULT_SETTINGS = {
     # without any (0: end at once). One river wait call returns after wait_step, below a shell time limit.
     "wait_max": "30m",
     "wait_step": "9m",
+    # The manager (river manage): an agent that waits for work longer than wait_too_long is a finding, and
+    # river manage --watch wakes at least every manage_every to report what changed.
+    "wait_too_long": "20m",
+    "manage_every": "5m",
     # river cleanup lists a ready item that nobody claimed for this long.
     "stale_after": "14d",
     "review": "off",
@@ -267,6 +271,7 @@ CREATE TABLE IF NOT EXISTS agents (
   session_ref    TEXT,
   session_url    TEXT,                       -- web link to the agent's session (Claude Code Remote Control)
   model          TEXT,                       -- the model the session runs (RIVER_MODEL, river go --model)
+  manage_seen    TEXT,                       -- the manager's findings it has seen (river manage --watch)
   pid            INTEGER,                    -- the agent CLI process that runs river, its host, and its command line
   host           TEXT,
   pid_cmd        TEXT,
@@ -581,7 +586,7 @@ def _migrate(conn):
         conn.execute("ALTER TABLE agents ADD COLUMN session_url TEXT")
     if "model" not in acols:
         conn.execute("ALTER TABLE agents ADD COLUMN model TEXT")
-    for col in ("stop_at", "stop_by", "stop_reason", "platform", "native_address", "host", "pid_cmd"):
+    for col in ("stop_at", "stop_by", "stop_reason", "platform", "native_address", "host", "pid_cmd", "manage_seen"):
         if col not in acols:
             conn.execute(f"ALTER TABLE agents ADD COLUMN {col} TEXT")
     if "pid" not in acols:
@@ -652,6 +657,9 @@ class tx:
 
 
 def _event(conn, item_id, actor, change):
+    if actor and actor != "river" and conn.execute(
+            "SELECT 1 FROM agents WHERE name=? AND role='manager'", (actor,)).fetchone():
+        change += f" (by manager {actor})"
     conn.execute("INSERT INTO events(item_id, at, actor, change) VALUES (?,?,?,?)",
                  (item_id, iso(now()), actor or "?", change))
 
@@ -709,7 +717,8 @@ def _scope(conn, project=None, item=None, agent=None, kind=None) -> str:
 def config_set(conn, key, value, project=None, item=None, agent=None, actor=None, kind=None):
     if key not in DEFAULT_SETTINGS:
         raise RiverError(f"unknown setting {key!r}; known: {', '.join(sorted(DEFAULT_SETTINGS))}")
-    if key.endswith(("_ttl", "_after", "_before", "_interval", "_window")) or key in ("wait_max", "wait_step", "human_wait_max", "goal_lease"):
+    if key.endswith(("_ttl", "_after", "_before", "_interval", "_window")) or key in (
+            "wait_max", "wait_step", "human_wait_max", "goal_lease", "wait_too_long", "manage_every"):
         parse_duration(value)
     elif key in ("keep_prereq_limit", "replan_threshold", "max_leases", "goal_max_leases", "serve_port", "smtp_port"):
         if not value.isdigit():
@@ -1441,9 +1450,12 @@ def target_give(conn, name, to, actor=None):
         _sweep(conn)
         t = _target(conn, name)
         giver = conn.execute("SELECT kind FROM agents WHERE name=?", (actor,)).fetchone() if actor else None
-        by_person = bool(giver) and giver["kind"] == "human" and t["owner"] != actor
+        role = conn.execute("SELECT role FROM agents WHERE name=?", (actor,)).fetchone() if actor else None
+        by_person = bool(giver) and (giver["kind"] == "human" or (role and role["role"] == "manager")) \
+            and t["owner"] != actor
         if t["owner"] != actor and not by_person:
-            raise RiverError(f"only the owner can give target {name}; it is owned by {t['owner'] or 'nobody'}"
+            raise RiverError(f"only the owner, a person, or the manager can give target {name}; "
+                             f"it is owned by {t['owner'] or 'nobody'}"
                              + ("" if t["owner"] else f" (take it: river target own {name})"))
         _agent(conn, to)
         ttl = parse_duration(setting(conn, "owner_ttl", agent=to))
@@ -3625,8 +3637,8 @@ def _claim_row(conn, item_id, actor):
     if ag["stop_at"]:
         raise RiverError(f"refused: {actor} is asked to stop (by {ag['stop_by']}: {ag['stop_reason']}); it takes no "
                          f"new work. Commit finished work, release your item, then end the session")
-    if ag["role"] == "planner":
-        raise RiverError(f"refused: {actor} is a planner session; planners change the plan and do not take work. "
+    if ag["role"] in ("planner", "manager"):
+        raise RiverError(f"refused: {actor} is a {ag['role']} session; it changes the plan and does not take work. "
                          f"To work instead, run: river --as {actor} go")
     it0 = _item(conn, item_id)
     if it0["doer"] == "human" and ag["kind"] == "ai":
@@ -5077,7 +5089,7 @@ def state(conn):
 
 # ---------------------------------------------------------------- go
 
-ROLES = ("deployer", "reviewer", "owner", "worker", "unblocker", "planner", "idle")
+ROLES = ("deployer", "reviewer", "owner", "worker", "unblocker", "planner", "manager", "idle")
 
 
 def _owned_goal(conn, actor, names):
@@ -5572,6 +5584,130 @@ def wait(conn, cwd, actor, project=None, step=None, sleep=None, poll=3.0):
     except RiverError as e:  # it owns a deploy target: keep it registered, and say so
         return {"result": "end", "agent": actor, "waited": _short(limit), "kept": str(e)}
     return {"result": "end", "agent": actor, "waited": _short(limit)}
+
+
+def active_manager(conn, but=None):
+    """The manager session that is active now, or None."""
+    for r in conn.execute("SELECT * FROM agents WHERE role='manager' AND kind='ai' ORDER BY last_seen DESC").fetchall():
+        if r["name"] != but and _agent_state(conn, r) == "active":
+            return r["name"]
+    return None
+
+
+def manager_findings(conn):
+    """What a manager acts on: stuck agents, agents that wait too long, projects with ready agent work and no
+    agent, targets whose owner is away or gone, and what waits on the user."""
+    ann = annotate(conn)
+    t = now()
+    agents = [agent_status(conn, r["name"]) for r in conn.execute("SELECT name FROM agents WHERE kind='ai' ORDER BY name")]
+    queued = {r["agent"]: r["n"] for r in conn.execute(
+        "SELECT agent, COUNT(*) n FROM queue_entries WHERE item_id IS NOT NULL GROUP BY agent")}
+    stuck = []
+    for a in agents:
+        if a["state"] in ("away", "gone") and (a["holds"] or queued.get(a["name"])):
+            dead = bool(a.get("pid")) and a.get("host") == this_host() and not pid_alive(a["pid"])
+            stuck.append({"agent": a["name"], "state": a["state"], "why": "its process ended" if dead else
+                          f"not seen for {_short(t - parse_iso(a['last_seen']))}",
+                          "holds": [h["id"] for h in a["holds"]], "queued": queued.get(a["name"], 0)})
+    lost = [{"id": x["id"], "title": x["title"], "project": x["project"]} for x in ann.values()
+            if x["needs_check"] and x["status"] == "open" and not x["project_archived"]]
+    too_long = parse_duration(setting(conn, "wait_too_long"))
+    waiting = [{"agent": a["name"], "since": a["waiting_since"], "waited": _short(t - parse_iso(a["waiting_since"])),
+                "in": a["waiting_in"]} for a in agents
+               if a["role"] == "waiting" and a["waiting_since"] and a["state"] == "active"
+               and t - parse_iso(a["waiting_since"]) > too_long]
+    covered = covered_projects(conn, ann)
+    pool = sorted((x for x in ann.values() if x["ready"] and x["doer"] != "human" and not x["reserved_for"]
+                   and x["kind"] not in ("deploy", "review", "monitor") and not x["project_archived"]),
+                  key=lambda x: x["sort_key"])
+    uncovered, seen = [], set()
+    for x in pool:
+        if x["project"] not in covered and x["project"] not in seen:
+            seen.add(x["project"])
+            uncovered.append({"project": x["project"], "top": {"id": x["id"], "title": x["title"]},
+                              "ready": sum(1 for y in pool if y["project"] == x["project"])})
+    states = {a["name"]: a["state"] for a in agents}
+    targets = [{"target": r["name"], "owner": r["owner"], "state": states.get(r["owner"], "gone")}
+               for r in conn.execute("SELECT name, owner FROM targets WHERE owner IS NOT NULL ORDER BY name")
+               if states.get(r["owner"], "gone") in ("away", "gone", "stopped")]
+    humans = [r["name"] for r in conn.execute("SELECT name FROM agents WHERE kind='human'")]
+    questions = [dict(r) for r in conn.execute(
+        f"SELECT id, from_agent, to_agent, body, item_id FROM messages WHERE kind='question' AND state='open' "
+        f"AND to_agent IN ({','.join('?' * len(humans))}) ORDER BY id", humans)] if humans else []
+    return {"stuck": stuck, "lost_leases": lost, "waiting_too_long": waiting, "uncovered": uncovered,
+            "targets": targets, "questions": questions,
+            "human_ready": [{"id": x["id"], "title": x["title"]} for x in sorted(
+                               (x for x in ann.values() if x["ready"] and x["doer"] == "human" and not x["project_archived"]),
+                               key=lambda x: x["sort_key"])]}
+
+
+def _finding_keys(f):
+    return sorted({f"stuck:{x['agent']}" for x in f["stuck"]} | {f"lost:{x['id']}" for x in f["lost_leases"]}
+                  | {f"waiting:{x['agent']}" for x in f["waiting_too_long"]} | {f"uncovered:{x['project']}" for x in f["uncovered"]}
+                  | {f"target:{x['target']}" for x in f["targets"]} | {f"question:{x['id']}" for x in f["questions"]}
+                  | {f"human:{x['id']}" for x in f["human_ready"]})
+
+
+def manage(conn, cwd, actor=None, takeover=None):
+    """Start or continue the manager session: one at a time. It changes the plan and runs the other agents
+    (launch, queues, messages, stop, launch settings, target give) and takes no work itself."""
+    new_name = False
+    if not actor:
+        import secrets
+        actor = f"manager-{secrets.token_hex(2)}"
+    if not conn.execute("SELECT 1 FROM agents WHERE name=?", (actor,)).fetchone():
+        register(conn, actor, note="role: manager")
+        new_name = True
+    other = active_manager(conn, but=actor)
+    if other and not takeover:
+        raise RiverError(f"refused: {other} is the active manager; one manager at a time. Message it "
+                         f"(river note {other} \"...\"), or take over: river manage --takeover \"<why>\"")
+    activity(conn, actor)
+    held = conn.execute("SELECT id FROM items WHERE assignee=? AND status IN ('in_progress','held')", (actor,)).fetchall()
+    if held:
+        raise RiverError(f"{actor} holds {', '.join('#' + str(r['id']) for r in held)}; a manager holds no work. "
+                         f"Finish or release it first, or manage from a new session: river manage (without --as)")
+    if other:
+        with tx(conn):
+            conn.execute("UPDATE agents SET role=NULL, note='manager until taken over' WHERE name=?", (other,))
+            _send(conn, "alert", actor, f"{actor} took over as manager: {takeover}. You are no longer the manager.",
+                  to=other)
+            _event(conn, None, actor, f"took over as manager from {other}: {takeover}")
+    _set_role_note(conn, actor, "manager", None)
+    f = manager_findings(conn)
+    import json
+    with tx(conn):  # what the manager has seen: manage --watch reports what is new after this
+        conn.execute("UPDATE agents SET manage_seen=? WHERE name=?", (json.dumps(_finding_keys(f)), actor))
+    return {"agent": actor, "new_name": new_name, "role": "manager", "status": status(conn), "findings": f,
+            "took_over": other, "every": setting(conn, "manage_every"), "wait_too_long": setting(conn, "wait_too_long")}
+
+
+def manage_watch(conn, actor, step=None, sleep=None, poll=3.0):
+    """river manage --watch: block until something new needs the manager (a new finding, or a message to it),
+    at most manage_every (and wait_step, below a shell time limit). Returns what changed."""
+    import json
+    import time
+    sleep = sleep or time.sleep
+    ag = _agent(conn, actor)
+    if ag["role"] != "manager":
+        raise RiverError(f"{actor} is not the manager; start with: river manage")
+    try:
+        base = set(json.loads(conn.execute("SELECT manage_seen FROM agents WHERE name=?", (actor,)).fetchone()[0] or "[]"))
+    except (TypeError, ValueError):
+        base = set()
+    every = parse_duration(step or setting(conn, "manage_every", agent=actor))
+    deadline = now() + min(every, parse_duration(setting(conn, "wait_step", agent=actor)))
+    while True:
+        f = manager_findings(conn)
+        keys = set(_finding_keys(f))
+        u = unread(conn, actor)
+        if keys - base or u["unread"] or now() >= deadline:
+            with tx(conn):
+                conn.execute("UPDATE agents SET manage_seen=? WHERE name=?", (json.dumps(sorted(keys)), actor))
+            return {"agent": actor, "result": "change" if keys - base or u["unread"] else "tick",
+                    "new": sorted(keys - base), "gone": sorted(base - keys), "findings": f, "messages": u}
+        activity(conn, actor)
+        sleep(poll)
 
 
 def plan(conn, cwd, actor=None, project=None):

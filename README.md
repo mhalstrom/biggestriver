@@ -307,6 +307,16 @@ blocker trees, the agent registry, capacity, settings, and the web page.
   on its next river command, commits, releases its item, and ends. `river who`
   shows it as stopped. Remove the stop entry to withdraw it (`river queue
   remove <agent> e<id>`).
+- Manager: `river manage` starts an optional manager session (one at a time;
+  `--takeover "<why>"` replaces the active one) in any agent CLI. It plans
+  with the user and runs the other agents: `river launch`, agent queues,
+  messages, `river stop`, launch settings, and `river target give`; it takes
+  no items. Its briefing lists stuck agents, expired leases, agents that wait
+  longer than `wait_too_long` (20m), projects with ready work and no agent,
+  targets whose owner is away, and what waits on the user. `river manage
+  --watch` wakes when something new appears (at least every `manage_every`,
+  5m). Its actions show in the history as "(by manager <name>)". Rules:
+  `river guide manager` (skills/river-manager).
 - Emergency kill: `river go`, `register`, and `heartbeat` record the agent
   CLI's process (the first ancestor of the river command that is not a shell)
   and the host; `river who` shows them, and a session whose process on this

@@ -526,6 +526,10 @@ def build_parser():
     x.add_argument("--model", default=os.environ.get("RIVER_MODEL"),
                    help="the model this session runs (default $RIVER_MODEL): river gives it only items its model is allowed for")
 
+    x = sub.add_parser("manage", help="start the manager session (one at a time): what needs attention, and its rules")
+    x.add_argument("--takeover", metavar="REASON", help="take over from the active manager")
+    x.add_argument("--watch", action="store_true", help="block until something new needs the manager (at most manage_every)")
+    x.add_argument("--step", help="with --watch: return after this long at most")
     x = sub.add_parser("plan", help="start a planner session: overview, open questions, and the planner's rules")
     x.add_argument("--project", help="project name(s) to focus on (default: this folder's, else all)")
 
@@ -712,7 +716,8 @@ def build_parser():
     x.add_argument("--force", action="store_true", help="even when agents were active in the last 10 minutes")
     sub.add_parser("mcp", help="an MCP server on stdin/stdout, for agents that cannot run shell commands")
     x = sub.add_parser("guide", help="how to use river: worker loop, planner, or agent setup")
-    x.add_argument("which", nargs="?", default="river", choices=["river", "planner", "river-planner", "setup", "decisions"])
+    x.add_argument("which", nargs="?", default="river",
+                   choices=["river", "planner", "river-planner", "manager", "river-manager", "setup", "decisions"])
     x = sub.add_parser("setup-agent", help="print (or append) the instructions block for CLAUDE.md / AGENTS.md")
     x.add_argument("--append", metavar="FILE", help="append the block to this file if it is not there yet")
     return p
@@ -723,7 +728,7 @@ def install_skills(dest, copy=False, force=False):
     import shutil
     dest.mkdir(parents=True, exist_ok=True)
     out = []
-    for name in ("river", "river-planner"):
+    for name in ("river", "river-planner", "river-manager"):
         src, dst = GUIDES / name, dest / name
         if not (src / "SKILL.md").is_file():
             raise RiverError(f"no guide at {src}; reinstall river")
@@ -754,7 +759,8 @@ def run(argv=None):
         elif args.which == "decisions":
             print(core.DECISION_FORMAT)
         else:
-            name = "river-planner" if args.which in ("planner", "river-planner") else "river"
+            name = ("river-planner" if args.which in ("planner", "river-planner")
+                    else "river-manager" if args.which in ("manager", "river-manager") else "river")
             text = (GUIDES / name / "SKILL.md").read_text()
             print(text.split("---", 2)[2].strip() if text.startswith("---") else text)
         return 0
@@ -1236,6 +1242,12 @@ def dispatch(conn, a, actor):
         return res
     if c == "plan":
         return core.plan(conn, os.getcwd(), actor, a.project)
+    if c == "manage":
+        if a.watch:
+            if not actor:
+                raise RiverError("--watch needs the manager's name: river --as <name> manage --watch")
+            return core.manage_watch(conn, actor, a.step)
+        return core.manage(conn, os.getcwd(), actor, a.takeover)
     if c == "next":
         if a.model and actor and conn.execute("SELECT 1 FROM agents WHERE name=?", (actor,)).fetchone():
             core.set_agent_model(conn, actor, a.model)
@@ -1431,6 +1443,61 @@ Change the plan only; do not take or do the work (claims refuse for this session
   Progress:      river status   river log --since 7d   river blockers <id>
 Ask the user about each open question below that matters to what they want. The full guide: river guide planner
 When the user wants work done in this session instead: {r} go"""
+
+
+def _findings_lines(f, r):
+    out = []
+    for x in f["stuck"]:
+        out.append(f"  STUCK {x['agent']} ({x['state']}, {x['why']}): holds "
+                   + (", ".join(f"#{i}" for i in x["holds"]) or "nothing") + (f", {x['queued']} queued" if x["queued"] else "")
+                   + f".  Ask it to stop: {r} stop {x['agent']} --reason \"...\"")
+    for x in f["lost_leases"]:
+        out.append(f"  LEASE RAN OUT #{x['id']} [{x['project']}] {_cut(x['title'], 50)}: check it, then queue or launch it")
+    for x in f["waiting_too_long"]:
+        out.append(f"  WAITS TOO LONG {x['agent']} ({x['waited']} in {x['in']}): give it work ({r} queue add "
+                   f"{x['agent']} <id>) or stop it ({r} stop {x['agent']} --reason \"no work\")")
+    for x in f["uncovered"]:
+        out.append(f"  NO AGENT in {x['project']}: {x['ready']} ready, top #{x['top']['id']} {_cut(x['top']['title'], 40)}."
+                   f"  {r} launch --project {x['project']}")
+    for x in f["targets"]:
+        out.append(f"  TARGET {x['target']}: owner {x['owner']} is {x['state']}.  {r} target give {x['target']} --to <agent>")
+    for x in f["questions"]:
+        out.append(f"  QUESTION #{x['id']} from {x['from_agent']} to {x['to_agent']}: {_cut(x['body'], 70)}")
+    if f["human_ready"]:
+        out.append("  WAITS ON THE USER: " + ", ".join(f"#{x['id']} {_cut(x['title'], 40)}" for x in f["human_ready"][:6]))
+    return out or ["  nothing needs you now"]
+
+
+def render_manage(b):
+    me = b["agent"]
+    r = f"river --as {me}"
+    if "result" in b:  # --watch
+        print(("CHANGED: " + ", ".join(b["new"]) if b["new"] else "NEW MESSAGES" if b["result"] == "change"
+               else f"NOTHING NEW (tick)") + (f"; resolved: {', '.join(b['gone'])}" if b["gone"] else ""))
+        if b["messages"]["unread"]:
+            print(f"  {b['messages']['unread']} unread message(s): {r} inbox")
+        print("\n".join(_findings_lines(b["findings"], r)))
+        print(f"Act on what is new, then run {r} manage --watch again.")
+        return
+    out = [f"You are the river MANAGER {me}" + (f" (you took over from {b['took_over']})" if b.get("took_over") else "") + "."]
+    if b["new_name"]:
+        out.append(f"Pass --as {me} on every river command.")
+    st = b["status"]
+    out += ["", "Projects: " + ", ".join(f"{p['project']} {p['ready']} ready/{p['open']} open" for p in st["projects"][:12]
+                                          if p.get("open")),
+            "", "NEEDS ATTENTION:"] + _findings_lines(b["findings"], r)
+    out += ["",
+            "Your job: plan with the user, and keep the other agents working together. You take no items.",
+            f"  launch:  {r} launch [--project P | --item N] [--model M] [--effort E] [--dry-run]",
+            f"  queues:  {r} queue add <agent> <id> [--first] | --message \"...\";  queue list|move|remove",
+            f"  message: {r} note|alert|ask <agent> \"...\"",
+            f"  stop:    {r} stop <agent> --reason \"...\"   (stuck, or waited longer than wait_too_long {b['wait_too_long']})",
+            f"  kill:    {r} stop <agent> --kill --reason \"...\"   emergency only, and only after the user says yes",
+            f"  targets: {r} target give <target> --to <agent>",
+            f"  config:  {r} config set launch_agents|default_model|default_effort ...",
+            f"Then watch: {r} manage --watch  (wakes on a new finding or a message, at least every {b['every']}).",
+            "The rules: river guide manager"]
+    print("\n".join(out))
 
 
 def render_plan(b):
@@ -1823,6 +1890,8 @@ def render(a, res):
         return render_go(res)
     if c == "plan":
         return render_plan(res)
+    if c == "manage":
+        return render_manage(res)
     if c == "add" and isinstance(res, dict) and "dry_run" in res:
         rows = res["items"]
         print(("Would add" if res["dry_run"] else "Added") + f" {len(rows)} item(s) to {res['project']}:")

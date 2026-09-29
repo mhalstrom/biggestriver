@@ -1223,7 +1223,8 @@ class SkillsInstall(unittest.TestCase):
                 cli.install_skills(dest)  # a real folder may hold edits
             cli.install_skills(dest, copy=True, force=True)
             self.assertFalse((dest / "river").is_symlink())
-            self.assertEqual(len(lines), 2)
+            self.assertEqual(len(lines), 3)  # river, river-planner, river-manager
+            self.assertTrue((dest / "river-manager" / "SKILL.md").is_file())
 
 
 class DecisionFormat(Base):
@@ -2974,3 +2975,66 @@ class Kill(Base):
         self.p.kill()
         self.p.wait(10)
         self.assertEqual(core.agent_status(self.c, "ag")["state"], "gone")  # at once, not after gone_after
+
+
+class Manager(Base):
+    """river manage: one manager session at a time that runs the other agents (#430)."""
+
+    def setUp(self):
+        super().setUp()
+        core.project_add(self.c, "a", path=self.dir.name)
+        core.project_add(self.c, "b", path=self.dir.name)
+        for n in ("w1", "w2"):
+            core.register(self.c, n)
+        core.register(self.c, "mark", human=True)
+
+    def test_one_manager_at_a_time_and_it_takes_no_work(self):
+        m = core.manage(self.c, self.dir.name, "boss")
+        self.assertEqual((m["role"], core._agent(self.c, "boss")["role"]), ("manager", "manager"))
+        x = self.add("a", "x")
+        with self.assertRaisesRegex(RiverError, "manager session"):
+            core.claim(self.c, x, "boss")
+        with self.assertRaisesRegex(RiverError, "boss is the active manager"):
+            core.manage(self.c, self.dir.name, "boss2")
+        m2 = core.manage(self.c, self.dir.name, "boss2", takeover="boss went quiet")
+        self.assertEqual(m2["took_over"], "boss")
+        self.assertIsNone(core._agent(self.c, "boss")["role"])
+        self.assertIn("took over as manager", core.inbox(self.c, "boss")[0]["body"])
+
+    def test_findings_and_actions(self):
+        x, y = self.add("a", "x"), self.add("b", "y")
+        z = self.add("a", "z")
+        core.claim(self.c, x, "w1")
+        old = core.iso(core.now() - core.timedelta(hours=2))
+        self.c.execute("UPDATE agents SET last_seen=? WHERE name='w1'", (old,))
+        self.c.execute("UPDATE agents SET role='waiting', waiting_in='a', waiting_since=? WHERE name='w2'",
+                       (core.iso(core.now() - core.timedelta(minutes=40)),))
+        core.target_add(self.c, "web")
+        core.target_own(self.c, "web", "w1")
+        self.c.execute("UPDATE agents SET last_seen=? WHERE name='w1'", (old,))
+        core.send(self.c, "question", "which database?", to="mark", actor="w2")
+        m = core.manage(self.c, self.dir.name, "boss")
+        f = m["findings"]
+        self.assertEqual([(s["agent"], s["holds"]) for s in f["stuck"]], [("w1", [x])])
+        self.assertEqual([w["agent"] for w in f["waiting_too_long"]], ["w2"])
+        self.assertEqual([u["project"] for u in f["uncovered"]], ["b"])  # a has w2 waiting
+        self.assertEqual([t["target"] for t in f["targets"]], ["web"])
+        self.assertEqual(f["questions"][0]["body"], "which database?")
+        # The manager acts: queue, give a target, stop; the history says so.
+        core.queue_add(self.c, "w2", z, actor="boss")
+        core.target_give(self.c, "web", "w2", actor="boss")
+        core.stop_agent(self.c, "w1", "stuck", actor="boss")
+        changes = [e["change"] for e in core.recent_events(self.c)]
+        self.assertTrue(any(c.startswith("stopped w1") and c.endswith("(by manager boss)") for c in changes))
+        self.assertTrue(any("target web given to w2" in c and "(by manager boss)" in c for c in changes))
+        self.assertNotEqual(y, z)
+
+    def test_watch_reports_what_is_new(self):
+        core.manage(self.c, self.dir.name, "boss")
+        w = core.manage_watch(self.c, "boss", step="0s", sleep=lambda s: None)
+        self.assertEqual((w["result"], w["new"]), ("tick", []))
+        self.add("b", "new work")
+        w = core.manage_watch(self.c, "boss", step="1m", sleep=lambda s: None)
+        self.assertEqual((w["result"], w["new"]), ("change", ["uncovered:b"]))
+        with self.assertRaisesRegex(RiverError, "not the manager"):
+            core.manage_watch(self.c, "w1", step="0s")
