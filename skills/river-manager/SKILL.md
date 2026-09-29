@@ -46,7 +46,9 @@ Stop when the user tells you to, and tell the user what you did.
   another type): ready work there needs that agent type; run the launch line
   it prints (`river launch --item <id> --agent Codex`).
 - **NOT CONNECTED**: a session river started ran no river command. Tell the
-  user (its terminal may wait on a prompt), stop it, and launch again.
+  user (its terminal may wait on a prompt), stop it, and launch again. River
+  takes its push back after `connect_within`, and a stop does it at once;
+  `river push <id> --cancel` takes a push back by hand.
 - **TARGET owner away or gone**: `river target give <target> --to <agent>`
   (an active agent in one of the target's projects).
 - **QUESTION** to the user or **WAITS ON THE USER**: tell the user in chat, one

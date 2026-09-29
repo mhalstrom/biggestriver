@@ -2613,6 +2613,19 @@ def decline_message(conn, msg_id, note=None, actor=None):
     return message_show(conn, msg_id)
 
 
+def _free_pushes(conn, agent, why):
+    """Take back every open push to an agent that will not take it (stopped, ended, never connected):
+    the items are open to every agent again, and the project counts as without an agent. Inside a tx."""
+    rows = conn.execute("SELECT id FROM items WHERE reserved_for=? AND reserved_until IS NOT NULL AND status='open'",
+                        (agent,)).fetchall()
+    for r in rows:
+        conn.execute("UPDATE items SET reserved_for=NULL, reserved_until=NULL, reserved_by=NULL WHERE id=?", (r["id"],))
+        conn.execute("UPDATE messages SET state='declined', read_at=COALESCE(read_at, ?) "
+                     "WHERE kind='alert' AND item_id=? AND to_agent=? AND state='open'", (iso(now()), r["id"], agent))
+        _event(conn, r["id"], "river", f"push to {agent} taken back: {why}; open to everyone")
+    return [r["id"] for r in rows]
+
+
 def cancel_push(conn, item_id, actor=None):
     """Take a push back before it is answered; the agent it went to hears about it."""
     with tx(conn):
@@ -3325,6 +3338,7 @@ def stop_agent(conn, agent, reason, actor=None):
         eid = conn.execute("INSERT INTO queue_entries(agent,pos,body,kind,added_by,created_at) VALUES (?,?,?,'stop',?,?)",
                            (agent, _queue_pos(conn, agent, first=True), reason.strip(), actor, t)).lastrowid
         _event(conn, None, actor, f"stopped {agent} (by {actor}: {reason.strip()})")
+        _free_pushes(conn, agent, f"{agent} was stopped")
         holds = [dict(r) for r in conn.execute(
             "SELECT id, title, status FROM items WHERE assignee=? AND status IN ('in_progress','held') ORDER BY id", (agent,))]
         for h in holds:
@@ -3393,6 +3407,14 @@ def _sweep(conn):
         _event(conn, r["id"], "river", f"lease expired (was {r['assignee']}); back to open")
         _send(conn, "notice", "river", f"your lease on #{r['id']} expired; the item is open again. "
               f"Claim it again if you still work on it: river claim {r['id']}", to=r["assignee"], item_id=r["id"])
+    # A stopped session, or one river started for an item that never ran a river command, gives its pushes back.
+    late = iso(now() - parse_duration(setting(conn, "connect_within")))
+    for r in conn.execute("SELECT DISTINCT a.name, a.stop_at FROM agents a JOIN items i ON i.reserved_for=a.name "
+                          "WHERE i.reserved_until IS NOT NULL AND i.status='open' AND (a.stop_at IS NOT NULL OR "
+                          "(a.note LIKE ? AND a.last_seen=a.registered_at AND a.registered_at < ?))",
+                          (STARTED_NOTE + "%", late)).fetchall():
+        _free_pushes(conn, r["name"], f"{r['name']} was stopped" if r["stop_at"] else
+                     f"{r['name']} never connected (no river command within connect_within)")
     for r in conn.execute("SELECT id, title, reserved_for, reserved_by FROM items WHERE reserved_until < ? "
                           "AND status='open'", (t,)).fetchall():
         conn.execute("UPDATE items SET reserved_for=NULL, reserved_until=NULL, reserved_by=NULL WHERE id=?", (r["id"],))
@@ -3721,6 +3743,7 @@ def unregister(conn, name, actor=None):
             raise RiverError(f"{name} owns target {', '.join(owned)}; release or give it first "
                              f"(river target release <t>, river target give <t> --to <agent>)")
         _drop_queue(conn, name, "stopped")
+        _free_pushes(conn, name, f"{name} ended")
         conn.execute("DELETE FROM agents WHERE name=?", (name,))
         conn.execute("DELETE FROM settings WHERE scope=?", (f"agent:{name}",))
         _event(conn, None, actor or name, f"agent {name} unregistered")
@@ -6201,7 +6224,7 @@ def manager_findings(conn):
                           f"not seen for {_short(t - parse_iso(a['last_seen']))}",
                           "holds": [h["id"] for h in a["holds"]], "queued": queued.get(a["name"], 0)})
     lost = [{"id": x["id"], "title": x["title"], "project": x["project"]} for x in ann.values()
-            if x["needs_check"] and x["status"] == "open" and not x["project_archived"]]
+            if x["needs_check"] and x["status"] == "open" and not x["reserved_until"] and not x["project_archived"]]
     too_long = parse_duration(setting(conn, "wait_too_long"))
     waiting = [{"agent": a["name"], "since": a["waiting_since"], "waited": _short(t - parse_iso(a["waiting_since"])),
                 "in": a["waiting_in"]} for a in agents

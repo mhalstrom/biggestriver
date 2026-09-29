@@ -645,7 +645,8 @@ def build_parser():
     g.add_argument("--release", dest="mode", action="store_const", const="release",
                    help="you hold <id>: give it back while the prerequisites wait")
     x = sub.add_parser("push", help="reserve an open item for one agent and alert it")
-    x.add_argument("id", type=int); x.add_argument("--to", required=True); x.add_argument("--note")
+    x.add_argument("id", type=int); x.add_argument("--to"); x.add_argument("--note")
+    x.add_argument("--cancel", action="store_true", help="take back the open push of this item")
     x = sub.add_parser("accept", help="take an item pushed to you, or with --message say yes to an alert")
     x.add_argument("id", type=int)
     x.add_argument("--message", action="store_true", help="the id is an alert: claim its item now, or keep it for after your current item")
@@ -1486,6 +1487,10 @@ def dispatch(conn, a, actor):
     if c == "keep":
         return core.keep(conn, a.id, actor)
     if c == "push":
+        if a.cancel:
+            return core.cancel_push(conn, a.id, actor)
+        if not a.to:
+            raise RiverError("river push <id> --to <agent> (or --cancel to take a push back)")
         return core.push(conn, a.id, a.to, a.note, actor)
     if c == "accept":
         if a.message:

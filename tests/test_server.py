@@ -202,6 +202,37 @@ class LaunchAgent(unittest.TestCase):
         self.assertEqual((nc["agent"], nc["item"]["id"]), (t2["session_name"], y))
         self.assertNotIn("shop", core.covered_projects(self.c))
 
+    def test_a_stopped_or_unconnected_session_gives_its_pushes_back(self):
+        core.project_add(self.c, "shop", path=self.dir.name)
+        x = core.item_add(self.c, "shop", "one")["id"]
+        y = core.item_add(self.c, "shop", "two")["id"]
+        sent = []
+        core.register(self.c, "mark", human=True)
+        a = server.dispatch_item(self.c, x, runner=sent.append)["session_name"]
+        core.stop_agent(self.c, a, "wrong project", actor="mark")
+        self.assertIsNone(core.item_show(self.c, x)["reserved_for"])
+        self.assertNotIn("shop", core.covered_projects(self.c))
+        # Never connected: the sweep takes the push back after connect_within.
+        b = server.dispatch_item(self.c, y, runner=sent.append)["session_name"]
+        old = core.iso(core.now() - core.parse_duration("6m"))
+        with core.tx(self.c):
+            self.c.execute("UPDATE agents SET registered_at=?, last_seen=? WHERE name=?", (old, old, b))
+        core.activity(self.c, "mark")
+        self.assertIsNone(core.item_show(self.c, y)["reserved_for"])
+        self.assertIn(f"push to {b} taken back", core.item_show(self.c, y)["events"][0]["change"])
+        # By hand: river push <id> --cancel; a re-pushed item leaves the LEASE RAN OUT finding.
+        from river import cli
+        import contextlib, io
+        core.register(self.c, "w")
+        core.push(self.c, y, "w", actor="mark")
+        with core.tx(self.c):
+            self.c.execute("UPDATE items SET needs_check=1 WHERE id=?", (y,))
+        self.assertEqual(core.manager_findings(self.c)["lost_leases"], [])
+        with contextlib.redirect_stdout(io.StringIO()):
+            cli.run(["--as", "mark", "push", str(y), "--cancel"])
+        self.assertIsNone(core.item_show(self.c, y)["reserved_for"])
+        self.assertEqual([l["id"] for l in core.manager_findings(self.c)["lost_leases"]], [y])
+
     def test_open_agent_on_a_person_item_or_a_waiting_item(self):
         from river import cli
         import contextlib, io
