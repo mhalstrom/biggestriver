@@ -394,8 +394,10 @@ def build_parser():
     x = tgs.add_parser("describe", help="set how a target deploys"); x.add_argument("name"); x.add_argument("text")
     x = tgs.add_parser("show", help="a target, its owner, and its projects"); x.add_argument("name")
     x = tgs.add_parser("own", help="become the one owner of a target (runs its deploys)"); x.add_argument("name")
+    x.add_argument("--takeover", metavar="WHY", help="take the target from an owner who is away or gone; "
+                   "says why, and the old owner is told")
     x = tgs.add_parser("release", help="stop owning a target"); x.add_argument("name")
-    x = tgs.add_parser("give", help="hand a target you own to another agent"); x.add_argument("name")
+    x = tgs.add_parser("give", help="hand a target you own to another agent (a person can give any target)"); x.add_argument("name")
     x.add_argument("--to", required=True)
     tgs.add_parser("list")
 
@@ -992,7 +994,7 @@ def dispatch(conn, a, actor):
         if a.tcmd == "show":
             return core.target_show(conn, a.name)
         if a.tcmd == "own":
-            return core.target_own(conn, a.name, actor)
+            return core.target_own(conn, a.name, actor, a.takeover)
         if a.tcmd == "release":
             return core.target_release(conn, a.name, actor)
         if a.tcmd == "give":

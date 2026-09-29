@@ -67,7 +67,10 @@ river target give <target> --to <agent>                # or: river target releas
 A target has at most one owner. Ownership lasts `owner_ttl` (default 8h) and
 every command by the owner renews it; when it expires the target is free and
 the old owner gets a notice. `river target own` names the current owner when
-it refuses.
+it refuses. When that owner is away or gone (`away_after`, default 1h),
+`river target own <target> --takeover "<why>"` moves the target at once and
+tells the old owner why. A person can give any target:
+`river target give <target> --to <agent>`.
 
 `river ship <id>` (or `river done <id> --ship`) puts an item in its target's
 open deploy item, in the project `deploy-<target>`. One open deploy item per

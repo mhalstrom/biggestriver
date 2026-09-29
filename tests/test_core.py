@@ -735,6 +735,54 @@ class Ownership(Base):
         core.target_release(self.c, "web", "bo")
         self.assertIsNone(core.target_show(self.c, "web")["owner"])
 
+    def _last_seen(self, name, ago):
+        self.c.execute("UPDATE agents SET last_seen=? WHERE name=?", (core.iso(core.now() - ago), name))
+
+    def test_takeover_needs_an_owner_who_is_not_active(self):
+        core.target_own(self.c, "web", "ag")
+        with self.assertRaises(RiverError) as e:
+            core.target_own(self.c, "web", "bo", takeover="deploy is waiting")
+        self.assertIn("owned by ag", str(e.exception))
+        self.assertEqual(core.target_show(self.c, "web")["owner"], "ag")
+
+    def test_away_owner_refusal_names_the_takeover(self):
+        core.target_own(self.c, "web", "ag")
+        self._last_seen("ag", timedelta(hours=2))
+        with self.assertRaises(RiverError) as e:
+            core.target_own(self.c, "web", "bo")
+        self.assertIn("ag is away", str(e.exception))
+        self.assertIn("--takeover", str(e.exception))
+        with self.assertRaises(RiverError):
+            core.target_own(self.c, "web", "bo", takeover="  ")  # a reason is required
+
+    def test_takeover_from_an_away_owner_moves_the_target_and_tells_them(self):
+        core.target_own(self.c, "web", "ag")
+        self._last_seen("ag", timedelta(hours=2))
+        core.target_own(self.c, "web", "bo", takeover="deploy is waiting")
+        t = core.target_show(self.c, "web")
+        self.assertEqual(t["owner"], "bo")
+        self.assertGreater(core.parse_iso(t["owner_expires_at"]) - core.now(), timedelta(hours=7))
+        box = core.inbox(self.c, "ag")
+        self.assertEqual([(m["kind"], m["from_agent"]) for m in box], [("notice", "bo")])
+        self.assertIn("deploy is waiting", box[0]["body"])
+        self.assertIn("river target give web --to ag", box[0]["body"])
+
+    def test_takeover_from_a_gone_owner(self):
+        core.target_own(self.c, "web", "ag")
+        self._last_seen("ag", timedelta(days=2))
+        core.target_own(self.c, "web", "bo", takeover="owner session ended")
+        self.assertEqual(core.target_show(self.c, "web")["owner"], "bo")
+
+    def test_a_person_can_give_any_target(self):
+        core.register(self.c, "pat", human=True)
+        core.target_own(self.c, "web", "ag")
+        core.target_give(self.c, "web", "bo", "pat")
+        self.assertEqual(core.target_show(self.c, "web")["owner"], "bo")
+        self.assertEqual(core.unread(self.c, "bo")["unread"], 1)
+        self.assertIn("gave target web to bo", core.inbox(self.c, "ag")[0]["body"])
+        with self.assertRaises(RiverError):
+            core.target_give(self.c, "web", "ag", "ag")  # an agent that is not the owner still cannot
+
 
 class Status(Base):
     def test_status_counts_and_recent(self):

@@ -1084,26 +1084,43 @@ def target_describe(conn, name, text, actor=None):
     return target_show(conn, name)
 
 
-def target_own(conn, name, actor=None):
-    """Become the one owner of a target. Refused while another agent owns it."""
+def target_own(conn, name, actor=None, takeover=None):
+    """Become the one owner of a target. Refused while another agent owns it, unless that owner is
+    away or gone and `takeover` says why: then the target moves now and the old owner is told."""
     if not actor:
         raise RiverError("owning a target needs an agent name: set RIVER_AGENT or pass --as <name>")
+    reason = (takeover or "").strip()
     with tx(conn):
         _sweep(conn)
         _agent(conn, actor)
         t = _target(conn, name)
-        if t["owner"] and t["owner"] != actor:
+        prior = t["owner"] if t["owner"] and t["owner"] != actor else None
+        if prior:
+            owner = conn.execute("SELECT * FROM agents WHERE name=?", (prior,)).fetchone()
+            state = _agent_state(conn, owner) if owner else "gone"
             left = parse_iso(t["owner_expires_at"]) - now()
-            raise RiverError(f"refused: target {name} is owned by {t['owner']} "
-                             f"(until {t['owner_expires_at']}, {_short(left)} left unless they renew). "
-                             f"Ask them: river send question --to {t['owner']} \"...\", "
-                             f"or they can hand it over: river target give {name} --to {actor}")
+            if state == "active" or takeover is None:
+                hint = (f"; {prior} is {state} (last seen {owner['last_seen'] if owner else 'never'}): "
+                        f"take it over with river target own {name} --takeover \"<why>\""
+                        if state != "active" else "")
+                raise RiverError(f"refused: target {name} is owned by {prior} "
+                                 f"(until {t['owner_expires_at']}, {_short(left)} left unless they renew). "
+                                 f"Ask them: river send question --to {prior} \"...\", "
+                                 f"or they can hand it over: river target give {name} --to {actor}{hint}")
+            if not reason:
+                raise RiverError(f"say why you take target {name} from {prior}: "
+                                 f"river target own {name} --takeover \"<why>\"")
         ttl = parse_duration(setting(conn, "owner_ttl", agent=actor))
         cur = conn.execute("UPDATE targets SET owner=?, owner_expires_at=? WHERE name=? AND (owner IS NULL OR owner=?)",
-                           (actor, iso(now() + ttl), name, actor))
+                           (actor, iso(now() + ttl), name, prior or actor))
         if cur.rowcount != 1:
             raise RiverError(f"target {name} changed owner while you asked; see: river target show {name}")
-        if t["owner"] != actor:
+        if prior:
+            _event(conn, None, actor, f"target {name} taken over from {prior} ({state}) by {actor}: {reason}")
+            _send(conn, "notice", actor, f"{actor} took over target {name} while you were {state}: {reason}. "
+                  f"You no longer run its deploys; ask {actor} or a person to give it back: "
+                  f"river target give {name} --to {prior}", to=prior)
+        elif t["owner"] != actor:
             _event(conn, None, actor, f"target {name} owned by {actor}")
     return target_show(conn, name)
 
@@ -1119,19 +1136,26 @@ def target_release(conn, name, actor=None):
 
 
 def target_give(conn, name, to, actor=None):
-    """Hand a target to another agent. Only the owner can give it."""
+    """Hand a target to another agent. The owner can give it, and so can a person, who decides for the
+    agents: the old owner is then told."""
     with tx(conn):
         _sweep(conn)
         t = _target(conn, name)
-        if t["owner"] != actor:
+        giver = conn.execute("SELECT kind FROM agents WHERE name=?", (actor,)).fetchone() if actor else None
+        by_person = bool(giver) and giver["kind"] == "human" and t["owner"] != actor
+        if t["owner"] != actor and not by_person:
             raise RiverError(f"only the owner can give target {name}; it is owned by {t['owner'] or 'nobody'}"
                              + ("" if t["owner"] else f" (take it: river target own {name})"))
         _agent(conn, to)
         ttl = parse_duration(setting(conn, "owner_ttl", agent=to))
         conn.execute("UPDATE targets SET owner=?, owner_expires_at=? WHERE name=?", (to, iso(now() + ttl), name))
-        _event(conn, None, actor, f"target {name} given to {to}")
+        _event(conn, None, actor, f"target {name} given to {to}"
+               + (f" by {actor} (was {t['owner']})" if by_person and t["owner"] else ""))
         _send(conn, "notice", actor, f"{actor} gave you target {name}: you now run its deploys. "
               f"See: river target show {name}", to=to)
+        if by_person and t["owner"] and t["owner"] != to:
+            _send(conn, "notice", actor, f"{actor} gave target {name} to {to}; you no longer run its deploys",
+                  to=t["owner"])
     return target_show(conn, name)
 
 
