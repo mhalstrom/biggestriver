@@ -107,12 +107,13 @@ DEFAULT_SETTINGS = {
     "wait_max": "30m",
     "wait_step": "9m",
     # The manager (river manage): an agent that waits for work longer than wait_too_long is a finding, and
-    # river manage --watch wakes at least every manage_every to report what changed.
+    # river manage --watch returns on a new finding, or after manage_every with nothing new (it runs as a
+    # background command, so the manager's session wakes only then).
     "wait_too_long": "20m",
     # A session the page (or river launch) started that runs no river command within connect_within is a
     # finding (not connected): its agent did not start, or waits on a prompt in its terminal.
     "connect_within": "5m",
-    "manage_every": "5m",
+    "manage_every": "30m",
     # river cleanup lists a ready item that nobody claimed for this long.
     "stale_after": "14d",
     "review": "off",
@@ -6364,8 +6365,8 @@ def manage(conn, cwd, actor=None, takeover=None):
 
 def manage_watch(conn, actor, step=None, sleep=None, poll=3.0):
     """river manage --watch: block until something new needs the manager (a new finding; messages come
-    through river inbox --wait),
-    at most manage_every (and wait_step, below a shell time limit). Returns what changed."""
+    through river inbox --wait), at most manage_every (or step). Findings it reported before do not count
+    as new. Returns what changed."""
     import json
     import time
     sleep = sleep or time.sleep
@@ -6376,8 +6377,7 @@ def manage_watch(conn, actor, step=None, sleep=None, poll=3.0):
         base = set(json.loads(conn.execute("SELECT manage_seen FROM agents WHERE name=?", (actor,)).fetchone()[0] or "[]"))
     except (TypeError, ValueError):
         base = set()
-    every = parse_duration(step or setting(conn, "manage_every", agent=actor))
-    deadline = now() + min(every, parse_duration(setting(conn, "wait_step", agent=actor)))
+    deadline = now() + parse_duration(step or setting(conn, "manage_every", agent=actor))
     while True:
         f = manager_findings(conn)
         keys = set(_finding_keys(f))

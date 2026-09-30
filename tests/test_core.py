@@ -4,6 +4,7 @@ import os
 import tempfile
 import threading
 import unittest
+from unittest import mock
 from datetime import timedelta
 
 from river import core
@@ -3036,6 +3037,12 @@ class Manager(Base):
         self.add("b", "new work")
         w = core.manage_watch(self.c, "boss", step="1m", sleep=lambda s: None)
         self.assertEqual((w["result"], w["new"]), ("change", ["uncovered:b"]))
+        # A finding it reported before does not wake it again: it waits the whole manage_every.
+        self.assertEqual(core.DEFAULT_SETTINGS["manage_every"], "30m")
+        t0, naps = core.now(), []
+        with mock.patch.object(core, "now", side_effect=lambda: t0 + timedelta(minutes=len(naps) * 10)):
+            w = core.manage_watch(self.c, "boss", sleep=naps.append)
+        self.assertEqual((w["result"], w["new"], len(naps)), ("tick", [], 3))  # 30m, not the 9m wait_step
         with self.assertRaisesRegex(RiverError, "not the manager"):
             core.manage_watch(self.c, "w1", step="0s")
 

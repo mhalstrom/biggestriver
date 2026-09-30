@@ -541,8 +541,8 @@ def build_parser():
 
     x = sub.add_parser("manage", help="start the manager session (one at a time): what needs attention, and its rules")
     x.add_argument("--takeover", metavar="REASON", help="take over from the active manager")
-    x.add_argument("--watch", action="store_true", help="block until something new needs the manager (at most manage_every)")
-    x.add_argument("--step", help="with --watch: return after this long at most")
+    x.add_argument("--watch", action="store_true", help="block until a new finding needs the manager (at most manage_every); run it in the background")
+    x.add_argument("--step", help="with --watch: return after this long at most (a foreground shell: below its time limit)")
     x.add_argument("--chat", action="store_true", default=os.environ.get("RIVER_CHAT") == "1",
                    help="a chat app session with no folder (default $RIVER_CHAT=1)")
     x = sub.add_parser("plan", help="start a planner session: overview, open questions, and the planner's rules")
@@ -1677,13 +1677,18 @@ def render_manage(b):
     me = b["agent"]
     r = f"river --as {me}"
     if "result" in b:  # --watch
-        print(("CHANGED: " + ", ".join(b["new"]) if b["new"] else f"NOTHING NEW (tick)")
+        lines = _findings_lines(b["findings"], r)
+        print(("CHANGED: " + ", ".join(b["new"]) if b["new"] else "NOTHING NEW")
               + (f"; resolved: {', '.join(b['gone'])}" if b["gone"] else ""))
         if b["messages"]["unread"]:
             print(f"  {b['messages']['unread']} unread message(s): {r} inbox   "
                   f"(is {r} inbox --wait still running in the background?)")
-        print("\n".join(_findings_lines(b["findings"], r)))
-        print(f"Act on what is new, then run {r} manage --watch again.")
+        if b["new"]:
+            print("\n".join(lines))
+        elif any(b["findings"].values()):  # the standing findings: reported before
+            print(f"  {len(lines)} standing finding(s), reported before: {r} manage lists them")
+        print((f"Act on what is new, then start {r} manage --watch again in the background." if b["new"] else
+               f"Start {r} manage --watch again in the background."))
         return
     out = [f"You are the river MANAGER {me}" + (f" (you took over from {b['took_over']})" if b.get("took_over") else "") + "."]
     if b["new_name"]:
@@ -1703,7 +1708,9 @@ def render_manage(b):
             f"  config:  {r} config set launch_agents|default_model|default_effort ...",
             (f"In a chat, run {r} manage again when the user asks what changed (manage --watch is for a terminal)."
              if b.get("chat") else
-             f"Then watch: {r} manage --watch  (wakes on a new finding, at least every {b['every']})."),
+             f"Then watch: keep {r} manage --watch running as a background command (Claude Code: run_in_background "
+             f"with a time limit above {b['every']}; a foreground shell: add --step 9m). It exits on a new finding, "
+             f"or after manage_every {b['every']} with one line; start it again each time."),
             *([] if b.get("chat") else [
             "Messages: river delivers them into this session itself (native_message); you need no inbox poller."
              if b.get("native") else f"Messages: keep {r} inbox --wait running as a background command (Claude Code: run_in_background; "

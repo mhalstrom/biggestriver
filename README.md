@@ -405,8 +405,9 @@ blocker trees, the agent registry, capacity, settings, and the web page.
   no items. Its briefing lists stuck agents, expired leases, agents that wait
   longer than `wait_too_long` (20m), projects with ready work and no agent,
   targets whose owner is away, and what waits on the user. `river manage
-  --watch` wakes when a new finding appears (at least every `manage_every`,
-  5m). Messages to the manager come through `river inbox --wait`, which the
+  --watch`, a background command, exits when a new finding appears (one it
+  reported before does not count), or after `manage_every` (30m) with one
+  line. Messages to the manager come through `river inbox --wait`, which the
   manager keeps running as a background command: it exits with the new
   messages as soon as one comes (any agent can use it), and the manager starts
   it again. A session that river reaches through `native_message` needs no

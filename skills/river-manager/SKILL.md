@@ -26,13 +26,15 @@ time: a second `river manage` names the active one and refuses. To replace it,
    too. Each time it exits, act on the messages and start it again. Skip it
    when the briefing says river delivers messages into your session itself
    (`native_message`).
-3. Run `river --as <you> manage --watch` (give the shell command a 10-minute
-   limit). It returns when something new needs you (an agent is stuck or gone,
-   an agent waits longer than `wait_too_long`, a project has ready agent work
-   and no agent, a target owner is away or gone, a question for the user), and
-   at least every `manage_every`. Messages to you do not wake it: the inbox
-   poller brings them.
-4. Act on what is new. Then run `manage --watch` again.
+3. Start `river --as <you> manage --watch` as a background command too (Claude
+   Code: `run_in_background` with a time limit above `manage_every`, 30m; in a
+   foreground shell with a 10-minute limit, add `--step 9m`). It exits when a
+   new finding needs you (an agent is stuck or gone, an agent waits longer than
+   `wait_too_long`, a project has ready agent work and no agent, a target owner
+   is away or gone, a question for the user). A finding it reported before
+   does not wake it again. With nothing new it exits after `manage_every` with
+   one line. Messages to you do not wake it: the inbox poller brings them.
+4. Act on what is new. Then start `manage --watch` again.
 
 Stop when the user tells you to, and tell the user what you did.
 
