@@ -183,7 +183,7 @@ The recommendation never blocks. A session that declares its model
 (`RIVER_MODEL` or `--model`) gets only items whose `--min-model` and
 `--max-model` allow it; `go` and `next` say what they skipped and why.
 `model_ladder` orders the models, weakest first, one list per family
-(`claude: sonnet, opus, fable; openai: luna, terra, sol, astra`).
+(`claude: haiku, sonnet, opus, fable; openai: luna, terra, sol, astra`).
 There is no order across families: a limit applies only to sessions of its
 own family, so give one model per family to limit both (`--min-model opus,sol`).
 `effort_levels` lists the effort levels, lowest first.

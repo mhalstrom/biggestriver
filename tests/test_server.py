@@ -440,13 +440,13 @@ class LaunchAgent(unittest.TestCase):
         core.config_set(self.c, "launch_agents", core.setting(self.c, "launch_agents") + "; Mine=myagent go")
         opts = {o["label"]: o for o in core.state(self.c)["launch_options"]}
         self.assertEqual((opts["Claude Code"]["family"], [m["name"] for m in opts["Claude Code"]["models"]]),
-                         ("claude", ["sonnet", "opus", "fable"]))
+                         ("claude", ["haiku", "sonnet", "opus", "fable"]))
         self.assertEqual(opts["Claude Code"]["efforts"], ["low", "medium", "high", "xhigh", "max"])
         self.assertEqual((opts["Codex"]["family"], [m["name"] for m in opts["Codex"]["models"]]),
                          ("openai", ["luna", "terra", "sol", "astra"]))
         self.assertTrue(opts["Codex"]["takes_model"] and opts["Codex"]["takes_effort"])
-        self.assertTrue(all(m["note"] for m in opts["Codex"]["models"]))
-        self.assertEqual((opts["Mine"]["family"], len(opts["Mine"]["models"]), opts["Mine"]["takes_model"]), (None, 7, False))
+        self.assertTrue(all(m["note"] for o in ("Claude Code", "Codex") for m in opts[o]["models"]))
+        self.assertEqual((opts["Mine"]["family"], len(opts["Mine"]["models"]), opts["Mine"]["takes_model"]), (None, 8, False))
         self.assertEqual([o["name"] for o in opts["Claude Code"]["options"]], ["remote_control", "permission_mode"])
         self.assertEqual([o["name"] for o in opts["Codex"]["options"]], ["sandbox", "approval"])
         self.assertEqual(opts["Mine"]["options"], [])
@@ -830,7 +830,7 @@ class LaunchProfiles(unittest.TestCase):
         # The dialog offers each agent the models of its family only, and the CLI's effort levels.
         opts = {o["label"]: o for o in core.state(self.c)["launch_options"]}
         self.assertEqual([m["name"] for m in opts["Codex"]["models"]], ["luna", "terra", "sol", "astra"])
-        self.assertEqual([m["name"] for m in opts["Claude Code"]["models"]], ["sonnet", "opus", "fable"])
+        self.assertEqual([m["name"] for m in opts["Claude Code"]["models"]], ["haiku", "sonnet", "opus", "fable"])
         self.assertEqual(opts["Codex"]["efforts"], ["low", "medium", "high", "xhigh", "max"])
 
     def test_a_launch_with_options_through_a_fake_runner(self):
