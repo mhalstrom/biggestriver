@@ -4844,6 +4844,39 @@ def inbox(conn, actor, include_read=False, mark_read=True):
     return rows
 
 
+INBOX_WAIT = "25m"  # river inbox --wait returns after this with nothing new, below a 30m background-command limit
+
+
+def inbox_wait(conn, actor, timeout=None, sleep=None, poll=3.0):
+    """river inbox --wait: block until a message to the actor is unread (or a stop request comes), at most
+    timeout. Returns the new messages (marked read), so a background command alerts its session at once."""
+    import time
+    sleep = sleep or time.sleep
+    if not actor:
+        raise RiverError("the inbox needs an agent name: set RIVER_AGENT or pass --as <name>")
+    _agent(conn, actor)
+    deadline = now() + parse_duration(timeout or INBOX_WAIT)
+    while True:
+        st = stop_request(conn, actor)
+        if st:
+            return {"result": "stop", "agent": actor, "stop": st, "messages": []}
+        # Unread only: an open question already read stays in the inbox and would wake it at once, every time.
+        if unread(conn, actor)["unread"]:
+            rows = inbox(conn, actor)
+            return {"result": "messages", "agent": actor, "messages": [m for m in rows if m["unread"]],
+                    "still_open": sum(1 for m in rows if not m["unread"])}
+        if now() >= deadline:
+            return {"result": "timeout", "agent": actor, "messages": [], "waited": timeout or INBOX_WAIT}
+        sleep(poll)
+
+
+def has_native(conn, agent):
+    """True when river delivers messages into the agent's running session itself (native_message)."""
+    r = conn.execute("SELECT platform, native_address FROM agents WHERE name=?", (agent,)).fetchone()
+    return bool(r and r["platform"] and r["native_address"]
+                and any(e[0] == r["platform"] for e in parse_native(setting(conn, "native_message"))))
+
+
 def unread(conn, actor):
     """Counts for the line every command prints: unread messages and open questions to the actor."""
     if not actor:
@@ -6325,11 +6358,13 @@ def manage(conn, cwd, actor=None, takeover=None):
     with tx(conn):  # what the manager has seen: manage --watch reports what is new after this
         conn.execute("UPDATE agents SET manage_seen=? WHERE name=?", (json.dumps(_finding_keys(f)), actor))
     return {"agent": actor, "new_name": new_name, "role": "manager", "status": status(conn), "findings": f,
-            "took_over": other, "every": setting(conn, "manage_every"), "wait_too_long": setting(conn, "wait_too_long")}
+            "took_over": other, "every": setting(conn, "manage_every"), "wait_too_long": setting(conn, "wait_too_long"),
+            "native": has_native(conn, actor)}
 
 
 def manage_watch(conn, actor, step=None, sleep=None, poll=3.0):
-    """river manage --watch: block until something new needs the manager (a new finding, or a message to it),
+    """river manage --watch: block until something new needs the manager (a new finding; messages come
+    through river inbox --wait),
     at most manage_every (and wait_step, below a shell time limit). Returns what changed."""
     import json
     import time
@@ -6346,11 +6381,12 @@ def manage_watch(conn, actor, step=None, sleep=None, poll=3.0):
     while True:
         f = manager_findings(conn)
         keys = set(_finding_keys(f))
-        u = unread(conn, actor)
-        if keys - base or u["unread"] or now() >= deadline:
+        # Messages do not wake the watch: river inbox --wait (or native delivery) brings them, once.
+        if keys - base or now() >= deadline:
+            u = unread(conn, actor)
             with tx(conn):
                 conn.execute("UPDATE agents SET manage_seen=? WHERE name=?", (json.dumps(sorted(keys)), actor))
-            return {"agent": actor, "result": "change" if keys - base or u["unread"] else "tick",
+            return {"agent": actor, "result": "change" if keys - base else "tick",
                     "new": sorted(keys - base), "gone": sorted(base - keys), "findings": f, "messages": u}
         activity(conn, actor)
         sleep(poll)

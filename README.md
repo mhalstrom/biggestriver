@@ -405,8 +405,12 @@ blocker trees, the agent registry, capacity, settings, and the web page.
   no items. Its briefing lists stuck agents, expired leases, agents that wait
   longer than `wait_too_long` (20m), projects with ready work and no agent,
   targets whose owner is away, and what waits on the user. `river manage
-  --watch` wakes when something new appears (at least every `manage_every`,
-  5m). Its actions show in the history as "(by manager <name>)". Rules:
+  --watch` wakes when a new finding appears (at least every `manage_every`,
+  5m). Messages to the manager come through `river inbox --wait`, which the
+  manager keeps running as a background command: it exits with the new
+  messages as soon as one comes (any agent can use it), and the manager starts
+  it again. A session that river reaches through `native_message` needs no
+  poller. Its actions show in the history as "(by manager <name>)". Rules:
   `river guide manager` (skills/river-manager).
 - Emergency kill: `river go`, `register`, and `heartbeat` record the agent
   CLI's process (the first ancestor of the river command that is not a shell)

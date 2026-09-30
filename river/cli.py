@@ -689,6 +689,9 @@ def build_parser():
     x = sub.add_parser("inbox", help="your unread messages and questions waiting for your answer")
     x.add_argument("--all", action="store_true", help="read messages too")
     x.add_argument("--peek", action="store_true", help="do not mark them read")
+    x.add_argument("--wait", action="store_true",
+                   help="block until a new message comes, then print it; run it as a background command")
+    x.add_argument("--timeout", help=f"with --wait: return after this long with nothing new (default {core.INBOX_WAIT})")
     x = sub.add_parser("thread", help="a message and its replies")
     x.add_argument("id", type=int, nargs="?"); x.add_argument("--item", type=int, help="every message about this item")
 
@@ -1092,6 +1095,12 @@ def _hint(a, res, actor):
         return HINTS["done"].format(id=res["id"])
     if c == "release":
         return HINTS["release"]
+    if c == "inbox" and isinstance(res, dict):
+        me = f"river --as {actor}"
+        if res["result"] == "stop":
+            return f"stop: {me} go"
+        return (f"act on them, then start it again in the background: {me} inbox --wait" if res["messages"] else
+                f"start it again in the background: {me} inbox --wait")
     if c == "inbox" and res:
         me = f"river --as {actor}"
         return (f"answer a question: {me} answer <id> \"...\"   reply: {me} send note --reply <id> \"...\"   "
@@ -1420,7 +1429,9 @@ def dispatch(conn, a, actor):
             if not actor:
                 raise RiverError("--watch needs the manager's name: river --as <name> manage --watch")
             return core.manage_watch(conn, actor, a.step)
-        return {**core.manage(conn, os.getcwd(), actor, a.takeover), "chat": a.chat}
+        res = core.manage(conn, os.getcwd(), actor, a.takeover)
+        core.set_native(conn, res["agent"], *core.native_from_env(conn, os.environ))
+        return {**res, "native": core.has_native(conn, res["agent"]), "chat": a.chat}
     if c == "next":
         if actor and conn.execute("SELECT 1 FROM agents WHERE name=?", (actor,)).fetchone():
             if a.model:
@@ -1529,6 +1540,8 @@ def dispatch(conn, a, actor):
     if c == "answer":
         return core.answer(conn, a.id, a.text, actor)
     if c == "inbox":
+        if a.wait:
+            return core.inbox_wait(conn, actor, a.timeout)
         return core.inbox(conn, actor, a.all, not a.peek)
     if c == "thread":
         if (a.id is None) == (a.item is None):
@@ -1664,10 +1677,11 @@ def render_manage(b):
     me = b["agent"]
     r = f"river --as {me}"
     if "result" in b:  # --watch
-        print(("CHANGED: " + ", ".join(b["new"]) if b["new"] else "NEW MESSAGES" if b["result"] == "change"
-               else f"NOTHING NEW (tick)") + (f"; resolved: {', '.join(b['gone'])}" if b["gone"] else ""))
+        print(("CHANGED: " + ", ".join(b["new"]) if b["new"] else f"NOTHING NEW (tick)")
+              + (f"; resolved: {', '.join(b['gone'])}" if b["gone"] else ""))
         if b["messages"]["unread"]:
-            print(f"  {b['messages']['unread']} unread message(s): {r} inbox")
+            print(f"  {b['messages']['unread']} unread message(s): {r} inbox   "
+                  f"(is {r} inbox --wait still running in the background?)")
         print("\n".join(_findings_lines(b["findings"], r)))
         print(f"Act on what is new, then run {r} manage --watch again.")
         return
@@ -1689,7 +1703,12 @@ def render_manage(b):
             f"  config:  {r} config set launch_agents|default_model|default_effort ...",
             (f"In a chat, run {r} manage again when the user asks what changed (manage --watch is for a terminal)."
              if b.get("chat") else
-             f"Then watch: {r} manage --watch  (wakes on a new finding or a message, at least every {b['every']})."),
+             f"Then watch: {r} manage --watch  (wakes on a new finding, at least every {b['every']})."),
+            *([] if b.get("chat") else [
+            "Messages: river delivers them into this session itself (native_message); you need no inbox poller."
+             if b.get("native") else f"Messages: keep {r} inbox --wait running as a background command (Claude Code: run_in_background; "
+             f"Codex: its background shell). It exits with the new messages at once and wakes you; act on them, "
+             f"then start it again."]),
             "The rules: river guide manager"]
     if b.get("chat"):
         out += [""] + _chat_lines(r, False)[:1] + [
@@ -2354,7 +2373,16 @@ def render(a, res):
         print(f"answered: sent #{res['id']} to {res['to_agent']}; question #{res['reply_to']} is closed")
         return
     if c == "inbox":
-        if not res:
+        if isinstance(res, dict):  # --wait
+            if res["result"] == "stop":
+                print("STOP REQUESTED" + (f": {res['stop']['stop_reason']}" if res["stop"].get("stop_reason") else ""))
+            elif res["result"] == "timeout":
+                print(f"(no new message in {res['waited']})")
+            else:
+                print(f"NEW MESSAGES for {res['agent']}:" + (f" (and {res['still_open']} older, still open: river "
+                                                             f"--as {res['agent']} inbox)" if res.get("still_open") else ""))
+            res = res["messages"]
+        elif not res:
             print("(inbox empty)")
         for m in res:
             print(_fmt_msg(m))

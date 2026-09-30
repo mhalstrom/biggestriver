@@ -19,12 +19,20 @@ time: a second `river manage` names the active one and refuses. To replace it,
 ## The loop
 
 1. Read NEEDS ATTENTION in the briefing and act on each line (below).
-2. Run `river --as <you> manage --watch` (give the shell command a 10-minute
+2. Start `river --as <you> inbox --wait` as a background command (Claude
+   Code: `run_in_background`, which wakes the session when it exits; Codex:
+   its background shell). It exits as soon as a message or question comes to
+   you, prints it, and marks it read; after 25 minutes with nothing it exits
+   too. Each time it exits, act on the messages and start it again. Skip it
+   when the briefing says river delivers messages into your session itself
+   (`native_message`).
+3. Run `river --as <you> manage --watch` (give the shell command a 10-minute
    limit). It returns when something new needs you (an agent is stuck or gone,
    an agent waits longer than `wait_too_long`, a project has ready agent work
-   and no agent, a target owner is away or gone, a question for the user, a
-   message to you), and at least every `manage_every`.
-3. Act on what is new. Then run `manage --watch` again.
+   and no agent, a target owner is away or gone, a question for the user), and
+   at least every `manage_every`. Messages to you do not wake it: the inbox
+   poller brings them.
+4. Act on what is new. Then run `manage --watch` again.
 
 Stop when the user tells you to, and tell the user what you did.
 

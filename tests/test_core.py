@@ -3038,3 +3038,25 @@ class Manager(Base):
         self.assertEqual((w["result"], w["new"]), ("change", ["uncovered:b"]))
         with self.assertRaisesRegex(RiverError, "not the manager"):
             core.manage_watch(self.c, "w1", step="0s")
+
+    def test_messages_wake_the_inbox_poller_not_the_watch(self):
+        core.manage(self.c, self.dir.name, "boss")
+        core.manage_watch(self.c, "boss", step="0s", sleep=lambda s: None)
+        core.send(self.c, "note", "hello boss", to="boss", actor="w1")
+        w = core.manage_watch(self.c, "boss", step="0s", sleep=lambda s: None)
+        self.assertEqual((w["result"], w["messages"]["unread"]), ("tick", 1))  # reported, but it did not wake
+        r = core.inbox_wait(self.c, "boss", "1m", sleep=lambda s: self.fail("no wait with a message unread"))
+        self.assertEqual((r["result"], [m["body"] for m in r["messages"]]), ("messages", ["hello boss"]))
+        self.assertEqual(core.unread(self.c, "boss")["unread"], 0)  # marked read: the next wait blocks
+        # An open question already read does not wake it again; a timeout returns nothing.
+        core.send(self.c, "question", "which db?", to="boss", actor="w1")
+        core.inbox_wait(self.c, "boss", "1m")
+        naps = []
+        r = core.inbox_wait(self.c, "boss", "0s", sleep=naps.append)
+        self.assertEqual((r["result"], r["messages"], naps), ("timeout", [], []))
+        # A message that comes while it waits ends the wait.
+        r = core.inbox_wait(self.c, "boss", "1h", sleep=lambda s: core.send(self.c, "alert", "now", to="boss", actor="w1"))
+        self.assertEqual([m["body"] for m in r["messages"]], ["now"])
+        core.stop_agent(self.c, "boss", "done for today", actor="mark")
+        self.assertEqual(core.inbox_wait(self.c, "boss", "1h")["result"], "stop")
+        self.assertFalse(core.manage(self.c, self.dir.name, "boss2", takeover="x")["native"])

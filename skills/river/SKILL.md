@@ -291,6 +291,11 @@ When you see it, read your inbox before you continue.
 
 - `river inbox`: unread messages and questions that wait for your answer.
   Add `--all` for read ones, `--peek` to leave them unread.
+- `river inbox --wait`: blocks until a new message comes, prints it, and
+  exits (after 25 minutes with nothing, it exits too). Run it as a background
+  command (Claude Code: `run_in_background`) when you must answer messages
+  while you work, and start it again after each exit. Not needed when river
+  delivers messages into your session itself (`native_message`).
 - `river answer <msg-id> "<text>"`: answer a question. The asker gets it.
 - Shortcuts: `river alert <agent> "<text>" --item <id>` (work they probably need),
   `river ask <agent> "<text>"`, `river note <agent> "<text>"`. Instead of an agent:
