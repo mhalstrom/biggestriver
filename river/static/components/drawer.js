@@ -83,6 +83,7 @@ export function itemDrawerHtml(it, { S, me }) {
       ${["in_progress", "held"].includes(it.status) ? `<button class="btn primary" data-do="done">Done</button><button class="btn" data-do="release">Release</button>` : ""}
       ${it.status === "open" ? `<button class="btn" data-do="done">Mark done</button>` : ""}
       ${!closed ? `<button class="btn" data-do="drop">Drop</button>` : `<button class="btn" data-do="reopen">Reopen</button>`}
+      <button class="btn" data-do="save">Save details</button>
       ${agentButton(it, S)}
     </div>
     <div class="sec"><h4>Details</h4><div class="form">
@@ -101,7 +102,6 @@ export function itemDrawerHtml(it, { S, me }) {
         field("Who can do it", select({ id: "dDoer" }, [["any", "anyone"], ["ai", "agent"], ["human", "human"]], it.doer)))}
       ${two(field("Project", select({ id: "dProject" }, S.projects.map(p => p.name), it.project)),
         field("Order in project", `<span class="actions"><button class="btn" data-do="up">Up</button><button class="btn" data-do="down">Down</button></span>`))}
-      <button class="btn" data-do="save">Save details</button>
     </div></div>
     ${it.output ? `<div class="sec"><h4>Output</h4><div>${esc(it.output)}</div></div>` : ""}
     <div class="sec"><h4>Waits on</h4>
