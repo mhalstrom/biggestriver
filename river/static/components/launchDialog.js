@@ -41,15 +41,17 @@ export function pickAgent(opts, it, ladder, ids) {
 }
 
 // The model to preselect for an agent option on an item: the item's recommendation, else the weakest its
-// limits allow, else the last choice here, else the agent's own default ("").
+// min limit allows, else its max limit (not the bottom of the ladder), else the last choice here, else the
+// agent's own default (""). Only limits that name a model of this agent's family count.
 export function pickModel(opt, it, ladder, last, ids) {
   const ok = (m) => opt.models.some(x => x.name === m) && (!it || modelAllowed(ladder, m, it.min_model, it.max_model));
   const rec = it && ladderName(ids, it.model);
   if (rec && ok(rec)) return rec;
-  if (it && (it.min_model || it.max_model)) {
+  const mine = (lim) => String(lim || "").split(",").map(x => x.trim()).find(x => opt.models.some(m => m.name === x));
+  if (it && mine(it.min_model)) {
     const first = opt.models.find(x => ok(x.name));
     if (first) return first.name;
-  }
+  } else if (it && ok(mine(it.max_model))) return mine(it.max_model);
   return last && ok(last) ? last : "";
 }
 
