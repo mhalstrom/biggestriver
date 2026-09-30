@@ -120,7 +120,7 @@ DEFAULT_SETTINGS = {
     "review_cmd": "",
     # Models, weakest to strongest, one list per family ("family: a, b, c", families separated by ";").
     # There is no order across families: a limit compares only models of the same family.
-    "model_ladder": "claude: sonnet, opus, fable; openai: luna, terra, sol, astra",
+    "model_ladder": "claude: haiku, sonnet, opus, fable; openai: luna, terra, sol, astra",
     "effort_levels": "low, medium, high, xhigh, max",
     # What an item gets when it names none itself. Set them per project (--project) or per item kind
     # (--kind deploy); for example monitors: default_model sonnet, default_effort low, default_max_model sonnet.
@@ -150,7 +150,7 @@ LAUNCH_PLATFORMS = {
                             "text": "permission mode (--permission-mode); empty: Claude Code's own setting"},
         "model_ids": {"kind": "text", "default": "",
                       "text": "the id Claude Code gets for a model_ladder name (name=id, ...); a name with no "
-                              "entry goes as it is: claude --model takes sonnet, opus, and fable"},
+                              "entry goes as it is: claude --model takes haiku, sonnet, opus, and fable"},
         "args": {"kind": "text", "default": "", "text": "more arguments, put before the prompt"},
         "prompt": {"kind": "text", "default": "go", "text": "the first prompt"},
     }},
@@ -869,7 +869,7 @@ def parse_ladder(value):
         ms = _levels(models)
         if not ms:
             raise RiverError(f"model_ladder: family {name} lists no models; write "
-                             f"\"claude: sonnet, opus, fable; openai: luna, terra, sol, astra\"")
+                             f"\"claude: haiku, sonnet, opus, fable; openai: luna, terra, sol, astra\"")
         for m in ms:
             if m in seen:
                 raise RiverError(f"model_ladder: {m} is in more than one place")
@@ -5569,6 +5569,7 @@ PLATFORM_EFFORTS = {"claude": ["low", "medium", "high", "xhigh", "max"],
                     "openai": ["low", "medium", "high", "xhigh", "max"]}
 # One line per model in the launch dialog: when it fits.
 MODEL_NOTES = {
+    "haiku": "quick, simple work: lookups, formatting, trivial edits",
     "sonnet": "routine, well specified work: monitors, checks, small fixes",
     "opus": "normal feature work that follows the code already there",
     "fable": "hard design, hard bugs, security, data that is costly to lose",

@@ -219,7 +219,7 @@ Hard limits keep sessions off an item: `--min-model opus` (weaker sessions skip
 it) and `--max-model sonnet` (do not spend a strong model on it). Set a limit
 only when a wrong model is costly; the recommendation is enough otherwise.
 The `model_ladder` setting orders the models, weakest first, one list per
-family: `claude: sonnet, opus, fable; openai: luna, terra, sol, astra`. There
+family: `claude: haiku, sonnet, opus, fable; openai: luna, terra, sol, astra`. There
 is no order across families, so a limit applies only to sessions of its
 family. Name one model per family to limit both: `--min-model opus,sol`.
 
@@ -235,7 +235,7 @@ launch_agents label such as `Codex` works too). Sessions of another type skip
 it, and Start, Dispatch, and `river launch` start that type. Use it when one
 agent does the work better, for example Codex for images and CSS. Keep the
 item's models in that type's family (Codex: luna, terra, sol, astra; Claude
-Code: sonnet, opus, fable). Set rules once instead of on every item:
+Code: haiku, sonnet, opus, fable). Set rules once instead of on every item:
 `river config set agent_rules "codex: *.css, *.svg, image, logo"` (a pattern
 with `*`, `?`, `/` or `.` matches a file in `--touches`; any other is a word in
 the title). `default_agent` is the fallback, per project or kind. A person can

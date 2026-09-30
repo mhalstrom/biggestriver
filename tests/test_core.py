@@ -2568,7 +2568,7 @@ class Models(Base):
 
     def test_ladder_has_no_order_across_families(self):
         ladder = core.parse_ladder(core.setting(self.c, "model_ladder"))
-        self.assertEqual(ladder["claude"], ["sonnet", "opus", "fable"])
+        self.assertEqual(ladder["claude"], ["haiku", "sonnet", "opus", "fable"])
         self.assertEqual(ladder["openai"], ["luna", "terra", "sol", "astra"])
         self.assertEqual(core.model_check(ladder, "sonnet", "opus", None)[0], False)
         self.assertEqual(core.model_check(ladder, "fable", None, "opus")[0], False)
