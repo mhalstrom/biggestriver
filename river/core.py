@@ -62,6 +62,9 @@ DEFAULT_SETTINGS = {
     "ntfy_url": "https://ntfy.sh",
     # Where a phone notification opens when river knows no session link for it (a local page cannot open there).
     "ntfy_click": "https://claude.ai/code",
+    # The ntfy priority of each notification: min, low, default, high, or urgent. Below high, the ntfy app on
+    # Android shows no pop-over banner (the message goes to the notification drawer only), so high is the default.
+    "ntfy_priority": "high",
     "ntfy_topic": "",
     "ntfy_token": "",
     "email_to": "",
@@ -817,6 +820,9 @@ def config_set(conn, key, value, project=None, item=None, agent=None, actor=None
         raise RiverError(f"{key} is an email address" + (" (a comma list is fine)" if key == "email_to" else ""))
     elif key == "ntfy_click" and value and not re.match(r"^https?://[^\s/]+", value):
         raise RiverError("ntfy_click is a web link, for example https://claude.ai/code")
+    elif key == "ntfy_priority" and value not in NTFY_PRIORITIES:
+        raise RiverError("ntfy_priority is one of: " + ", ".join(NTFY_PRIORITIES)
+                         + " (high and urgent show a banner on the phone)")
     elif key == "ntfy_url" and not re.match(r"^https?://[^\s/]+", value):
         raise RiverError("ntfy_url is the server address, for example https://ntfy.sh")
     elif key == "ntfy_topic" and value and not re.match(r"^[A-Za-z0-9_-]{1,64}$", value):
@@ -840,6 +846,7 @@ def config_unset(conn, key, project=None, item=None, agent=None, actor=None, kin
 
 
 # Anyone who knows these can read or send the notifications; config output shows only their end.
+NTFY_PRIORITIES = ("min", "low", "default", "high", "urgent")
 SECRET_SETTINGS = ("ntfy_topic", "ntfy_token")
 
 

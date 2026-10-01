@@ -1576,6 +1576,14 @@ class Ntfy(Base):
         self.assertTrue(req.get_header("Title").startswith("=?UTF-8?B?"))
         self.assertEqual(req.get_header("Click"), "https://claude.ai/code")
         self.assertEqual(req.get_header("Authorization"), "Bearer tk_secret_123")
+        # Priority high: below it the Android app shows no pop-over banner (#480).
+        self.assertEqual(req.get_header("Priority"), "high")
+        core.config_set(self.c, "ntfy_priority", "urgent")
+        with mock.patch("urllib.request.urlopen", fake):
+            notify.ADAPTERS["ntfy"](self.c)("t", "b", None)
+        self.assertEqual(seen[-1].get_header("Priority"), "urgent")
+        with self.assertRaisesRegex(RiverError, "min, low, default, high, urgent"):
+            core.config_set(self.c, "ntfy_priority", "loud")
 
     def test_no_topic_and_bad_values(self):
         from river import notify

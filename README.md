@@ -428,6 +428,9 @@ blocker trees, the agent registry, capacity, settings, and the web page.
   notices; `river inbox`, `river thread`, an unread count on every command.
 - Needs you: one list of what waits on a person, most important first, with
   notifications by phone (ntfy), email (SMTP), macOS banner, and browser.
+  Phone notifications go out at ntfy priority `high` (`ntfy_priority`), so
+  the phone shows a banner; the ntfy app also needs the phone's permission
+  for banners and the lock screen.
 - Planning and shipping: `river plan`, deploy targets, `river ship`.
 - Deploy monitoring: `river target monitor <target> "<what to watch, for how
   long>"`. When a deploy item is claimed, river adds a monitor item for that

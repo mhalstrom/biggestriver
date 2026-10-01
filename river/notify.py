@@ -56,7 +56,8 @@ def _ntfy_channel(conn):
         raise RiverError("ntfy has no topic; run: river notify setup ntfy")
 
     def send(title, body, url):
-        headers = {"Title": _header(title), "Tags": "bell", "Content-Type": "text/plain; charset=utf-8"}
+        headers = {"Title": _header(title), "Tags": "bell", "Content-Type": "text/plain; charset=utf-8",
+                   "Priority": core.setting(conn, "ntfy_priority")}
         if not url or _is_local(url):
             url = core.setting(conn, "ntfy_click")
         if url:
@@ -172,6 +173,9 @@ def setup_ntfy(conn, url=None, token=None, actor=None):
         f"  2. Subscribe to topic {topic}" + ("" if server == "https://ntfy.sh" else f" on server {server}") + ".",
         "     Keep the topic secret: anyone who knows it can read these notifications.",
         "  3. Test it: river notify test ntfy",
+        "     No banner or lock-screen alert? In the phone's settings, allow notifications for the ntfy app",
+        "     (banners, lock screen, sound) and exempt it from Focus / Do Not Disturb and battery limits.",
+        "     river sends at ntfy priority high (river config set ntfy_priority urgent|default|low|min).",
         "River shows only the end of the topic from now on (river config get ntfy_topic).",
     ]}
 
