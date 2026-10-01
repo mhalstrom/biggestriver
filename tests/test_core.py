@@ -1808,6 +1808,33 @@ class Push(Base):
         with self.assertRaises(RiverError):
             core.cancel_push(self.c, self.x, "boss")
 
+    def test_unregister_ends_every_reservation_of_the_agent(self):
+        # #548: a reservation with no time limit (given, or a prerequisite of a held item) outlived its agent.
+        core.push(self.c, self.x, "aa", None, "boss")
+        self.c.execute("UPDATE items SET reserved_for='aa' WHERE id=?", (self.first,))
+        core.unregister(self.c, "aa")
+        for i in (self.x, self.first):
+            it = core._item(self.c, i)
+            self.assertEqual((it["reserved_for"], it["reserved_until"], it["reserved_by"]), (None, None, None))
+        core.claim(self.c, self.first, "bb")
+
+    def test_a_reservation_for_an_unregistered_name_ends_at_the_next_sweep(self):
+        self.c.execute("UPDATE items SET reserved_for='ghost' WHERE id=?", (self.first,))
+        core.activity(self.c, "bb")
+        self.assertIsNone(core._item(self.c, self.first)["reserved_for"])
+
+    def test_a_person_or_the_agent_ends_a_reservation_that_is_not_a_push(self):
+        self.c.execute("UPDATE items SET reserved_for='aa' WHERE id=?", (self.first,))
+        core.register(self.c, "mark", human=True)
+        with self.assertRaisesRegex(RiverError, "reserved for aa"):
+            core.cancel_push(self.c, self.first, "bb")
+        core.cancel_push(self.c, self.first, "mark")
+        self.assertIsNone(core._item(self.c, self.first)["reserved_for"])
+        self.assertTrue(any("cancelled" in m["body"] for m in core.inbox(self.c, "aa")))
+        self.c.execute("UPDATE items SET reserved_for='aa' WHERE id=?", (self.first,))
+        core.cancel_push(self.c, self.first, "aa")
+        self.assertIsNone(core._item(self.c, self.first)["reserved_for"])
+
     def test_push_refusals(self):
         core.claim(self.c, self.first, "bb")
         with self.assertRaises(RiverError):

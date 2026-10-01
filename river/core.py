@@ -2634,20 +2634,37 @@ def _free_pushes(conn, agent, why):
     return [r["id"] for r in rows]
 
 
+def _free_reservations(conn, agent, why):
+    """End every reservation of an agent that is gone for good (unregistered): its pushes, and the items
+    reserved for it without a time limit (a prerequisite of an item it held, or one given to it). Inside a tx."""
+    ids = _free_pushes(conn, agent, why)
+    for r in conn.execute("SELECT id FROM items WHERE reserved_for=? AND status='open'", (agent,)).fetchall():
+        conn.execute("UPDATE items SET reserved_for=NULL, reserved_until=NULL, reserved_by=NULL WHERE id=?", (r["id"],))
+        _event(conn, r["id"], "river", f"reservation for {agent} ended: {why}; open to everyone")
+        ids.append(r["id"])
+    return ids
+
+
 def cancel_push(conn, item_id, actor=None):
-    """Take a push back before it is answered; the agent it went to hears about it."""
+    """Take a push back before it is answered; the agent it went to hears about it. A person or a manager
+    also ends a reservation that is not a push (an item reserved for an agent with no time limit)."""
     with tx(conn):
         it = _item(conn, item_id)
-        if not it["reserved_until"] or it["status"] != "open":
+        if it["status"] == "open" and it["reserved_for"] and not it["reserved_until"]:
+            if actor != it["reserved_for"] and may_change_queue(conn, actor, it["reserved_for"]):
+                raise RiverError(f"refused: #{item_id} is reserved for {it['reserved_for']}; that agent, a person, "
+                                 f"or a manager ends the reservation")
+        elif not it["reserved_until"] or it["status"] != "open":
             raise RiverError(f"#{item_id} has no open push")
         to = it["reserved_for"]
         conn.execute("UPDATE items SET reserved_for=NULL, reserved_until=NULL, reserved_by=NULL WHERE id=?", (it["id"],))
         conn.execute("UPDATE messages SET state='declined', read_at=COALESCE(read_at, ?) "
                      "WHERE kind='alert' AND item_id=? AND to_agent=? AND state='open'", (iso(now()), it["id"], to))
-        _event(conn, it["id"], actor, f"push to {to} cancelled")
+        what = "push" if it["reserved_until"] else "reservation"
+        _event(conn, it["id"], actor, f"{what} {'to' if it['reserved_until'] else 'for'} {to} cancelled")
         if to != actor:
-            _send(conn, "notice", actor or "river", f"the push of #{it['id']} {it['title']} to you was cancelled",
-                  to=to, item_id=it["id"])
+            _send(conn, "notice", actor or "river", f"the {what} of #{it['id']} {it['title']} "
+                  f"{'to' if it['reserved_until'] else 'for'} you was cancelled", to=to, item_id=it["id"])
     return item_show(conn, item_id)
 
 
@@ -3423,6 +3440,10 @@ def _sweep(conn):
                           (STARTED_NOTE + "%", late)).fetchall():
         _free_pushes(conn, r["name"], f"{r['name']} was stopped" if r["stop_at"] else
                      f"{r['name']} never connected (no river command within connect_within)")
+    # An item reserved for a name that is not registered any more: nobody could claim or give it.
+    for r in conn.execute("SELECT DISTINCT reserved_for FROM items WHERE reserved_for IS NOT NULL AND status='open' "
+                          "AND reserved_for NOT IN (SELECT name FROM agents)").fetchall():
+        _free_reservations(conn, r["reserved_for"], f"{r['reserved_for']} is not registered")
     for r in conn.execute("SELECT id, title, reserved_for, reserved_by FROM items WHERE reserved_until < ? "
                           "AND status='open'", (t,)).fetchall():
         conn.execute("UPDATE items SET reserved_for=NULL, reserved_until=NULL, reserved_by=NULL WHERE id=?", (r["id"],))
@@ -3751,7 +3772,7 @@ def unregister(conn, name, actor=None):
             raise RiverError(f"{name} owns target {', '.join(owned)}; release or give it first "
                              f"(river target release <t>, river target give <t> --to <agent>)")
         _drop_queue(conn, name, "stopped")
-        _free_pushes(conn, name, f"{name} ended")
+        _free_reservations(conn, name, f"{name} ended")
         conn.execute("DELETE FROM agents WHERE name=?", (name,))
         conn.execute("DELETE FROM settings WHERE scope=?", (f"agent:{name}",))
         _event(conn, None, actor or name, f"agent {name} unregistered")
