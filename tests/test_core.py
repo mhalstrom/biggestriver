@@ -2933,7 +2933,9 @@ class NativeDelivery(Base):
     def test_a_claude_code_session_inbox_gets_one_line(self):
         import socket
         import threading
-        d = tempfile.mkdtemp(dir="/tmp")
+        if not hasattr(socket, "AF_UNIX"):
+            self.skipTest("no Unix sockets on this system (Windows): river says so in place of a delivery")
+        d = tempfile.mkdtemp(dir="/tmp")  # a short path: a socket path has a low length limit
         self.addCleanup(lambda: __import__("shutil").rmtree(d, ignore_errors=True))
         path = os.path.join(d, "s.sock")
         srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -2972,7 +2974,10 @@ class Kill(Base):
         core.register(self.c, "mark", human=True)
         self.p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
         self.addCleanup(lambda: (self.p.poll() is None and self.p.kill(), self.p.wait()))
-        cmd = core.proc_info(self.p.pid)[2]
+        info = core.proc_info(self.p.pid)
+        if info is None:
+            self.skipTest("no ps on this system (Windows): river records no process there, so --kill has none to end")
+        cmd = info[2]
         core.set_process(self.c, "ag", self.p.pid, cmd)
 
     def test_kill_ends_the_process_and_releases_everything(self):

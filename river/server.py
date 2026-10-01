@@ -77,17 +77,13 @@ def _applescript_str(s):
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-# The page opens agent sessions in a new Terminal tab (macOS) or console window (Windows). Tests set it.
-PLATFORM = sys.platform
-
-
 # Tests (and river launch tests) set this to a fake that receives what would open a terminal.
 TERMINAL_RUNNER = None
 
 
 def _can_open_terminal(runner, hint):
     runner = runner or TERMINAL_RUNNER
-    if PLATFORM not in ("darwin", "win32") and runner is None:
+    if core.PLATFORM not in ("darwin", "win32") and runner is None:
         raise RiverError(f"starting an agent from the page works on macOS and Windows only; start one yourself: {hint}")
 
 
@@ -295,7 +291,7 @@ def open_chat(conn, agent, runner=None):
                                  timeout=5).stdout.strip()
         except (OSError, subprocess.SubprocessError):
             tty = ""
-        if tty and tty not in ("??", "?") and (PLATFORM == "darwin" or runner or TERMINAL_RUNNER):
+        if tty and tty not in ("??", "?") and (core.PLATFORM == "darwin" or runner or TERMINAL_RUNNER):
             dev = tty if tty.startswith("/dev/") else "/dev/" + tty
             script = "\n".join([
                 'tell application "Terminal"',
@@ -332,7 +328,7 @@ def _open_terminal(t, env, runner=None):
     # The agent uses the same queue as this page: a page on a RIVER_DB queue starts agents on it too.
     if os.environ.get("RIVER_DB"):
         env = {"RIVER_DB": str(core.db_path()), **env}
-    if PLATFORM == "win32":
+    if core.PLATFORM == "win32":
         # cmd /k keeps the window open when the agent ends; the command line goes to cmd as written.
         title = f"title {t['session_title']} & " if t.get("session_title") else ""
         spec = {"args": f"cmd /k {title}{t['command']}", "cwd": t["path"], "env": dict(env)}
@@ -478,7 +474,7 @@ def _agent_cmd(cmd):
     """A KNOWN_AGENTS command with {river_dir} filled in for this computer."""
     import shlex
     d = core.river_dir()
-    return cmd.replace("{river_dir}", f'"{d}"' if PLATFORM == "win32" else shlex.quote(d))
+    return cmd.replace("{river_dir}", f'"{d}"' if core.PLATFORM == "win32" else shlex.quote(d))
 
 
 def _shown_cmd(conn, cmd):
@@ -511,7 +507,7 @@ def setup_status(conn):
     # Agent programs as a new terminal finds them (the app itself has only Finder's short PATH).
     # Agents start in a new Terminal window, so that is where their programs must be found (on Windows: PATH).
     exes = sorted({exe for _, exe, _ in KNOWN_AGENTS} | {core.entry_exe(c) for _, c in agents})
-    term = _login_shell_which(exes) if PLATFORM != "win32" else {e: shutil.which(e) for e in exes}
+    term = _login_shell_which(exes) if core.PLATFORM != "win32" else {e: shutil.which(e) for e in exes}
     return {
         "done": core.setting(conn, "setup_done") == "on",
         "folders": [{"path": d, "projects": names, "exists": Path(d).is_dir(),
@@ -610,7 +606,7 @@ def _login_shell_river():
 def river_command_status():
     """ok: `river` works in a new terminal. ours: it is this launcher. launcher: the launcher's state
     (current / old / missing). shell_path: what a new terminal finds. where: where the launcher goes."""
-    if PLATFORM == "win32":
+    if core.PLATFORM == "win32":
         return {"ok": True, "unsupported": True}
     lp = _launcher_path()
     text = lp.read_text(errors="replace") if lp.is_file() else ""
@@ -643,7 +639,7 @@ def _launcher_text():
 def install_river_command():
     """Write the launcher, and put ~/.local/bin on PATH in the login profile when a new terminal would not
     find it. A river command that is not ours (a clone or pip) is left alone. Returns what changed."""
-    if PLATFORM == "win32":
+    if core.PLATFORM == "win32":
         raise RiverError("the river command installer works on macOS for now; on Windows, add the river "
                          "folder's bin to PATH")
     st = river_command_status()
@@ -685,7 +681,7 @@ def setup_agent_add(conn, label, actor=None):
         # The first agent is the Start button's default: when its program is not on this computer (the
         # default Claude Code on a Mac that has only Codex), the agent added now becomes the default.
         first = core.entry_exe(agents[0][1]) if agents else None
-        missing = first and PLATFORM != "win32" and not _login_shell_which([first])[first]
+        missing = first and core.PLATFORM != "win32" and not _login_shell_which([first])[first]
         agents = [(label, cmd)] + agents if missing else agents + [(label, cmd)]
         core.config_set(conn, "launch_agents", "; ".join(f"{a}={c}" for a, c in agents), actor=actor)
     return [a for a, _ in agents]

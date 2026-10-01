@@ -5302,9 +5302,14 @@ def codex_models():
         return None
 
 
+# The system whose shell gets the commands river builds: its quoting, and how the page opens a session (a
+# Terminal tab on macOS, a console window on Windows). Tests set it.
+PLATFORM = sys.platform
+
+
 def _shell_quote(s):
     import shlex
-    if sys.platform == "win32":
+    if PLATFORM == "win32":
         return f'"{s}"' if not s or re.search(r'[\s"&|<>^%]', s) else s
     return shlex.quote(s)
 

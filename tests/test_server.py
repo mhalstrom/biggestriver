@@ -123,13 +123,13 @@ class PageGoals(unittest.TestCase):
 
 class LaunchAgent(unittest.TestCase):
     def setUp(self):
-        self.platform, server.PLATFORM = server.PLATFORM, "darwin"  # the Terminal tests; Windows has its own
+        self.platform, core.PLATFORM = core.PLATFORM, "darwin"  # the Terminal tests; Windows has its own
         self.dir = tempfile.TemporaryDirectory()
         os.environ["RIVER_DB"] = os.path.join(self.dir.name, "t.db")
         self.c = core.connect()
 
     def tearDown(self):
-        server.PLATFORM = self.platform
+        core.PLATFORM = self.platform
         self.c.close()
         os.environ.pop("RIVER_DB", None)
         self.dir.cleanup()
@@ -319,7 +319,7 @@ class LaunchAgent(unittest.TestCase):
         self.assertEqual(server.dispatch_item(self.c, x, runner=sent.append)["pushed_to"], "w")
         core.cancel_push(self.c, x)
         core.unregister(self.c, "w")
-        server.PLATFORM = "win32"  # tearDown restores it
+        core.PLATFORM = "win32"  # tearDown restores it
         t = server.dispatch_item(self.c, x, runner=sent.append, model="fable")
         self.assertEqual(sent[-1]["env"]["RIVER_MODEL"], "fable")
         b = core.go(self.c, self.dir.name, t["session_name"], model=sent[-1]["env"]["RIVER_MODEL"])
@@ -471,13 +471,15 @@ class LaunchAgent(unittest.TestCase):
     def test_windows_opens_a_console_window_with_the_env_set(self):
         core.project_add(self.c, "shop", path=self.dir.name)
         x = core.item_add(self.c, "shop", "work")["id"]
-        server.PLATFORM = "win32"  # tearDown restores it
+        core.PLATFORM = "win32"  # tearDown restores it
         sent = []
         t = server.dispatch_item(self.c, x, runner=sent.append)
+        # cmd reads double quotes, not the single quotes of a POSIX shell.
+        self.assertEqual(t["command"], f'claude --name "#{x} work" go --remote-control "#{x} work"')
         self.assertEqual(sent[0], {"args": f"cmd /k title #{x} work & {t['command']}", "cwd": t["path"],
                                    "env": {"RIVER_DB": str(core.db_path()), "RIVER_AGENT": t["session_name"],
                                            "RIVER_FOCUS": f"item:{x}"}})
-        server.PLATFORM = "linux"
+        core.PLATFORM = "linux"
         core.item_add(self.c, "shop", "more work")
         with self.assertRaisesRegex(RiverError, "macOS and Windows"):
             server.launch_agent(self.c)
@@ -619,8 +621,8 @@ class SetupGuide(unittest.TestCase):
         home = os.path.join(self.dir.name, "home")
         os.mkdir(home)
         found = {"path": None}
-        old = (os.environ.get("HOME"), os.environ.get("SHELL"), server._login_shell_river, server.PLATFORM)
-        os.environ["HOME"], os.environ["SHELL"], server.PLATFORM = home, "/bin/zsh", "darwin"
+        old = (os.environ.get("HOME"), os.environ.get("SHELL"), server._login_shell_river, core.PLATFORM)
+        os.environ["HOME"], os.environ["SHELL"], core.PLATFORM = home, "/bin/zsh", "darwin"
         server._login_shell_river = lambda: found["path"]
         try:
             self.assertFalse(server.river_command_status()["ok"])
@@ -645,7 +647,7 @@ class SetupGuide(unittest.TestCase):
                     os.environ.pop(k, None)
                 else:
                     os.environ[k] = v
-            server._login_shell_river, server.PLATFORM = old[2], old[3]
+            server._login_shell_river, core.PLATFORM = old[2], old[3]
 
     def test_block_fix_refuses_a_folder_that_is_not_a_project(self):
         with self.assertRaises(RiverError):
@@ -653,12 +655,12 @@ class SetupGuide(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.dir.name, "CLAUDE.md")))
 
     def test_an_added_agent_becomes_the_default_when_the_first_is_not_installed(self):
-        old = server._login_shell_which, server.PLATFORM
-        server._login_shell_which, server.PLATFORM = (lambda names: {n: None for n in names}), "darwin"
+        old = server._login_shell_which, core.PLATFORM
+        server._login_shell_which, core.PLATFORM = (lambda names: {n: None for n in names}), "darwin"
         try:
             self.assertEqual(server.setup_agent_add(self.c, "Codex"), ["Codex", "Claude Code"])
         finally:
-            server._login_shell_which, server.PLATFORM = old
+            server._login_shell_which, core.PLATFORM = old
 
     def test_add_agent_appends_to_launch_agents_once(self):
         old = server._login_shell_which
@@ -691,12 +693,12 @@ class LaunchProfiles(unittest.TestCase):
         self.dir = tempfile.TemporaryDirectory()
         os.environ["RIVER_DB"] = os.path.join(self.dir.name, "t.db")
         self.c = core.connect()
-        self.platform = server.PLATFORM
-        server.PLATFORM = "darwin"
+        self.platform = core.PLATFORM
+        core.PLATFORM = "darwin"
         core.project_add(self.c, "shop", path=self.dir.name)
 
     def tearDown(self):
-        server.PLATFORM = self.platform
+        core.PLATFORM = self.platform
         self.c.close()
         os.environ.pop("RIVER_DB", None)
         self.dir.cleanup()
@@ -720,7 +722,7 @@ class LaunchProfiles(unittest.TestCase):
         self.assertEqual(core.build_command("claude-code", {**claude, "remote_control": "off", "permission_mode": "plan",
                                                             "args": "--verbose", "prompt": "run river go now"}, "opus"),
                          "claude --model opus --permission-mode plan --verbose 'run river go now'")
-        rd = core.river_dir()
+        rd = core._shell_quote(core.river_dir())
         codex = core.profile_options(self.c, "codex")
         self.assertEqual(core.build_command("codex", codex, "sol", "xhigh"),
                          f"codex -m sol -c model_reasoning_effort=xhigh --add-dir {rd} "
@@ -824,7 +826,7 @@ class LaunchProfiles(unittest.TestCase):
 
     def test_the_cli_gets_its_own_model_id_and_river_keeps_the_name(self):
         pid = core._project(self.c, "shop")["id"]
-        rd = core.river_dir()
+        rd = core._shell_quote(core.river_dir())
         codex_home = tempfile.TemporaryDirectory()
         self.addCleanup(codex_home.cleanup)
         os.environ["CODEX_HOME"] = codex_home.name
@@ -913,7 +915,7 @@ class LaunchProfiles(unittest.TestCase):
         self.assertEqual(core.setting(self.c, "launch_agents"), "Claude Code=claude go")
         # Options: the first entry of a platform sets the scope's settings, a second one keeps its own.
         core.config_unset(self.c, "launch_agents")
-        rd = core.river_dir()
+        rd = core._shell_quote(core.river_dir())
         got = self.migrate(f"Claude Code=claude --model {{model}} --effort {{effort}} go; "
                            f"Planner=claude --permission-mode plan go --remote-control; "
                            f"Codex=codex -m {{model}} -c model_reasoning_effort={{effort}} --add-dir {rd} -s read-only "
