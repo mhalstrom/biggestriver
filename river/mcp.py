@@ -47,7 +47,8 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["id"], "properties": {"id": {"type": "integer"}, "as": _AS}}},
     {"name": "goal",
      "description": "Goals: outcomes in a project that one agent owns. list (open goals with owner and progress), "
-                    "show (a goal and its items), own (you plan and take the items that reach it), release, "
+                    "show (a goal and its items), own (you plan and take the items that reach it; refused for a shared "
+                    "goal, which has no owner and whose items are open to every agent), release, "
                     "or done (declare it complete with a one-line result; refused while its items are open).",
      "inputSchema": {"type": "object", "required": ["action"], "properties": {
          "action": {"type": "string", "enum": ["list", "show", "own", "release", "done"]},

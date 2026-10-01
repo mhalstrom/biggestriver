@@ -131,12 +131,18 @@ can check ("a real card payment succeeds"). Rank a project's goals so free
 owners take the most important first. A business goal and the technical goals
 under it can share items: tag an item with both.
 
+An owner reserves the goal's agent items, so one agent does them in sequence.
+When several agents must work on a goal at the same time, make it shared
+(`--shared`): it has no owner, `river go` gives it to no agent, and its items
+stay open to every agent. A person or a manager sets and clears this.
+
 ```
-river goal add <project> <name> --outcome "..." --done-when "..." [--rank N]
+river goal add <project> <name> --outcome "..." --done-when "..." [--rank N] [--shared]
 river goal list [--project P] [--all]    # open goals in order, with owner and progress
 river goal show <name>                    # the goal and its items
 river goal rank <name> <N>                # 1 = first among the project's goals
 river goal edit <name> [--outcome] [--done-when] [--rename]
+river goal edit <name> --shared           # no owner: its items stay open to every agent; --owned undoes it
 river goal own <name> / river goal release <name> / river goal give <name> --to <agent>
 river goal done <name> --result "<one line>" [--drop-open]   # refused while its items are open
 river goal reopen <name>

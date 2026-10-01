@@ -800,6 +800,11 @@ async function goalAction(what, name) {
       if (g.items_open.length && !confirm(`Drop ${g.items_open.length} open items (${g.items_open.map(i => "#" + i).join(", ")}) and complete the goal?`)) return;
       await act("goal_done", { name, result, drop_open: g.items_open.length > 0 }); toast(`${name} complete`);
     }
+    if (what === "share" || what === "unshare") {
+      if (what === "share" && g.owner && !confirm(`${g.owner} owns "${name}" now. Make it a goal with no owner? Its items open to every agent.`)) return;
+      await act("goal_edit", { name, shared: what === "share" });
+      toast(what === "share" ? `${name} has no owner: its items are open to every agent` : `One agent can own ${name} again`);
+    }
     if (what === "reopen") await act("goal_reopen", { name });
   } catch (e) { /* toast shown */ }
 }

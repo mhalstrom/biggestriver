@@ -253,6 +253,7 @@ CREATE TABLE IF NOT EXISTS items (
 
 -- A goal is an outcome in a project with a "done when" test. One agent owns it at a time
 -- and creates and takes the items that reach it; items carry goal tags (item_goals).
+-- A shared goal has no owner, ever: its items stay open to every agent.
 CREATE TABLE IF NOT EXISTS goals (
   id                INTEGER PRIMARY KEY,
   project_id        INTEGER NOT NULL REFERENCES projects(id),
@@ -264,6 +265,7 @@ CREATE TABLE IF NOT EXISTS goals (
   owner             TEXT,
   owner_expires_at  TEXT,
   owner_lease       TEXT,                     -- river goal own --lease; NULL: the goal_lease setting
+  shared            INTEGER NOT NULL DEFAULT 0, -- river goal edit --shared: no agent owns it, nothing is reserved
   result            TEXT NOT NULL DEFAULT '',
   created_at        TEXT NOT NULL,
   completed_at      TEXT
@@ -698,6 +700,8 @@ def _migrate(conn):
         conn.execute("ALTER TABLE targets ADD COLUMN monitor TEXT NOT NULL DEFAULT ''")
     if "owner_lease" not in {r["name"] for r in conn.execute("PRAGMA table_info(goals)")}:
         conn.execute("ALTER TABLE goals ADD COLUMN owner_lease TEXT")
+    if "shared" not in {r["name"] for r in conn.execute("PRAGMA table_info(goals)")}:
+        conn.execute("ALTER TABLE goals ADD COLUMN shared INTEGER NOT NULL DEFAULT 0")
     if "held_at" not in {r["name"] for r in conn.execute("PRAGMA table_info(items)")}:
         conn.execute("ALTER TABLE items ADD COLUMN held_at TEXT")
 
@@ -1326,7 +1330,7 @@ def _goal_view(conn, g, ann=None):
     return d
 
 
-def goal_add(conn, project, name, outcome="", done_when="", actor=None, rank=None):
+def goal_add(conn, project, name, outcome="", done_when="", actor=None, rank=None, shared=False):
     if not re.match(r"^[a-z0-9][a-z0-9._-]{0,63}$", name):
         raise RiverError("goal names use lower-case letters, digits, '.', '_', '-' (up to 64), like project names")
     with tx(conn):
@@ -1334,9 +1338,9 @@ def goal_add(conn, project, name, outcome="", done_when="", actor=None, rank=Non
         if conn.execute("SELECT 1 FROM goals WHERE name=?", (name,)).fetchone():
             raise RiverError(f"goal {name} already exists: river goal show {name}")
         top = conn.execute("SELECT COALESCE(MAX(rank),0) m FROM goals WHERE project_id=?", (p["id"],)).fetchone()["m"]
-        conn.execute("INSERT INTO goals(project_id,name,outcome,done_when,rank,created_at) VALUES (?,?,?,?,?,?)",
-                     (p["id"], name, outcome or "", done_when or "", top + 1, iso(now())))
-        _event(conn, None, actor, f"goal {name} added to {project}")
+        conn.execute("INSERT INTO goals(project_id,name,outcome,done_when,rank,created_at,shared) VALUES (?,?,?,?,?,?,?)",
+                     (p["id"], name, outcome or "", done_when or "", top + 1, iso(now()), 1 if shared else 0))
+        _event(conn, None, actor, f"goal {name} added to {project}" + (" (shared: no owner)" if shared else ""))
     if rank is not None:
         goal_rank(conn, name, rank, actor)
     return goal_show(conn, name)
@@ -1374,9 +1378,29 @@ def goal_rank(conn, name, rank, actor=None):
     return goal_show(conn, name)
 
 
-def goal_edit(conn, name, outcome=None, done_when=None, new_name=None, actor=None):
+def goal_edit(conn, name, outcome=None, done_when=None, new_name=None, actor=None, shared=None):
+    """Change a goal. shared=True makes it a goal with no owner: river go never gives it to an agent, nobody
+    can own it, and its items stay open to every agent; shared=False lets one agent own it again. A person
+    or a manager decides that, and the goal's owner can hand its goal to everyone."""
     with tx(conn):
         g = _goal(conn, name)
+        if shared is not None and bool(shared) != bool(g["shared"]):
+            who = conn.execute("SELECT kind, role FROM agents WHERE name=?", (actor,)).fetchone() if actor else None
+            if who and who["kind"] == "ai" and who["role"] != "manager" and not (shared and g["owner"] == actor):
+                raise RiverError(f"refused: a person or a manager decides if goal {name} is shared (no owner)"
+                                 + ("" if shared else "; while it is shared, take its items with river go"))
+            if shared:
+                conn.execute("UPDATE goals SET shared=1, owner=NULL, owner_expires_at=NULL, owner_lease=NULL WHERE id=?",
+                             (g["id"],))
+                _event(conn, None, actor, f"goal {name} is shared: no owner, its items are open to every agent"
+                       + (f" (was owned by {g['owner']})" if g["owner"] else ""))
+                if g["owner"] and g["owner"] != actor:
+                    _send(conn, "notice", "river", f"{actor or 'someone'} made goal {name} a shared goal: you do not "
+                          f"own it now, and its items are open to every agent. Keep the items you hold; river go "
+                          f"gives you its other items like any work.", to=g["owner"])
+            else:
+                conn.execute("UPDATE goals SET shared=0 WHERE id=?", (g["id"],))
+                _event(conn, None, actor, f"goal {name} is not shared any more: one agent can own it")
         if outcome is not None and outcome != g["outcome"]:
             conn.execute("UPDATE goals SET outcome=? WHERE id=?", (outcome, g["id"]))
             _event(conn, None, actor, f"goal {name}: outcome changed")
@@ -1421,6 +1445,10 @@ def goal_own(conn, name, actor=None, lease=None):
         g = _goal(conn, name)
         if g["status"] != "open":
             raise RiverError(f"goal {name} is complete; reopen it first: river goal reopen {name}")
+        if g["shared"]:
+            raise RiverError(f"goal {name} is shared: nobody owns it, and its items are open to every agent. "
+                             f"Take its items with river go. A person or a manager changes that: "
+                             f"river goal edit {name} --owned")
         if g["owner"] and g["owner"] != actor:
             raise RiverError(f"goal {name} is owned by {g['owner']}; ask them (river send question --to {g['owner']} ...), "
                              f"or take another: river goal list")
@@ -1441,6 +1469,14 @@ def goal_release(conn, name, actor=None):
         conn.execute("UPDATE goals SET owner=NULL, owner_expires_at=NULL, owner_lease=NULL WHERE id=?", (g["id"],))
         _event(conn, None, actor, f"released goal {name}; its items are open to every agent")
     return goal_show(conn, name)
+
+
+def _release_goals(conn, agent, why):
+    """An agent that ended or is gone owns no goal: its goals are free, and their items open to every agent.
+    Inside a tx."""
+    for g in conn.execute("SELECT name FROM goals WHERE owner=?", (agent,)).fetchall():
+        conn.execute("UPDATE goals SET owner=NULL, owner_expires_at=NULL, owner_lease=NULL WHERE name=?", (g["name"],))
+        _event(conn, None, "river", f"goal {g['name']} released: {why}")
 
 
 def goal_give(conn, name, to, actor=None):
@@ -1465,7 +1501,8 @@ def goal_owner(conn, name):
     """The owner of a goal, for messages sent --goal <name>."""
     g = _goal(conn, name)
     if not g["owner"]:
-        raise RiverError(f"nobody owns goal {name}; message an item holder instead (river goal show {name})")
+        raise RiverError((f"goal {name} is shared: it has no owner" if g["shared"] else f"nobody owns goal {name}")
+                         + f"; message an item holder instead (river goal show {name})")
     return g["owner"]
 
 
@@ -3354,9 +3391,7 @@ def kill_agent(conn, agent, reason, actor=None, grace=5.0, sleep=None):
                       f"its agent {agent} was killed ({reason.strip()})", to=d["assignee"], item_id=d["id"])
         conn.execute("UPDATE items SET reserved_for=NULL, reserved_until=NULL, reserved_by=NULL "
                      "WHERE reserved_for=? AND status='open'", (agent,))
-        for g in conn.execute("SELECT name FROM goals WHERE owner=?", (agent,)).fetchall():
-            conn.execute("UPDATE goals SET owner=NULL, owner_expires_at=NULL, owner_lease=NULL WHERE name=?", (g["name"],))
-            _event(conn, None, "river", f"goal {g['name']} released: {agent} killed")
+        _release_goals(conn, agent, f"{agent} killed")
         for t in conn.execute("SELECT name FROM targets WHERE owner=?", (agent,)).fetchall():
             conn.execute("UPDATE targets SET owner=NULL, owner_expires_at=NULL WHERE name=?", (t["name"],))
             _event(conn, None, "river", f"target {t['name']} released: {agent} killed")
@@ -3506,9 +3541,7 @@ def _finish_stop(conn, agent):
     with tx(conn):
         if conn.execute("SELECT 1 FROM items WHERE assignee=? AND status IN ('in_progress','held')", (agent,)).fetchone():
             return False
-        for g in conn.execute("SELECT name FROM goals WHERE owner=?", (agent,)).fetchall():
-            conn.execute("UPDATE goals SET owner=NULL, owner_expires_at=NULL, owner_lease=NULL WHERE name=?", (g["name"],))
-            _event(conn, None, "river", f"goal {g['name']} released: {agent} stopped")
+        _release_goals(conn, agent, f"{agent} stopped")
         for t in conn.execute("SELECT name FROM targets WHERE owner=?", (agent,)).fetchall():
             conn.execute("UPDATE targets SET owner=NULL, owner_expires_at=NULL WHERE name=?", (t["name"],))
             _event(conn, None, "river", f"target {t['name']} released: {agent} stopped")
@@ -3590,6 +3623,10 @@ def _sweep(conn):
         _send(conn, "notice", "river", f"your ownership of goal {r['name']} expired (goal_lease without a river "
               f"command); nobody owns it now, and its items are open to every agent. "
               f"Take it again if you still work on it: river goal own {r['name']}", to=r["owner"])
+    # An owner whose session is gone reserves nothing: the goal is free at once, not after goal_lease.
+    for r in conn.execute("SELECT DISTINCT a.* FROM agents a JOIN goals g ON g.owner=a.name WHERE a.kind='ai'").fetchall():
+        if _agent_state(conn, r) == "gone":
+            _release_goals(conn, r["name"], f"{r['name']} is gone")
     _question_nudges(conn)
     for r in conn.execute("SELECT id, title, assignee FROM items WHERE status='held' AND hold_expires_at < ?",
                           (t,)).fetchall():
@@ -3891,6 +3928,7 @@ def unregister(conn, name, actor=None):
                              f"(river target release <t>, river target give <t> --to <agent>)")
         _drop_queue(conn, name, "stopped")
         _free_reservations(conn, name, f"{name} ended")
+        _release_goals(conn, name, f"{name} ended")
         conn.execute("DELETE FROM agents WHERE name=?", (name,))
         conn.execute("DELETE FROM settings WHERE scope=?", (f"agent:{name}",))
         _event(conn, None, actor or name, f"agent {name} unregistered")
@@ -5934,6 +5972,11 @@ def go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None,
         brief["role"] = "monitor"
         brief["monitor"] = _monitor_brief(conn, it)
         _set_role_note(conn, brief["agent"], "monitor", it["id"])
+    if it:
+        # Items of a shared goal have no owner who plans them: the agent tags the items it adds itself.
+        brief["shared_goals"] = [r["name"] for r in conn.execute(
+            "SELECT g.name FROM item_goals ig JOIN goals g ON g.id=ig.goal_id WHERE ig.item_id=? AND g.shared=1 "
+            "AND g.status='open' ORDER BY g.rank, g.id", (it["id"],))]
     return brief
 
 
@@ -6188,8 +6231,9 @@ def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None
             # Plain go never forces a goal: it takes one only when the best ready work in the area serves it
             # (the item is tagged with the goal, or an open item of the goal waits on it); otherwise the
             # agent works as a worker below. After goal done, the owner continues with go --role owner.
+            # A shared goal is never taken: its items are normal work for every agent.
             free = conn.execute(f"SELECT g.name FROM goals g JOIN projects p ON p.id=g.project_id WHERE g.status='open' "
-                                f"AND g.owner IS NULL AND p.archived=0 AND p.name IN ({','.join('?' * len(names))}) "
+                                f"AND g.owner IS NULL AND g.shared=0 AND p.archived=0 AND p.name IN ({','.join('?' * len(names))}) "
                                 f"ORDER BY p.rank, g.rank, g.id", names).fetchall()
             if role is None:
                 try:
@@ -6407,9 +6451,7 @@ def wait(conn, cwd, actor, project=None, step=None, sleep=None, poll=3.0):
     if now() < since + limit:
         return {"result": "again", "agent": actor, "left": _short(since + limit - now())}
     with tx(conn):
-        for g in conn.execute("SELECT name FROM goals WHERE owner=?", (actor,)).fetchall():
-            conn.execute("UPDATE goals SET owner=NULL, owner_expires_at=NULL WHERE name=?", (g["name"],))
-            _event(conn, None, "river", f"goal {g['name']} released: {actor} ended after waiting")
+        _release_goals(conn, actor, f"{actor} ended after waiting")
     try:
         unregister(conn, actor, "river")
     except RiverError as e:  # it owns a deploy target: keep it registered, and say so

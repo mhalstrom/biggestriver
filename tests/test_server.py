@@ -117,6 +117,9 @@ class PageGoals(unittest.TestCase):
         self.assertEqual((goals["ship"]["status"], goals["ship"]["result"]), ("complete", "shipped"))
         self.assertEqual(goals["docs"]["outcome"], "readers find answers")
         self.op("goal_reopen", None, name="ship")
+        self.assertEqual(self.op("goal_edit", None, name="ship", shared=True)["shared"], 1)  # the page: no owner
+        with self.assertRaisesRegex(Exception, "shared"):
+            self.op("goal_own", "ag", name="ship")
         self.assertEqual(core.goal_show(self.c, "ship")["status"], "open")
 
 

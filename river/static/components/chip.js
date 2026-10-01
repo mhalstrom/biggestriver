@@ -56,6 +56,9 @@ export function agentChip(it) {
 }
 export function goalChips(it) { return (it.goals || []).map(g => chip("c-goal", esc(g), "goal")).join(""); }
 export function projectChip(name) { return chip("c-p", esc(name)); }
-export function ownerChip(owner) { return owner ? chip("c-ai", "owner · " + esc(owner)) : chip("c-waiting", "no owner"); }
+export function ownerChip(owner, shared) {
+  if (shared) return chip("c-goal", "shared · no owner", "No agent owns this goal: its items are open to every agent, and river go gives it to nobody");
+  return owner ? chip("c-ai", "owner · " + esc(owner)) : chip("c-waiting", "no owner");
+}
 // A count with its label; gray when it is zero.
 export function countChip(n, label, cls) { return chip(n ? cls : "c-p", `<b>${n}</b>${label}`); }

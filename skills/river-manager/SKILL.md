@@ -63,6 +63,12 @@ Stop when the user tells you to, and tell the user what you did.
   other agents.
 - **TARGET owner away or gone**: `river target give <target> --to <agent>`
   (an active agent in one of the target's projects).
+- **A goal that several agents must work on at the same time**: an owner
+  reserves the goal's agent items, so one agent does them in sequence. When
+  the user wants its items open to every agent, make the goal shared:
+  `river goal edit <name> --shared`. The owner goes (and is told), `river go`
+  never gives the goal to an agent again, and nothing is reserved.
+  `river goal edit <name> --owned` undoes it.
 - **QUESTION** to the user or **WAITS ON THE USER**: tell the user in chat, one
   decision at a time (`river guide decisions`). Do not answer for them.
 

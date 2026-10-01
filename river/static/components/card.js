@@ -18,13 +18,15 @@ export function goalCard(g, { selected, me }) {
   const acts = [
     `<span class="link" data-goal-act="up" data-g="${esc(g.name)}" title="more important">↑</span>`,
     `<span class="link" data-goal-act="down" data-g="${esc(g.name)}" title="less important">↓</span>`,
-    open && me && g.owner !== me ? `<span class="link" data-goal-act="own" data-g="${esc(g.name)}">own</span>` : "",
+    open && me && g.owner !== me && !g.shared ? `<span class="link" data-goal-act="own" data-g="${esc(g.name)}">own</span>` : "",
     open && me && g.owner === me ? `<span class="link" data-goal-act="release" data-g="${esc(g.name)}">release</span>` : "",
     `<span class="link" data-goal-act="edit" data-g="${esc(g.name)}">edit</span>`,
+    open ? (g.shared ? `<span class="link" data-goal-act="unshare" data-g="${esc(g.name)}" title="One agent can own this goal again">unshare</span>`
+      : `<span class="link" data-goal-act="share" data-g="${esc(g.name)}" title="No owner: river go gives this goal to no agent, and its items stay open to every agent">share</span>`) : "",
     open ? `<span class="link" data-goal-act="done" data-g="${esc(g.name)}">complete</span>` : `<span class="link" data-goal-act="reopen" data-g="${esc(g.name)}">reopen</span>`,
   ].filter(Boolean).join("");
   return `<div class="goal${selected ? " on" : ""}${open ? "" : " complete"}" data-goal="${esc(g.name)}" title="${esc(tip)}">
-    <div class="gh"><b>${esc(g.name)}</b>${open ? ownerChip(g.owner) : chip("c-done", "complete", null, ' style="text-decoration:none"')}${open && g.owner && g.owner_expires_at ? `<span class="muted" style="font-size:12px" title="Its agent items are reserved for the owner until then; each river command of the owner renews it">${left(g.owner_expires_at)} left</span>` : ""}</div>
+    <div class="gh"><b>${esc(g.name)}</b>${open ? ownerChip(g.owner, g.shared) : chip("c-done", "complete", null, ' style="text-decoration:none"')}${open && g.owner && g.owner_expires_at ? `<span class="muted" style="font-size:12px" title="Its agent items are reserved for the owner until then; each river command of the owner renews it">${left(g.owner_expires_at)} left</span>` : ""}</div>
     ${bar(done)}
     <div class="go">${g.items_done.length}/${total} done${g.items_open.length ? " · " + g.items_open.length + " open" : ""} · ${esc(open ? (g.outcome || "no outcome") : (g.result || g.outcome))}</div>
     <div class="ga">${acts}</div></div>`;

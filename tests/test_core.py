@@ -1156,6 +1156,44 @@ class GoalClaim(Base):
         lease = self.left(core._item(self.c, self.x)["lease_expires_at"])
         self.assertTrue(timedelta(hours=3, minutes=59) < lease <= timedelta(hours=4))  # goal_lease, not lease_ttl
 
+    def test_a_shared_goal_has_no_owner_and_its_items_are_open_to_every_agent(self):
+        core.goal_own(self.c, "g1", "ag")
+        with self.assertRaisesRegex(RiverError, "a person or a manager decides"):
+            core.goal_edit(self.c, "g1", shared=True, actor="bo")  # an agent that does not own it
+        core.register(self.c, "boss")
+        self.c.execute("UPDATE agents SET role='manager' WHERE name='boss'")
+        g = core.goal_edit(self.c, "g1", shared=True, actor="boss")  # the owner goes, and hears why
+        self.assertEqual((g["shared"], g["owner"]), (1, None))
+        self.assertIn("made goal g1 a shared goal", core.inbox(self.c, "ag")[-1]["body"])
+        self.assertIsNone(core.annotate(self.c)[self.x]["reserved_for"])
+        with self.assertRaisesRegex(RiverError, "goal g1 is shared: nobody owns it"):
+            core.goal_own(self.c, "g1", "ag")
+        b = core.go(self.c, self.dir.name, "ag", role="owner")  # --role owner skips it
+        self.assertEqual((b["role"], b["why"]), ("idle", "no goal here is free"))
+        y = core.item_add(self.c, "shop", "second lane", goals=["g1"])["id"]
+        b = core.go(self.c, self.dir.name, "ag")  # plain go: a worker on the goal's item, not its owner
+        self.assertEqual((b["role"], b["item"]["id"], b.get("goal"), b["shared_goals"]), ("worker", self.x, None, ["g1"]))
+        b = core.go(self.c, self.dir.name, "bo")  # another agent works on the goal at the same time
+        self.assertEqual((b["role"], b["item"]["id"]), ("worker", y))
+        self.assertIsNone(core.goal_show(self.c, "g1")["owner"])
+        with self.assertRaisesRegex(RiverError, "a person or a manager decides"):
+            core.goal_edit(self.c, "g1", shared=False, actor="ag")
+        core.register(self.c, "mk", human=True)
+        self.assertEqual(core.goal_edit(self.c, "g1", shared=False, actor="mk")["shared"], 0)
+        self.assertEqual(core.goal_own(self.c, "g1", "bo")["owner"], "bo")
+        self.assertEqual(core.goal_edit(self.c, "g1", shared=True, actor="bo")["owner"], None)  # the owner hands it to all
+        self.assertEqual(core.goal_add(self.c, "shop", "g2", shared=True)["shared"], 1)
+
+    def test_a_goal_is_free_when_its_owner_is_gone_or_ends(self):
+        core.goal_own(self.c, "g1", "ag")
+        self.c.execute("UPDATE agents SET last_seen=? WHERE name='ag'", (core.iso(core.now() - timedelta(hours=25)),))
+        self.assertEqual(core.claim(self.c, self.x, "bo")["assignee"], "bo")  # gone_after passed: nothing is reserved
+        self.assertIsNone(core.goal_show(self.c, "g1")["owner"])
+        core.release(self.c, self.x, actor="bo")
+        core.goal_own(self.c, "g1", "bo")
+        core.unregister(self.c, "bo")
+        self.assertIsNone(core.goal_show(self.c, "g1")["owner"])
+
     def test_lease_length_renewal_release_and_expiry(self):
         core.goal_own(self.c, "g1", "ag", lease="6h")
         self.assertTrue(self.left(core.goal_show(self.c, "g1")["owner_expires_at"]) > timedelta(hours=5, minutes=59))

@@ -127,7 +127,13 @@ without a goal stay in the normal queue.
   So you can take an urgent prerequisite of your goal while you hold other work.
 - Stop owning: `river goal release <name>`, or `river goal give <name> --to <agent>`.
   After `goal_lease` without a command the goal is free again, its items are
-  open to every agent, and you get a notice.
+  open to every agent, and you get a notice. The goal is also free when your
+  session is gone or ends.
+- A shared goal has no owner (`river goal list` shows "shared: no owner"). A
+  person or a manager decided that several agents work on it at the same time.
+  `river go` never makes you its owner, `river goal own` refuses, and its
+  items are normal work for every agent. Take them with `river go`, and tag
+  an item you add for it: `river add "<title>" --goal <name>`.
 
 ## Adding work
 

@@ -134,7 +134,8 @@ HINTS = {
 
 def _fmt_goal(g):
     n_open, n_done = len(g["items_open"]), len(g["items_done"])
-    state = "complete" if g["status"] == "complete" else (f"owner {g['owner']}" if g["owner"] else "no owner")
+    state = "complete" if g["status"] == "complete" else (f"owner {g['owner']}" if g["owner"] else
+                                                          "shared: no owner" if g.get("shared") else "no owner")
     return (f"{g['name']} [{g['project']}] ({state}; {n_done} done, {n_open} open)"
             + (f": {g['outcome']}" if g["outcome"] else ""))
 
@@ -410,12 +411,18 @@ def build_parser():
     x.add_argument("project"); x.add_argument("name"); x.add_argument("--outcome", default="")
     x.add_argument("--done-when", dest="done_when", default="", help="the test that shows the outcome is reached")
     x.add_argument("--rank", type=int, help="position among the project's goals (1 = first)")
+    x.add_argument("--shared", action="store_true", help="no owner, ever: river go gives the goal to no agent, and "
+                   "its items stay open to every agent")
     x = gls.add_parser("list", help="open goals in order (--all: complete ones too)")
     x.add_argument("--project"); x.add_argument("--all", action="store_true")
     x = gls.add_parser("show", help="a goal, its owner, and its items"); x.add_argument("name")
     x = gls.add_parser("rank", help="move a goal among its project's goals (1 = first)"); x.add_argument("name"); x.add_argument("rank", type=int)
     x = gls.add_parser("edit"); x.add_argument("name"); x.add_argument("--outcome"); x.add_argument("--done-when", dest="done_when")
     x.add_argument("--rename")
+    x.add_argument("--shared", dest="shared", action="store_true", default=None,
+                   help="no owner, ever: river go gives the goal to no agent, nobody can own it, and its items stay "
+                   "open to every agent (several agents work on it at the same time). A person or a manager sets it")
+    x.add_argument("--owned", dest="shared", action="store_false", help="undo --shared: one agent can own the goal again")
     for verb in ("own", "take"):
         x = gls.add_parser(verb, help="own a goal: you create and take the items that reach it; its agent items "
                            "are reserved for you"); x.add_argument("name")
@@ -1289,7 +1296,7 @@ def dispatch(conn, a, actor):
     if c == "goal":
         g = a.gcmd
         if g == "add":
-            return core.goal_add(conn, a.project, a.name, a.outcome, a.done_when, actor, a.rank)
+            return core.goal_add(conn, a.project, a.name, a.outcome, a.done_when, actor, a.rank, a.shared)
         if g == "list":
             return core.goal_list(conn, a.project, a.all)
         if g == "show":
@@ -1297,7 +1304,7 @@ def dispatch(conn, a, actor):
         if g == "rank":
             return core.goal_rank(conn, a.name, a.rank, actor)
         if g == "edit":
-            return core.goal_edit(conn, a.name, a.outcome, a.done_when, a.rename, actor)
+            return core.goal_edit(conn, a.name, a.outcome, a.done_when, a.rename, actor, a.shared)
         if g in ("own", "take"):
             return core.goal_own(conn, a.name, actor, a.lease)
         if g == "give":
@@ -1894,6 +1901,9 @@ def render_go(b):
         if it["notes"]:
             out.append(f"  notes: {it['notes']}")
         out += _context_lines(it)
+        for name in b.get("shared_goals") or []:
+            out.append(f"  goal {name} is shared: it has no owner, and other agents work on its other items at the "
+                       f"same time. Tag an item you add for it: {r} add \"<title>\" --goal {name}")
         if b.get("human_wait"):
             w = b["human_wait"]
             left = core._short(core.parse_iso(w["until"]) - core.now())
