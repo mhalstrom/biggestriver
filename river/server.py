@@ -199,6 +199,13 @@ def _target_folder(conn, target):
     return p
 
 
+def _same_queue(db):
+    """A river command that asks the server to act (open a monitor, or start a session for a command in a
+    sandbox) names its queue file. Refuse another one, so a test queue never opens sessions from the real one."""
+    if db is not None and str(Path(db).expanduser().resolve()) != str(core.db_path().expanduser().resolve()):
+        raise RiverError(f"this river serve uses another queue ({core.db_path()})")
+
+
 def _agent_for(conn, model):
     """The launch_agents entry that runs this model: the first of its family, else the first of no known family."""
     opts = core.launch_options(conn)
@@ -212,9 +219,8 @@ def open_monitors(conn, runner=None, db=None):
     """Open a session for each monitor item nobody holds yet (a deploy just started): in a folder of the
     target's projects, with RIVER_FOCUS=monitor:<id>, the item's model and effort (a monitor defaults to
     sonnet, low). The command asks the running server for this after it claims a deploy item; db must name
-    this server's queue, so a test queue never opens sessions from the real one."""
-    if db is not None and str(Path(db).expanduser().resolve()) != str(core.db_path().expanduser().resolve()):
-        raise RiverError("this river serve uses another queue")
+    this server's queue (_same_queue)."""
+    _same_queue(db)
     out = []
     ann = None
     for m in core.pending_monitors(conn):
@@ -1136,6 +1142,7 @@ class Handler(BaseHTTPRequestHandler):
             if not op:
                 return self._send(400, {"error": f"unknown op {body.get('op')!r}"})
             actor = body.get("actor") or None
+            _same_queue(body.get("args", {}).get("db"))  # only a river command sends it (cli.ask_server)
             conn = core.connect()
             try:
                 core.activity(conn, actor)

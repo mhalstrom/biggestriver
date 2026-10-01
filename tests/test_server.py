@@ -352,9 +352,14 @@ class LaunchAgent(unittest.TestCase):
         # No server answers: the command says how to start the session by hand.
         from river import cli
         self.c.execute("DELETE FROM events WHERE change LIKE 'monitor session opened%'")
+        import urllib.error
+        import urllib.request
+        from unittest import mock
         core.config_set(self.c, "serve_port", "1")
-        got = cli.ask_server_for_monitors(self.c, timeout=1)
-        self.assertIn("no river serve answers", got["error"])
+        with mock.patch.object(urllib.request.OpenerDirector, "open",
+                               side_effect=urllib.error.URLError(ConnectionRefusedError(61, "Connection refused"))):
+            got = cli.ask_server_for_monitors(self.c, timeout=1)
+        self.assertIn("no river serve answers on port 1", got["error"])
         self.assertIn(f"RIVER_FOCUS=monitor:{m['id']} claude go", cli._monitor_lines(got)[0])
 
     def test_start_spreads_sessions_across_projects(self):
@@ -384,6 +389,7 @@ class LaunchAgent(unittest.TestCase):
     def test_river_launch_from_the_command_line(self):
         import contextlib
         import io
+        from unittest import mock
         from river import cli
         core.project_add(self.c, "shop", path=self.dir.name)
         x = core.item_add(self.c, "shop", "work", models={"min_model": "opus"})["id"]
@@ -392,6 +398,9 @@ class LaunchAgent(unittest.TestCase):
         sent = []
         server.TERMINAL_RUNNER = sent.append
         self.addCleanup(setattr, server, "TERMINAL_RUNNER", None)
+        outside = mock.patch.object(cli, "in_sandbox", lambda: False)  # also when an agent runs the tests in one
+        outside.start()
+        self.addCleanup(outside.stop)
 
         def river(*args):
             with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
@@ -410,6 +419,82 @@ class LaunchAgent(unittest.TestCase):
         out = river("launch", "--project", "shop", "--tab")
         self.assertIn(f"for #{x} work", out)
         self.assertIn('keystroke "t"', sent[-1])
+
+    def test_river_launch_in_a_sandbox_asks_river_serve(self):
+        # A sandbox blocks Terminal and tmux for the command. river serve runs outside it and opens the session.
+        import base64
+        import contextlib
+        import io
+        import urllib.error
+        import urllib.request
+        from unittest import mock
+        from river import cli
+        core.project_add(self.c, "shop", path=self.dir.name)
+        x = core.item_add(self.c, "shop", "work", models={"min_model": "opus"})["id"]
+        y = core.item_add(self.c, "shop", "more")["id"]
+        core.register(self.c, "boss")
+        sent, asked, allowed = [], [], [True]
+        server.TERMINAL_RUNNER = sent.append  # what river serve runs
+        self.addCleanup(setattr, server, "TERMINAL_RUNNER", None)
+
+        def serve(data):
+            h = server.Handler.__new__(server.Handler)
+            h.path, h.headers, h.rfile, out = "/api/action", {"Content-Length": str(len(data))}, io.BytesIO(data), {}
+            h._send = lambda code, body, ctype=None: out.update(code=code, body=json.dumps(body, default=str).encode())
+            h.do_POST()
+            return out["code"], out["body"]
+
+        def fake_open(opener, req, timeout=None):
+            asked.append((req.host, req.get_header("Proxy-authorization")))
+            if req.host.startswith("127.0.0.1"):  # the sandbox refuses a connection to this computer
+                raise urllib.error.URLError(PermissionError(1, "Operation not permitted"))
+            if not allowed[0]:  # its proxy refuses a host the sandbox does not allow
+                raise urllib.error.HTTPError(req.full_url, 403, "Forbidden", {"X-Proxy-Error": "blocked-by-allowlist"},
+                                             io.BytesIO(b"Connection blocked by network allowlist\n"))
+            code, body = serve(req.data)
+            if code != 200:
+                raise urllib.error.HTTPError(req.full_url, code, "Conflict", {}, io.BytesIO(body))
+            return io.BytesIO(body)
+
+        def river(*args):
+            with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(cli.run(["-q", "--as", "boss", *args]), 0)
+            return out.getvalue()
+        env = mock.patch.dict(os.environ, {"SANDBOX_RUNTIME": "1", "HTTP_PROXY": "http://us%40er:pw@localhost:50401"})
+        env.start()
+        self.addCleanup(env.stop)
+        net = mock.patch.object(urllib.request.OpenerDirector, "open", fake_open)
+        net.start()
+        self.addCleanup(net.stop)
+        out = river("launch", "--item", str(y), "--model", "sonnet", "--window")
+        self.assertRegex(out, rf"started Claude Code as shop-\w+ in shop for #{y} more")
+        self.assertIn("river serve opened it: this session runs in a sandbox", out)
+        self.assertIn(f"RIVER_MODEL=sonnet claude --name '#{y} more' --model sonnet go", sent[-1])
+        self.assertNotIn("keystroke", sent[-1])  # --window went to the server
+        self.assertEqual(asked, [("127.0.0.1:8765", None),
+                                 ("localhost:50401", "Basic " + base64.b64encode(b"us@er:pw").decode())])
+        self.assertIn("boss: pushed to shop-", "\n".join(f"{e['actor']}: {e['change']}" for e in core.item_show(self.c, y)["events"]))
+        # A dry run opens nothing, so it asks nobody.
+        del asked[:]
+        self.assertIn(f"would start Claude Code in shop", river("launch", "--dry-run", "--model", "opus"))
+        self.assertEqual(asked, [])
+        # river serve refuses in its own words, and it serves one queue only.
+        launch = cli.build_parser().parse_args(["launch", "--model", "sonnet"])
+        with self.assertRaisesRegex(RiverError, "needs at least opus"):
+            cli.dispatch(self.c, launch, "boss")
+        code, body = serve(json.dumps({"op": "launch_agent", "args": {"db": os.path.join(self.dir.name, "o.db")}}).encode())
+        self.assertEqual((code, "another queue" in json.loads(body)["error"]), (409, True))
+        # The sandbox decides: with the host not allowed, or with no proxy, the command says what to allow.
+        allowed[0] = False
+        with self.assertRaisesRegex(RiverError, r"refused the connection to river serve on 127.0.0.1:8765 "
+                                                r"\(Connection blocked by network allowlist\)\. Allow the host"):
+            cli.dispatch(self.c, launch, "boss")
+        del os.environ["HTTP_PROXY"]
+        os.environ.pop("http_proxy", None)
+        with self.assertRaisesRegex(RiverError, "Allow the host 127.0.0.1:8765 for this command, or run it outside"):
+            cli.dispatch(self.c, launch, "boss")
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(core.item_show(self.c, x)["status"], "open")
 
     def test_manager_section_start_chat_queue_and_stop(self):
         core.project_add(self.c, "shop", path=self.dir.name)
@@ -685,6 +770,7 @@ class LaunchInTmux(unittest.TestCase):
     def test_the_command_line_and_the_page(self):
         import contextlib
         import io
+        from unittest import mock
         from river import cli
         core.register(self.c, "mark", human=True)
         x = core.item_add(self.c, "shop", "work")["id"]
@@ -693,6 +779,9 @@ class LaunchInTmux(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(cli.run(["-q", "--as", "mark", *args]), 0)
             return out.getvalue()
+        outside = mock.patch.object(cli, "in_sandbox", lambda: False)  # also when an agent runs the tests in one
+        outside.start()
+        self.addCleanup(outside.stop)
         self.assertIn("(in a new tmux pane)", river("launch", "--dry-run", "--tmux"))
         out = river("launch", "--tmux")
         self.assertRegex(out, rf"started Claude Code as shop-\w+ in shop for #{x} work \(.*\); tmux pane %0: river view shows it")

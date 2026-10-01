@@ -1041,24 +1041,68 @@ def _record_process(conn, name):
 def ask_server_for_monitors(conn, timeout=5):
     """A deploy item was just claimed and its target has a monitor text: ask the river serve of this queue
     to open a session for the monitor item. Returns what it opened, or {"error": ...} when no server runs."""
+    try:
+        return ask_server(conn, "open_monitors", {}, timeout=timeout)
+    except RiverError as e:
+        return {"error": str(e), "pending": core.pending_monitors(conn)}
+
+
+def in_sandbox():
+    """This command runs in an agent CLI's sandbox (Claude Code sets SANDBOX_RUNTIME, Codex CODEX_SANDBOX):
+    it cannot script Terminal or reach the tmux socket, so it cannot open a session itself."""
+    return bool(os.environ.get("SANDBOX_RUNTIME") or os.environ.get("CODEX_SANDBOX"))
+
+
+def ask_server(conn, op, args, actor=None, timeout=5):
+    """Ask the river serve of this queue to do one page action (server.OPS) and return its result; RiverError
+    says why not. The server runs outside any sandbox. A sandbox refuses a direct connection to this computer;
+    its HTTP proxy passes the request when the sandbox allows the host, so the sandbox still decides."""
+    import base64
     import urllib.error
     import urllib.request
+    from urllib.parse import unquote, urlsplit
     port = core.setting(conn, "serve_port")
-    body = json.dumps({"op": "open_monitors", "args": {"db": str(core.db_path())}}).encode()
-    req = urllib.request.Request(f"http://127.0.0.1:{port}/api/action", data=body,
-                                 headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read())["result"]
-    except urllib.error.HTTPError as e:
+    host = f"127.0.0.1:{port}"
+    body = json.dumps({"op": op, "actor": actor, "args": {**args, "db": str(core.db_path())}}).encode()
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # this computer: no proxy by itself
+
+    def post(proxy=None):
+        req = urllib.request.Request(f"http://{host}/api/action", data=body, headers={"Content-Type": "application/json"})
+        if proxy:
+            if proxy.username:
+                cred = f"{unquote(proxy.username)}:{unquote(proxy.password or '')}".encode()
+                req.add_header("Proxy-Authorization", "Basic " + base64.b64encode(cred).decode())
+            req.set_proxy(f"{proxy.hostname}:{proxy.port or 80}", "http")
         try:
-            why = json.loads(e.read()).get("error")
-        except ValueError:
-            why = str(e)
-        return {"error": why, "pending": core.pending_monitors(conn)}
-    except (OSError, ValueError) as e:
-        return {"error": f"no river serve answers on port {port} ({e.__class__.__name__})",
-                "pending": core.pending_monitors(conn)}
+            with opener.open(req, timeout=timeout) as r:
+                return json.loads(r.read())["result"]
+        except urllib.error.HTTPError as e:
+            with e:
+                text = e.read().decode(errors="replace").strip()
+            try:
+                why = json.loads(text)["error"]  # river serve refused: its own words
+            except (ValueError, KeyError, TypeError):
+                why = None
+            if why is None and proxy and (e.code == 403 or e.headers.get("X-Proxy-Error")):
+                raise RiverError(f"the sandbox around this session refused the connection to river serve on {host}"
+                                 f" ({text.splitlines()[0] if text else e.reason}). Allow the host {host} for this "
+                                 f"command and run it again (Claude Code: the command's allowed_domains), or run it "
+                                 f"outside the sandbox")
+            raise RiverError(why or f"no river serve answers on port {port} (HTTP {e.code}): start it with `river serve`")
+    try:
+        try:
+            return post()
+        except OSError as e:
+            if not isinstance(getattr(e, "reason", e), PermissionError):
+                raise
+            # The sandbox refused the direct connection. Its proxy is the way out that it controls.
+            proxy = urlsplit(os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy") or "")
+            if proxy.scheme != "http" or not proxy.hostname:
+                raise RiverError(f"the sandbox around this session refused the connection to river serve on {host}. "
+                                 f"Allow the host {host} for this command, or run it outside the sandbox")
+            return post(proxy)
+    except (OSError, ValueError, KeyError) as e:
+        raise RiverError(f"no river serve answers on port {port} ({e.__class__.__name__}): start it with `river serve`")
 
 
 def _monitor_lines(m):
@@ -1341,6 +1385,13 @@ def dispatch(conn, a, actor):
             t = core.launch_target(conn, a.project, a.agent, a.item, a.model, a.effort, a.launch_in,
                                    spread=a.project is None and a.item is None, options=opts or None)
             return {**t, "dry_run": True, "would_push_to": core.waiting_agent_for(conn, t["project"], t["item"]["id"])}
+        if in_sandbox():
+            # A sandbox blocks Terminal and tmux for this command. river serve runs outside it and opens the
+            # session, as for the page's Start and Dispatch; a terminal tab can take a while to open.
+            choice = {"agent": a.agent, "model": a.model, "effort": a.effort, "launch_in": a.launch_in, "options": opts}
+            res = (ask_server(conn, "dispatch_item", {"id": a.item, **choice}, actor, timeout=40) if a.item is not None
+                   else ask_server(conn, "launch_agent", {"project": a.project, **choice}, actor, timeout=40))
+            return {**res, "via_serve": True}
         if a.item is not None:
             return server.dispatch_item(conn, a.item, agent=a.agent, actor=actor, model=a.model, effort=a.effort,
                                         launch_in=a.launch_in, options=opts or None)
@@ -2253,6 +2304,8 @@ def render(a, res):
             print(f"started {res['agent']} as {res['session_name']} in {res['project']} for {it}"
                   + (f" ({res['why']})" if res.get("why") else "")
                   + (f"; tmux pane {res['tmux_pane']}: river view shows it" if res.get("tmux_pane") else ""))
+            if res.get("via_serve"):
+                print("  river serve opened it: this session runs in a sandbox")
         return
     if c == "view":
         for name in res["closed"]:
