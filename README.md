@@ -226,6 +226,11 @@ differ (`river config set claude_remote_control off --project shop`):
 | `codex_approval` | `--ask-for-approval` | Codex's own |
 | `claude_model_ids`, `codex_model_ids` | the id the CLI gets for a ladder name | none; `luna=gpt-6-luna, terra=gpt-5.6-terra, sol=gpt-6.1-sol, astra=gpt-6-astra` |
 
+A Claude Code session that river starts for an item gets a name (`claude
+--name`, also the Remote Control session name): the goal the item serves,
+else `#<id> <title>`, at most 48 characters. The new terminal tab or console
+window gets the same title.
+
 The model and effort go in as `--model`/`--effort` (Claude Code) and
 `-m`/`-c model_reasoning_effort=` (Codex); Codex also gets `--add-dir` for
 the queue folder. The CLI gets the model's id from `<prefix>model_ids`

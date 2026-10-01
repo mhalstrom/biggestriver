@@ -5327,16 +5327,28 @@ def profile_options(conn, platform, inline=None, project_id=None, chosen=None):
             for k in pl["options"]}
 
 
-def build_command(platform, opts, model=None, effort=None):
-    """The command line that starts a platform's CLI with these options."""
+def session_title(goals, item_id, title, limit=48):
+    """The name of a session river starts for an item: the goal it opens with, else '#<id> <title>'. Short,
+    and only characters that are safe in a shell word, a console title, and a session list."""
+    text = goals[0] if goals else f"#{item_id} {title}"
+    text = " ".join(re.sub(r"[^\w #.:-]+", " ", text).split())
+    if len(text) > limit:
+        text = text[:limit + 1].rsplit(" ", 1)[0] if " " in text[limit // 2:limit + 1] else text[:limit]
+    return text.rstrip()
+
+
+def build_command(platform, opts, model=None, effort=None, name=None):
+    """The command line that starts a platform's CLI with these options. name: the session's name, for a
+    CLI that takes one (claude --name, and the Remote Control session name); Codex has no flag for it."""
     q = _shell_quote
     if platform == "claude-code":
-        parts = ["claude"] + (["--model", model] if model else []) + (["--effort", effort] if effort else [])
+        parts = ["claude"] + (["--name", q(name)] if name else [])
+        parts += (["--model", model] if model else []) + (["--effort", effort] if effort else [])
         parts += ["--permission-mode", opts["permission_mode"]] if opts.get("permission_mode") else []
         parts += [opts["args"].strip()] if opts.get("args", "").strip() else []
         # The prompt goes before --remote-control: that flag takes an optional session name after it.
         parts.append(q(opts["prompt"]))
-        parts += ["--remote-control"] if opts.get("remote_control") == "on" else []
+        parts += ["--remote-control"] + ([q(name)] if name else []) if opts.get("remote_control") == "on" else []
     elif platform == "codex":
         parts = ["codex"] + (["-m", model] if model else []) + (["-c", f"model_reasoning_effort={effort}"] if effort else [])
         parts += ["--sandbox", opts["sandbox"]] if opts.get("sandbox") else []
@@ -5556,8 +5568,10 @@ def launch_target(conn, project=None, agent=None, item=None, model=None, effort=
         ok, why = model_check(parse_ladder(setting(conn, "model_ladder")), model, top["min_model"], top["max_model"])
         if not ok:
             raise RiverError(f"#{top['id']} {why}; pick another model")
+    name = session_title(top["goals"], top["id"], top["title"])
     return {"project": p["name"], "path": p["path"], "item": {"id": top["id"], "title": top["title"], "agent": top["agent"]},
-            "ready": len(pool), "why": why, **_launch_agent_cmd(conn, p["id"], agent, model, effort, options),
+            "ready": len(pool), "why": why, "session_title": name,
+            **_launch_agent_cmd(conn, p["id"], agent, model, effort, options, name),
             "launch_in": _launch_in(conn, p["id"], launch_in)}
 
 
@@ -5585,10 +5599,10 @@ def _launch_in(conn, project_id, choice=None):
     return choice or setting(conn, "launch_in", project_id=project_id)
 
 
-def _launch_agent_cmd(conn, project_id, agent, model=None, effort=None, options=None):
+def _launch_agent_cmd(conn, project_id, agent, model=None, effort=None, options=None, name=None):
     """The chosen launch_agents entry as a command: a profile builds it from its options (options: the
-    launch dialog's choices), a custom command gets {model} and {effort} filled in. The session also gets
-    RIVER_MODEL."""
+    launch dialog's choices) and gives the session its name, a custom command gets {model} and {effort}
+    filled in. The session also gets RIVER_MODEL."""
     agents = parse_launch_agents(setting(conn, "launch_agents", project_id=project_id))
     pick = agents[0] if agent is None else next((a for a in agents if a[0] == agent), None)
     if pick is None:
@@ -5604,7 +5618,7 @@ def _launch_agent_cmd(conn, project_id, agent, model=None, effort=None, options=
         _check_codex_effort(mid, effort)
     if prof:
         opts = profile_options(conn, prof[0], prof[1], project_id, options)
-        cmd = build_command(prof[0], opts, mid, effort or None)
+        cmd = build_command(prof[0], opts, mid, effort or None, name)
     elif options:
         raise RiverError(f"{pick[0]} is a custom command ({pick[1]}), so it has no launch options; "
                          f"give it a profile in launch_agents (@claude-code or @codex) for them")

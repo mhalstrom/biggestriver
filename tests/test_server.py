@@ -146,7 +146,7 @@ class LaunchAgent(unittest.TestCase):
                 del os.environ["RIVER_DB"]
             else:
                 os.environ["RIVER_DB"] = old
-        self.assertRegex(sent[0], r"RIVER_DB=\S*q\.db'? RIVER_AGENT=\S+ RIVER_FOCUS=item:\d+ claude go")  # the path is quoted when it needs it
+        self.assertRegex(sent[0], r"RIVER_DB=\S*q\.db'? RIVER_AGENT=\S+ RIVER_FOCUS=item:\d+ claude --name \S+ \S+ go")  # the path is quoted when it needs it
 
     def test_dispatch_starts_a_named_session_for_one_item(self):
         core.project_add(self.c, "shop", path=self.dir.name)
@@ -156,7 +156,11 @@ class LaunchAgent(unittest.TestCase):
         t = server.dispatch_item(self.c, x, runner=sent.append)
         name = t["session_name"]
         self.assertEqual((t["item"]["id"], core._item(self.c, x)["reserved_for"]), (x, name))
-        self.assertIn(f"RIVER_AGENT={name} RIVER_FOCUS=item:{x} claude go", sent[0])
+        # The session and its tab get the item's name (#558): claude --name, the Remote Control name, the title.
+        self.assertEqual(t["session_title"], f"#{x} second")
+        self.assertIn(f"RIVER_AGENT={name} RIVER_FOCUS=item:{x} claude --name '#{x} second' go --remote-control "
+                      f"'#{x} second'", sent[0])
+        self.assertIn(f"printf '\\\\033]0;%s\\\\007' '#{x} second'; cd ", sent[0])
         b = core.go(self.c, self.dir.name, name, focus=f"item:{x}")  # its first go takes that item, not the top one
         self.assertEqual(b["item"]["id"], x)
         with self.assertRaises(RiverError):
@@ -294,12 +298,12 @@ class LaunchAgent(unittest.TestCase):
         x = core.item_add(self.c, "shop", "work", models={"min_model": "opus"})["id"]
         sent = []
         t = server.launch_agent(self.c, runner=sent.append, model="opus", effort="high", launch_in="window")
-        self.assertEqual(t["command"], "claude --model opus --effort high go --remote-control")
-        self.assertIn("RIVER_MODEL=opus claude --model opus --effort high go", sent[-1])
+        self.assertEqual(t["command"], f"claude --name '#{x} work' --model opus --effort high go --remote-control '#{x} work'")
+        self.assertIn(f"RIVER_MODEL=opus claude --name '#{x} work' --model opus --effort high go", sent[-1])
         self.assertNotIn("keystroke", sent[-1])  # launch_in window, although the setting says tab
         x = core.item_add(self.c, "shop", "more work", models={"min_model": "opus"})["id"]  # Start reserved the first
         t = server.launch_agent(self.c, runner=sent.append)
-        self.assertEqual(t["command"], "claude go --remote-control")  # no choice: the flags drop out
+        self.assertEqual(t["command"], f"claude --name '#{x} more work' go --remote-control '#{x} more work'")  # no choice: the flags drop out
         self.assertNotIn("RIVER_MODEL", sent[-1])
         x = core.item_add(self.c, "shop", "third", models={"min_model": "opus"})["id"]
         with self.assertRaisesRegex(RiverError, "needs at least opus"):
@@ -390,13 +394,14 @@ class LaunchAgent(unittest.TestCase):
             return out.getvalue()
         out = river("launch", "--dry-run", "--model", "opus", "--effort", "high", "--window")
         self.assertRegex(out, rf"would start Claude Code in shop \(\S+\) for #{x} work")
-        self.assertIn("RIVER_MODEL=opus claude --model opus --effort high go --remote-control   (in a new window)", out)
+        self.assertIn(f"RIVER_MODEL=opus claude --name '#{x} work' --model opus --effort high go --remote-control "
+                      f"'#{x} work'   (in a new window)", out)
         self.assertEqual(sent, [])
         with self.assertRaisesRegex(RiverError, "needs at least opus"):
             cli.dispatch(self.c, cli.build_parser().parse_args(["launch", "--model", "sonnet"]), "mark")
         out = river("launch", "--item", str(y), "--model", "sonnet")
         self.assertRegex(out, rf"started Claude Code as shop-\w+ in shop for #{y} more")
-        self.assertIn("RIVER_MODEL=sonnet claude --model sonnet go", sent[-1])
+        self.assertIn(f"RIVER_MODEL=sonnet claude --name '#{y} more' --model sonnet go", sent[-1])
         out = river("launch", "--project", "shop", "--tab")
         self.assertIn(f"for #{x} work", out)
         self.assertIn('keystroke "t"', sent[-1])
@@ -462,7 +467,7 @@ class LaunchAgent(unittest.TestCase):
         server.PLATFORM = "win32"  # tearDown restores it
         sent = []
         t = server.dispatch_item(self.c, x, runner=sent.append)
-        self.assertEqual(sent[0], {"args": "cmd /k claude go --remote-control", "cwd": t["path"],
+        self.assertEqual(sent[0], {"args": f"cmd /k title #{x} work & {t['command']}", "cwd": t["path"],
                                    "env": {"RIVER_DB": str(core.db_path()), "RIVER_AGENT": t["session_name"],
                                            "RIVER_FOCUS": f"item:{x}"}})
         server.PLATFORM = "linux"
@@ -481,14 +486,14 @@ class LaunchAgent(unittest.TestCase):
             core.item_add(self.c, "shop", f"more work {n}")
         sent = []
         t = server.launch_agent(self.c, runner=sent.append)
-        self.assertEqual((t["project"], t["item"]["id"], t["command"]), ("shop", x, "claude go --remote-control"))
+        self.assertEqual((t["project"], t["item"]["id"], t["command"]), ("shop", x, f"claude --name '#{x} agent step' go --remote-control '#{x} agent step'"))
         self.assertIn('tell application "Terminal"', sent[0])
         self.assertIn('keystroke "t" using command down', sent[0])  # a new tab by default
         core.config_set(self.c, "launch_in", "window")
         server.launch_agent(self.c, runner=sent.append)
         self.assertNotIn("keystroke", sent[-1])
         core.config_set(self.c, "launch_in", "tab")
-        self.assertIn("claude go", sent[0])
+        self.assertIn(t["command"], sent[0])
         self.assertIn('my \\"shop\\" app', sent[0])  # quotes escaped inside the AppleScript string
         core.config_set(self.c, "launch_agents", 'Claude Code=claude go; Codex=codex "run river go and follow it"')
         t = server.launch_agent(self.c, runner=sent.append, agent="Codex")
@@ -692,6 +697,17 @@ class LaunchProfiles(unittest.TestCase):
     def test_each_option_set_builds_the_real_flags(self):
         claude = core.profile_options(self.c, "claude-code")
         self.assertEqual(core.build_command("claude-code", claude), "claude go --remote-control")
+        # A session name goes to --name and to Remote Control; Codex has no flag for one.
+        self.assertEqual(core.build_command("claude-code", claude, name="ship v2"), "claude --name 'ship v2' go --remote-control 'ship v2'")
+        codex_opts = core.profile_options(self.c, "codex")
+        self.assertEqual(core.build_command("codex", codex_opts, name="ship v2"), core.build_command("codex", codex_opts))
+        # The name: the goal the item serves, else the item; short, and without shell or quote characters.
+        self.assertEqual(core.session_title(["ship v2"], 7, "work"), "ship v2")
+        self.assertEqual(core.session_title([], 490, "Cells infra: Pulumi state to B2"), "#490 Cells infra: Pulumi state to B2")
+        self.assertEqual(core.session_title([], 7, "it's \"x\" & `y`; $(z) " + "long " * 20)[:22], "#7 it s x y z long lon")
+        self.assertLessEqual(len(core.session_title([], 7, "long " * 20)), 48)
+        self.assertEqual(core.session_title([], 395, "Write the script for the complex workflow walkthrough video"),
+                         "#395 Write the script for the complex workflow")
         self.assertEqual(core.build_command("claude-code", claude, "opus", "high"),
                          "claude --model opus --effort high go --remote-control")
         self.assertEqual(core.build_command("claude-code", {**claude, "remote_control": "off", "permission_mode": "plan",
@@ -705,6 +721,13 @@ class LaunchProfiles(unittest.TestCase):
         self.assertEqual(core.build_command("codex", {**codex, "sandbox": "workspace-write", "approval": "never",
                                                       "prompt": "go"}),
                          f"codex --sandbox workspace-write --ask-for-approval never --add-dir {rd} go")
+
+    def test_a_session_for_an_item_with_a_goal_gets_the_goal_name(self):
+        core.goal_add(self.c, "shop", "ship-v2")
+        x = core.item_add(self.c, "shop", "work", goals=["ship-v2"])["id"]
+        t = core.launch_target(self.c, item=x)
+        self.assertEqual(t["session_title"], "ship-v2")
+        self.assertEqual(t["command"], "claude --name ship-v2 go --remote-control ship-v2")
 
     def test_options_come_from_settings_the_entry_and_the_dialog(self):
         core.config_set(self.c, "launch_agents", "Claude Code=@claude-code; Plan=@claude-code permission_mode=plan; Codex=@codex")
@@ -839,11 +862,11 @@ class LaunchProfiles(unittest.TestCase):
         server.TERMINAL_RUNNER = sent.append
         self.addCleanup(setattr, server, "TERMINAL_RUNNER", None)
         t = server.OPS["dispatch_item"](self.c, {"id": x, "model": "opus", "options": {"remote_control": "off"}}, "mark")
-        self.assertEqual(t["command"], "claude --model opus go")
-        self.assertIn(f"RIVER_AGENT={t['session_name']} RIVER_FOCUS=item:{x} RIVER_MODEL=opus claude --model opus go\"", sent[-1])
+        self.assertEqual(t["command"], f"claude --name '#{x} work' --model opus go")
+        self.assertIn(f"RIVER_AGENT={t['session_name']} RIVER_FOCUS=item:{x} RIVER_MODEL=opus {t['command']}\"", sent[-1])
         y = core.item_add(self.c, "shop", "more")["id"]
         t = server.dispatch_item(self.c, y, runner=sent.append, options={"permission_mode": "acceptEdits"})
-        self.assertIn("claude --permission-mode acceptEdits go --remote-control", sent[-1])
+        self.assertIn(f"claude --name '#{y} more' --permission-mode acceptEdits go --remote-control '#{y} more'", sent[-1])
         # A manager: manage in place of go, the options still apply.
         t = server.start_manager(self.c, runner=sent.append, options={"remote_control": "off"})
         self.assertEqual(t["command"], "claude manage")
@@ -860,7 +883,7 @@ class LaunchProfiles(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(cli.run(["-q", "launch", "--dry-run", "--option", "remote_control=off",
                                       "--option", "permission_mode=plan"]), 0)
-        self.assertIn("command: claude --permission-mode plan go   (in a new tab)", out.getvalue())
+        self.assertRegex(out.getvalue(), r"command: claude --name '#\d+ work' --permission-mode plan go   \(in a new tab\)")
 
     def migrate(self, value, scope="global"):
         self.c.execute("INSERT INTO settings(scope,key,value) VALUES (?,?,?) "

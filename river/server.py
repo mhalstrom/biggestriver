@@ -332,14 +332,19 @@ def _open_terminal(t, env, runner=None):
         env = {"RIVER_DB": str(core.db_path()), **env}
     if PLATFORM == "win32":
         # cmd /k keeps the window open when the agent ends; the command line goes to cmd as written.
-        spec = {"args": f"cmd /k {t['command']}", "cwd": t["path"], "env": dict(env)}
+        title = f"title {t['session_title']} & " if t.get("session_title") else ""
+        spec = {"args": f"cmd /k {title}{t['command']}", "cwd": t["path"], "env": dict(env)}
         try:
             (runner or (lambda s: subprocess.Popen(s["args"], cwd=s["cwd"], env={**os.environ, **s["env"]},
                                                    creationflags=subprocess.CREATE_NEW_CONSOLE)))(spec)
         except OSError as e:
             raise RiverError(f"could not open a console window in {t['path']}: {e}")
         return
-    shell = f"cd {shlex.quote(t['path'])} && " + "".join(f"{k}={shlex.quote(v)} " for k, v in env.items()) + t["command"]
+    # The tab or window gets the session's name as its title until the agent CLI sets its own (Claude Code
+    # shows the --name it got; other CLIs may keep this one).
+    title = f"printf '\\033]0;%s\\007' {shlex.quote(t['session_title'])}; " if t.get("session_title") else ""
+    shell = (title + f"cd {shlex.quote(t['path'])} && " + "".join(f"{k}={shlex.quote(v)} " for k, v in env.items())
+             + t["command"])
     cmd = _applescript_str(shell)
     if t["launch_in"] == "tab":
         # Terminal has no "new tab" command: press Command-T in it, then run the command in that tab.
