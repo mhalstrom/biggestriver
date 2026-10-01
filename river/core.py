@@ -2771,13 +2771,25 @@ def unblock(conn, item_id, actor=None):
 # ---------------------------------------------------------------- graph
 
 def _load_graph(conn):
-    projects = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM projects")}
-    items = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM items")}
+    # One view for the three reads. As separate statements, another session's new item and its links could
+    # come between them: a link then named an item this read did not have, and the command stopped (KeyError).
+    # A plain BEGIN holds one view of the database (WAL) and keeps no writer out; inside the caller's
+    # transaction the view is one already.
+    own = not conn.in_transaction
+    if own:
+        conn.execute("BEGIN")
+    try:
+        projects = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM projects")}
+        items = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM items")}
+        deps = conn.execute("SELECT item_id, blocked_by, kind FROM deps").fetchall()
+    finally:
+        if own:
+            conn.execute("COMMIT")
     waits_on = {i: [] for i in items}     # item -> prerequisites
     waited_by = {i: [] for i in items}    # item -> dependents
     conflicts = {i: [] for i in items}   # item -> items it must not run beside
     feeds = {i: [] for i in items}       # item -> prerequisites whose output it reads
-    for r in conn.execute("SELECT item_id, blocked_by, kind FROM deps"):
+    for r in deps:
         if r["kind"] == "conflicts":
             conflicts[r["item_id"]].append(r["blocked_by"])
             conflicts[r["blocked_by"]].append(r["item_id"])

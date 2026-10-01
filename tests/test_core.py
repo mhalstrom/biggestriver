@@ -672,6 +672,34 @@ class Kinds(Base):
         self.assertEqual(cap["spare_slots"] + len(cap["agents_idle"]) - cap["excess_sessions"], 2)
         self.assertEqual(len(cap["ready_for_agents"]), 3)
 
+    def test_the_graph_is_one_view_while_another_session_adds_a_linked_item(self):
+        # The items and their links are separate reads. Another session's new item, with a link, between them
+        # gave a link to an item the first read did not have, and the command stopped (KeyError).
+        x = core.item_add(self.c, "a", "one")["id"]
+        other = core.connect(self.path)
+        self.addCleanup(other.close)
+        added = []
+
+        class Between:
+            """This session's connection; the other session writes right after the items are read."""
+            def __init__(self, conn):
+                self.conn = conn
+
+            def __getattr__(self, name):
+                return getattr(self.conn, name)
+
+            def execute(self, sql, *args):
+                rows = self.conn.execute(sql, *args)
+                if sql == "SELECT * FROM items" and not added:
+                    rows = rows.fetchall()
+                    added.append(core.item_add(other, "a", "two", after=[x])["id"])
+                return rows
+        before = sorted(core.annotate(self.c))
+        self.assertEqual((sorted(core.annotate(Between(self.c))), len(added)), (before, 1))  # the view from before that write
+        self.assertEqual(sorted(core.annotate(self.c)), before + added)
+        with core.tx(self.c):  # inside a transaction the view is one already
+            self.assertEqual(len(core.annotate(self.c)), len(before) + 1)
+
     def test_conflicts_do_not_count_as_cycles(self):
         x, y = self.add("a", "x"), self.add("a", "y")
         z = self.add("a", "z", after=[x])
