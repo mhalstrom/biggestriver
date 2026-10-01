@@ -2975,9 +2975,10 @@ class Kill(Base):
         self.p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
         self.addCleanup(lambda: (self.p.poll() is None and self.p.kill(), self.p.wait()))
         info = core.proc_info(self.p.pid)
-        if info is None:
-            self.skipTest("no ps on this system (Windows): river records no process there, so --kill has none to end")
+        if info is None and os.name != "nt":  # Windows reads its process list itself
+            self.skipTest("no ps on this system: river records no process there, so --kill has none to end")
         cmd = info[2]
+        self.assertIn("time.sleep(60)", cmd)
         core.set_process(self.c, "ag", self.p.pid, cmd)
 
     def test_kill_ends_the_process_and_releases_everything(self):
@@ -3000,6 +3001,25 @@ class Kill(Base):
         self.assertEqual(core.agent_status(self.c, "ag")["state"], "stopped")
         self.assertTrue(any("killed ag (by mark: stuck in a loop)" in e["change"] for e in core.recent_events(self.c)))
         self.assertNotEqual(after, x)
+
+    def test_the_process_lookup_knows_the_parent_and_what_stands_between(self):
+        self.assertEqual(core.proc_info(self.p.pid)[0], os.getpid())
+        self.assertEqual(core.proc_info(os.getpid())[0], os.getppid())
+        self.assertTrue(core.pid_alive(self.p.pid))
+        self.assertEqual(core.agent_process(self.p.pid)[0], self.p.pid)  # not a shell: it is the agent
+        self.assertTrue(core._between("-zsh", "-zsh"))
+        self.assertFalse(core._between("claude", "claude go"))
+        with mock.patch("os.name", "nt"):
+            self.assertTrue(core._between("cmd.exe", "cmd /k claude go"))
+            self.assertTrue(core._between("river.exe", "river go"))
+            self.assertTrue(core._between("python.exe", r"C:\py\python.exe C:\tools\biggestriver\bin\river go"))
+            self.assertTrue(core._between("python.exe", "python.exe -m river go"))
+            self.assertFalse(core._between("python.exe", r"D:\biggestriver\venv\python.exe agent.py"))
+            self.assertFalse(core._between("node.exe", "node claude.js go"))
+        self.p.kill()
+        self.p.wait(10)
+        self.assertFalse(core.pid_alive(self.p.pid))
+        self.assertIsNone(core.proc_info(self.p.pid))
 
     def test_refusals_and_a_dead_process_counts_as_gone(self):
         core.set_process(self.c, "ag", self.p.pid, "something else")

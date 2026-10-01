@@ -3127,8 +3127,8 @@ def _drop_queue(conn, agent, why, items_only=False):
 
 # ---------------------------------------------------------------- agent processes
 
-SHELLS = {"sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "env", "timeout", "cmd.exe", "powershell.exe",
-          "pwsh", "pwsh.exe", "sandbox-exec", "script"}
+SHELLS = {"sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "env", "timeout", "cmd", "powershell", "pwsh",
+          "sandbox-exec", "script"}  # Windows names without .exe
 
 
 def this_host():
@@ -3137,6 +3137,8 @@ def this_host():
 
 
 def pid_alive(pid):
+    if os.name == "nt":
+        return _win_running(pid) is not None  # os.kill(pid, 0) is no check there: 0 is the Ctrl-C event
     try:
         os.kill(int(pid), 0)
     except ProcessLookupError:
@@ -3147,8 +3149,11 @@ def pid_alive(pid):
 
 
 def proc_info(pid):
-    """(parent pid, program name, command line) of a process, from ps; None when it does not run or no ps."""
+    """(parent pid, program name, command line) of a process, from ps (on Windows, from the system's process
+    list); None when it does not run or no ps."""
     import subprocess
+    if os.name == "nt":
+        return _win_proc_info(int(pid))
     try:
         out = subprocess.run(["ps", "-o", "ppid=,comm=", "-p", str(pid)], capture_output=True, text=True, timeout=5)
         args = subprocess.run(["ps", "-o", "args=", "-p", str(pid)], capture_output=True, text=True, timeout=5)
@@ -3161,16 +3166,129 @@ def proc_info(pid):
     return int(ppid), os.path.basename(comm.strip()), args.stdout.strip()
 
 
+_WIN = None
+
+
+def _win_api():
+    """Windows: kernel32 and ntdll with the types of the calls below, and the two structures they fill."""
+    global _WIN
+    if _WIN is None:
+        import ctypes
+        from ctypes import wintypes as w
+        k32, ntdll = ctypes.WinDLL("kernel32", use_last_error=True), ctypes.WinDLL("ntdll")
+
+        class Entry(ctypes.Structure):  # PROCESSENTRY32W
+            _fields_ = [("dwSize", w.DWORD), ("cntUsage", w.DWORD), ("th32ProcessID", w.DWORD),
+                        ("th32DefaultHeapID", ctypes.c_size_t), ("th32ModuleID", w.DWORD), ("cntThreads", w.DWORD),
+                        ("th32ParentProcessID", w.DWORD), ("pcPriClassBase", w.LONG), ("dwFlags", w.DWORD),
+                        ("szExeFile", w.WCHAR * 260)]
+
+        class UnicodeString(ctypes.Structure):
+            _fields_ = [("Length", w.USHORT), ("MaximumLength", w.USHORT), ("Buffer", ctypes.c_void_p)]
+        for fn, res, args in (
+                (k32.OpenProcess, w.HANDLE, (w.DWORD, w.BOOL, w.DWORD)),
+                (k32.CloseHandle, w.BOOL, (w.HANDLE,)),
+                (k32.WaitForSingleObject, w.DWORD, (w.HANDLE, w.DWORD)),
+                (k32.GetProcessTimes, w.BOOL, (w.HANDLE,) + (ctypes.POINTER(w.FILETIME),) * 4),
+                (k32.CreateToolhelp32Snapshot, w.HANDLE, (w.DWORD, w.DWORD)),
+                (k32.Process32FirstW, w.BOOL, (w.HANDLE, ctypes.POINTER(Entry))),
+                (k32.Process32NextW, w.BOOL, (w.HANDLE, ctypes.POINTER(Entry))),
+                (ntdll.NtQueryInformationProcess, ctypes.c_long,
+                 (w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.ULONG, ctypes.POINTER(w.ULONG)))):
+            fn.restype, fn.argtypes = res, args
+        _WIN = (ctypes, k32, ntdll, Entry, UnicodeString)
+    return _WIN
+
+
+def _win_running(pid):
+    """Windows: None when the process does not run; else (start time, command line), each None when Windows
+    does not let this user read it."""
+    ctypes, k32, ntdll, _, UnicodeString = _win_api()
+    from ctypes import wintypes as w
+    h = k32.OpenProcess(0x00100000 | 0x1000, False, int(pid))  # SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return (None, None) if ctypes.get_last_error() == 5 else None  # 5: access denied, so it exists
+    try:
+        if k32.WaitForSingleObject(h, 0) != 0x102:  # not WAIT_TIMEOUT: it has ended
+            return None
+        times = [w.FILETIME() for _ in range(4)]
+        created = None
+        if k32.GetProcessTimes(h, *[ctypes.byref(t) for t in times]):
+            created = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+        cmd, size = None, w.ULONG(0)
+        ntdll.NtQueryInformationProcess(h, 60, None, 0, ctypes.byref(size))  # 60: ProcessCommandLineInformation
+        if size.value:
+            buf = ctypes.create_string_buffer(size.value)
+            if ntdll.NtQueryInformationProcess(h, 60, buf, size.value, ctypes.byref(size)) == 0:
+                us = UnicodeString.from_buffer(buf)
+                cmd = ctypes.wstring_at(us.Buffer, us.Length // 2) if us.Buffer else ""
+        return created, cmd
+    finally:
+        k32.CloseHandle(h)
+
+
+def _win_proc_info(pid):
+    """proc_info on Windows: the parent and the program name from a snapshot of the process list, the
+    command line from the process itself (the program name when Windows does not give it)."""
+    run = _win_running(pid)
+    if run is None:
+        return None
+    ctypes, k32, _, Entry, _ = _win_api()
+    snap = k32.CreateToolhelp32Snapshot(2, 0)  # TH32CS_SNAPPROCESS
+    if not snap or snap == ctypes.c_void_p(-1).value:
+        return None
+    found, e = None, Entry()
+    e.dwSize = ctypes.sizeof(Entry)
+    try:
+        ok = k32.Process32FirstW(snap, ctypes.byref(e))
+        while ok and found is None:
+            if e.th32ProcessID == pid:
+                found = (e.th32ParentProcessID, e.szExeFile)
+            ok = k32.Process32NextW(snap, ctypes.byref(e))
+    finally:
+        k32.CloseHandle(snap)
+    if found is None:
+        return None
+    ppid, name = found
+    # Windows keeps the parent's PID after the parent ends and can give that PID to a new process: a
+    # "parent" that started after its child is another program.
+    parent = _win_running(ppid) if ppid else None
+    if parent is None or (parent[0] and run[0] and parent[0] > run[0]):
+        ppid = 0
+    return ppid, name, (run[1] or "").strip() or name
+
+
+# Windows: programs that hold terminals and the desktop. One of them above the shells means a person ran
+# river by hand; it is not an agent, and river stop --kill must not end it.
+WIN_HOSTS = {"explorer", "windowsterminal", "openconsole", "conhost", "svchost", "services", "wininit", "winlogon",
+             "sihost", "csrss"}
+
+
+def _between(comm, args):
+    """True for a process between the agent CLI and this river command: a shell, and on Windows also the
+    river launcher and a Python that runs river (river.exe and a venv's python.exe start the real one)."""
+    name = comm.lower().lstrip("-")
+    if os.name == "nt":
+        name = name[:-4] if name.endswith(".exe") else name
+        runs_river = re.search(r'(^|[\\/\s"])river(\.exe|-script\.py)?["\s]', args.lower() + " ")
+        if name == "river" or re.fullmatch(r"py|python[\d.]*w?", name) and runs_river:
+            return True
+    return name in SHELLS
+
+
 def agent_process(start=None):
     """The agent CLI process that runs this river command: the first ancestor above the shell(s) that is not
-    a shell (SHELLS). Returns (pid, command line), or (None, None) when ps is missing (Windows) or it finds none."""
+    a shell (SHELLS). Returns (pid, command line), or (None, None) when it finds none (no ps, or on Windows a
+    terminal that a person works in)."""
     pid = start or os.getppid()
     for _ in range(12):
         info = proc_info(pid)
         if info is None:
             return None, None
         ppid, comm, args = info
-        if comm.lower().lstrip("-") not in SHELLS:
+        if not _between(comm, args):
+            if os.name == "nt" and re.sub(r"\.exe$", "", comm.lower()) in WIN_HOSTS:
+                return None, None
             return pid, args
         if ppid <= 1:
             return None, None
