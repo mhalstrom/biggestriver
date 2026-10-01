@@ -2,7 +2,50 @@
 
 Website: [biggestriver.com](https://biggestriver.com)
 
-**In short:** you put work items into projects and say which items wait on
+## The problem
+
+Using several coding agents to build several complex projects at the same
+time takes a lot of discipline and a lot of time. Four things get in the way:
+
+- **Context switching.** Each project has its own state, and you move between
+  them all day. Every switch costs you the time to find out where that
+  project stands.
+- **Managing many agents at once.** You have to know which session holds
+  what, which one is idle, and which two would edit the same files.
+- **The steps only you can do.** An account, a payment, a decision, an
+  approval, a test by hand. Each agent asks in its own chat, the questions get
+  lost, and work waits on them.
+- **Keeping the agents unblocked.** A blocked agent waits, or it works around
+  the blocker with a guess. You do not want it to unblock itself the wrong
+  way.
+
+To move several projects forward at once, you need one task system across all
+of them. It has to hand tasks to as many agents as makes sense, tell you when
+an agent is blocked, tell you which items are yours, and keep you organized
+without taking all your time for organization.
+
+## How Biggest River answers it
+
+- **One queue for all projects.** Items belong to projects and can wait on
+  other items, also across projects. `river status` and the page show where
+  every project stands, so a switch does not start with a search.
+- **Agents take their own work.** Open an agent in a project folder and say
+  "go". It claims the most important ready item and gets a briefing with the
+  item's context. A claim is a lease that expires, so a stopped session does
+  not hold work for long. Items that edit the same files do not run at the same
+  time. The page shows who holds what and how many more sessions the ready
+  work could use.
+- **Your steps are items too.** A step for a person is an item with you as the
+  doer. Needs you is one list of what waits on you, most important first, and
+  river notifies you by phone, email, macOS banner, or browser.
+- **Blocked work is visible, and agents ask.** A blocked item says what it
+  waits on. When a wrong guess would be costly, the agent puts the question in
+  the queue for you and takes other work. Other sessions can take the items
+  that clear a blocker first.
+
+## How it works, in short
+
+You put work items into projects and say which items wait on
 which, and link each project to its folder. Open an agent in that folder and
 say "go": it runs `river go`, which names the session, picks a role (worker,
 unblocker, planner, or idle), claims an item, and prints a briefing that ends
@@ -12,6 +55,22 @@ what and how many more sessions the ready work could use.
 ![The board: parallel work, next up, projects, and agents](site/img/board-tour.gif)
 
 ![A river go briefing: role, item, context, rules, and the command to run when done](site/img/go-briefing.png)
+
+## Quick start
+
+```sh
+git clone https://github.com/mhalstrom/biggestriver
+cd biggestriver && ./install.sh
+cd ~/code/myproject
+river init --description "what this project covers"
+river add myproject "first item" --doer ai
+# open Claude Code (or another agent) in the folder and say: go
+river serve --open    # the board at http://127.0.0.1:8765
+```
+
+[Install](#install) and [Set up a project](#set-up-a-project) have the details.
+
+## What is in it
 
 A small work queue for people and AI agent sessions that work on several
 projects at the same time.
