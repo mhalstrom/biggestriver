@@ -2,46 +2,26 @@
 
 Website: [biggestriver.com](https://biggestriver.com)
 
-## The problem
+Biggest River allows you to focus your attention at the right place at the
+right time. It organizes your tasks so that you are not causing your agent team
+to wait for you longer than necessary.
 
-Using several coding agents to build several complex projects at the same
-time takes a lot of discipline and a lot of time. Four things get in the way:
+It also allows you to unblock your agents, monitor that they're doing the right
+things, track the progress of multiple tasks, assign tasks to agents that have
+the proper context, and keep work flowing.
 
-- **Context switching.** Each project has its own state, and you move between
-  them all day. Every switch costs you the time to find out where that
-  project stands.
-- **Managing many agents at once.** You have to know which session holds
-  what, which one is idle, and which two would edit the same files.
-- **The steps only you can do.** An account, a payment, a decision, an
-  approval, a test by hand. Each agent asks in its own chat, the questions get
-  lost, and work waits on them.
-- **Keeping the agents unblocked.** A blocked agent waits, or it works around
-  the blocker with a guess. You do not want it to unblock itself the wrong
-  way.
+Using multiple coding agents to build multiple complex projects at the same
+time requires a lot of discipline and a lot of time. There are significant
+problems with context switching, with managing multiple agents at the same
+time, with handling the steps that you need to do yourself, and with keeping
+the agents unblocked. And you don't want them to unblock themselves in the
+wrong way.
 
-To move several projects forward at once, you need one task system across all
-of them. It has to hand tasks to as many agents as makes sense, tell you when
-an agent is blocked, tell you which items are yours, and keep you organized
-without taking all your time for organization.
-
-## How Biggest River answers it
-
-- **One queue for all projects.** Items belong to projects and can wait on
-  other items, also across projects. `river status` and the page show where
-  every project stands, so a switch does not start with a search.
-- **Agents take their own work.** Open an agent in a project folder and say
-  "go". It claims the most important ready item and gets a briefing with the
-  item's context. A claim is a lease that expires, so a stopped session does
-  not hold work for long. Items that edit the same files do not run at the same
-  time. The page shows who holds what and how many more sessions the ready
-  work could use.
-- **Your steps are items too.** A step for a person is an item with you as the
-  doer. Needs you is one list of what waits on you, most important first, and
-  river notifies you by phone, email, macOS banner, or browser.
-- **Blocked work is visible, and agents ask.** A blocked item says what it
-  waits on. When a wrong guess would be costly, the agent puts the question in
-  the queue for you and takes other work. Other sessions can take the items
-  that clear a blocker first.
+So if you want to juggle multiple projects at the same time, you need a
+multi-project task management system that distributes tasks to as many agents
+as makes sense, alerts you when they're blocked, alerts you when there are
+items that you own, and keeps you as organized as possible without spending all
+of your time thinking about organization.
 
 ## How it works, in short
 
