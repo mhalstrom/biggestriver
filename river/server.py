@@ -1060,10 +1060,6 @@ OPS = {
 }
 
 
-# Operations that type into a terminal: for the page on this computer only (Handler._not_local).
-LOCAL_OPS = ("terminal_keys",)
-
-
 def _message_read(conn, msg_id):
     """Marks one alert or note read, which closes its needs-you event. Questions stay open until answered."""
     core.message_show(conn, msg_id)  # refuses an unknown id
@@ -1100,6 +1096,8 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         if path == "/mcp":
             return self._mcp("GET")
+        if self._refuse():
+            return
         if path in ("/", "/index.html"):
             return self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
         if path == "/api/state":
@@ -1117,9 +1115,6 @@ class Handler(BaseHTTPRequestHandler):
                 conn.close()
         if path == "/api/terminal":
             from urllib.parse import parse_qs, urlsplit
-            why = self._not_local()
-            if why:
-                return self._send(403, {"error": why})
             conn = core.connect()
             try:
                 return self._send(200, terminal_screen(conn, parse_qs(urlsplit(self.path).query).get("agent", [""])[0]))
@@ -1209,11 +1204,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, *got)
         return self._send(404, {"error": "not found"})
 
-    def _not_local(self):
-        """Why this request may not read or type into an agent's terminal, or None: only this computer,
-        straight to river serve, from the page itself."""
+    def _refuse(self):
+        """Answer 403 and return True when the request was not made on this computer, straight to river serve.
+        river serve has no sign-in, and the page starts agents, types into their terminals, and changes the
+        queue. A site whose name is made to point at 127.0.0.1 (DNS rebinding) passes the browser's same-origin
+        rule, so the Host header decides, on every route; a tunnel or a proxy that says it forwards gets
+        nothing either (mcp.local_refusal). A river command in a sandbox (cli.ask_server) passes: the sandbox's
+        proxy runs on this computer and adds no such header."""
         from . import mcp
-        return mcp.local_refusal(self.client_address[0], dict(self.headers.items()), "an agent's terminal")
+        why = mcp.local_refusal(self.client_address[0], dict(self.headers.items()), "river serve")
+        if why:
+            self._send(403, {"error": why})
+        return bool(why)
 
     def _mcp(self, method):
         """/mcp: river's MCP tools over Streamable HTTP, for this computer only (mcp.local_refusal)."""
@@ -1250,9 +1252,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path.split("?")[0] == "/mcp":
             return self._mcp("POST")
+        if self._refuse():
+            return
         if self.path != "/api/action":
             return self._send(404, {"error": "not found"})
-        # Same-origin check: the page is the only intended caller.
+        # Same-origin check: of the pages on this computer, only river's own acts (a river command sends no Origin).
         origin = self.headers.get("Origin")
         host = self.headers.get("Host", "")
         if origin and origin not in (f"http://{host}",):
@@ -1262,10 +1266,6 @@ class Handler(BaseHTTPRequestHandler):
             op = OPS.get(body.get("op"))
             if not op:
                 return self._send(400, {"error": f"unknown op {body.get('op')!r}"})
-            if body.get("op") in LOCAL_OPS:
-                why = self._not_local()
-                if why:
-                    return self._send(403, {"error": why})
             actor = body.get("actor") or None
             _same_queue(body.get("args", {}).get("db"))  # only a river command sends it (cli.ask_server)
             conn = core.connect()

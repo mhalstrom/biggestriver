@@ -233,8 +233,8 @@ def _host_only(value):
 def local_refusal(client_ip, headers, what="/mcp"):
     """Why a /mcp request is refused, or None. Until the endpoint has OAuth (#438) it answers only requests
     made on this computer, straight to river serve: never through a tunnel or proxy, whose requests also
-    arrive from 127.0.0.1. The Origin check stops a web page from calling it (DNS rebinding). The page's
-    agent terminals (what) follow the same rule."""
+    arrive from 127.0.0.1. The Host and Origin checks stop a web page of another site from calling it (DNS
+    rebinding). Every other route of river serve (what) follows the same rule: server.Handler._refuse."""
     h = {k.lower(): v for k, v in headers.items()}
     if client_ip not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
         return f"only this computer may call {what}"

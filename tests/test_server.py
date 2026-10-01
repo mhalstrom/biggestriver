@@ -33,7 +33,7 @@ class PageMessages(unittest.TestCase):
 
     def get(self, path):
         h = server.Handler.__new__(server.Handler)
-        h.path, out = path, {}
+        h.path, h.client_address, h.headers, out = path, ("127.0.0.1", 5555), {"Host": "127.0.0.1:8765"}, {}
         h._send = lambda code, body, ctype=None: out.update(code=code, body=body)
         h.do_GET()
         return out["code"], out["body"]
@@ -48,6 +48,44 @@ class PageMessages(unittest.TestCase):
         self.assertEqual(core.message_show(self.c, offer["id"])["state"], "accepted")
         self.op("give", "ag", id=self.big, to="bo")
         self.assertEqual(core._item(self.c, self.big)["assignee"], "bo")
+
+    def test_every_route_answers_this_computer_only(self):
+        # river serve has no sign-in. A page of another site whose name is made to point at 127.0.0.1 (DNS
+        # rebinding) is same-origin for the browser, so the Host header decides, for reads and for actions.
+        import io
+
+        def call(method, path, headers, body=None, ip="127.0.0.1"):
+            raw = json.dumps(body).encode() if body is not None else b""
+            h = server.Handler.__new__(server.Handler)
+            h.path, h.client_address, h.rfile, out = path, (ip, 5555), io.BytesIO(raw), {}
+            h.headers = {"Content-Length": str(len(raw)), **headers}
+            h._send = lambda code, body, ctype=None: out.update(code=code, body=body)
+            getattr(h, "do_" + method)()
+            return out["code"], out["body"]
+        note = {"op": "send", "actor": "bo", "args": {"kind": "note", "body": "hello", "to": "ag"}}
+        local, sent = {"Host": "127.0.0.1:8765"}, lambda: len(core.inbox(self.c, "ag", True, mark_read=False))
+        for headers in (local, {**local, "Origin": "http://127.0.0.1:8765"},  # a river command; the page
+                        {"Host": "localhost:8765", "Origin": "http://localhost:8765"}):
+            self.assertEqual([call("GET", path, headers)[0] for path in ("/", "/app.js", "/api/state", f"/api/item/{self.big}")],
+                             [200] * 4, headers)
+            self.assertEqual(call("POST", "/api/action", headers, note)[0], 200, headers)
+        self.assertEqual(sent(), 3)
+        for headers, ip, why in (
+                ({"Host": "evil.example:8765", "Origin": "http://evil.example:8765"}, "127.0.0.1", "only on 127.0.0.1"),
+                ({"Host": "evil.example:8765"}, "127.0.0.1", "only on 127.0.0.1"),
+                ({}, "127.0.0.1", "only on 127.0.0.1"),
+                ({**local, "Origin": "https://evil.example"}, "127.0.0.1", "cross-origin"),
+                ({**local, "X-Forwarded-For": "203.0.113.9"}, "127.0.0.1", "tunnel or proxy"),
+                (local, "192.168.1.20", "only this computer")):
+            for method, path in (("GET", "/"), ("GET", "/app.js"), ("GET", "/api/state"), ("GET", f"/api/item/{self.big}"),
+                                 ("GET", "/api/inbox?agent=ag"), ("POST", "/api/action")):
+                code, body = call(method, path, headers, note, ip)
+                self.assertEqual(code, 403, (headers, path))
+                self.assertIn(why, body["error"])
+        # Another page on this computer is not river's page: it reads nothing it could not read before, and acts on nothing.
+        code, body = call("POST", "/api/action", {**local, "Origin": "http://localhost:3000"}, note)
+        self.assertEqual((code, body["error"]), (403, "cross-origin request refused"))
+        self.assertEqual(sent(), 3)
 
     def test_question_reply_decline_thread_and_item_messages(self):
         q = self.op("send", "bo", kind="question", body="Which port?", to="mark", item=self.big)
@@ -82,7 +120,7 @@ class PageGoals(unittest.TestCase):
 
     def get(self, path):
         h = server.Handler.__new__(server.Handler)
-        h.path, out = path, {}
+        h.path, h.client_address, h.headers, out = path, ("127.0.0.1", 5555), {"Host": "127.0.0.1:8765"}, {}
         h._send = lambda code, body, ctype=None: out.update(code=code, body=body)
         h.do_GET()
         return out["code"], out["body"]
@@ -439,7 +477,8 @@ class LaunchAgent(unittest.TestCase):
 
         def serve(data):
             h = server.Handler.__new__(server.Handler)
-            h.path, h.headers, h.rfile, out = "/api/action", {"Content-Length": str(len(data))}, io.BytesIO(data), {}
+            h.path, h.client_address, h.rfile, out = "/api/action", ("127.0.0.1", 5555), io.BytesIO(data), {}
+            h.headers = {"Host": "127.0.0.1:8765", "Content-Length": str(len(data))}
             h._send = lambda code, body, ctype=None: out.update(code=code, body=json.dumps(body, default=str).encode())
             h.do_POST()
             return out["code"], out["body"]
@@ -895,7 +934,7 @@ class LaunchInTmux(unittest.TestCase):
             self.assertEqual(call("GET", f"/api/terminal?agent={name}", headers, ip=ip)[0], 403, headers)
             code, body = call("POST", "/api/action", headers, keys, ip=ip)
             self.assertEqual(code, 403, headers)
-        self.assertIn("an agent's terminal", body["error"])
+        self.assertIn("only this computer may call river serve", body["error"])
         self.assertEqual(len(self.tmux.panes[0]["keys"]), sent)
 
     def test_with_a_real_tmux_server(self):
@@ -1489,7 +1528,7 @@ class StaticFiles(unittest.TestCase):
 
     def test_handler_serves_the_real_static_folder(self):
         h = server.Handler.__new__(server.Handler)
-        out = {}
+        h.client_address, h.headers, out = ("127.0.0.1", 5555), {"Host": "localhost:8765"}, {}
         h._send = lambda code, body, ctype=None: out.update(code=code, ctype=ctype)
         h.path = "/index.html"
         h.do_GET()
