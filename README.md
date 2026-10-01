@@ -229,7 +229,9 @@ differ (`river config set claude_remote_control off --project shop`):
 A Claude Code session that river starts for an item gets a name (`claude
 --name`, also the Remote Control session name): the goal the item serves,
 else `#<id> <title>`, at most 48 characters. The new terminal tab or console
-window gets the same title.
+window gets the same title. A session for another purpose gets that purpose
+as its name: `river manager`, `help #7 <title>`, `unblock #7 <title>`,
+`monitor #7 <title>`, `deploy web`, `review web`, `needs you`.
 
 The model and effort go in as `--model`/`--effort` (Claude Code) and
 `-m`/`-c model_reasoning_effort=` (Codex); Codex also gets `--add-dir` for
@@ -243,7 +245,8 @@ is refused before the launch. Codex has no Remote Control flag for one session. 
 can set an option for itself (`Plan=@claude-code permission_mode=plan`), the
 launch dialog can change the toggles and modes for one start, and the setup
 guide edits them. Any other command is custom: it takes the dialog's choice
-through `{model}` and `{effort}`; with no choice, the flag before a
+through `{model}` and `{effort}`, and the session's name through `{name}`
+(river quotes it: `--name {name}`); with no value, the flag before a
 placeholder drops out. river turned an older Claude Code or Codex command
 that a profile builds exactly into a profile once; `river config get
 launch_agents` says what changed.

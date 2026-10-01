@@ -247,7 +247,8 @@ class LaunchAgent(unittest.TestCase):
         sent = []
         core.register(self.c, "mark", human=True)
         t = server.open_agent_on(self.c, h, runner=sent.append, person="mark")
-        self.assertIn(f"RIVER_FOCUS=help:{h}@mark claude go", sent[-1])
+        self.assertIn(f"RIVER_FOCUS=help:{h}@mark claude --name 'help #{h} sign the contract' go", sent[-1])
+        self.assertEqual(t["session_title"], f"help #{h} sign the contract")  # the tab title too (#562)
         b = core.go(self.c, self.dir.name, None, focus=t["focus"])
         self.assertEqual((b["role"], b["item"]), ("helper", None))
         self.assertEqual(b["help_prompt"], core.prompt_for(self.c, h, "mark"))
@@ -256,7 +257,7 @@ class LaunchAgent(unittest.TestCase):
             cli.render_go(b)
         self.assertIn(f"Item #{h}: sign the contract", out.getvalue())
         t = server.open_needs_you(self.c, runner=sent.append, person="mark")
-        self.assertIn("RIVER_FOCUS=needs:@mark claude go", sent[-1])
+        self.assertIn("RIVER_FOCUS=needs:@mark claude --name 'needs you' go", sent[-1])
         b = core.go(self.c, self.dir.name, None, focus=t["focus"])
         self.assertEqual(b["help_prompt"], core.prompt_for_all(self.c, "mark"))
         t = server.open_agent_on(self.c, waits, runner=sent.append)
@@ -275,7 +276,7 @@ class LaunchAgent(unittest.TestCase):
         core.done(self.c, x, "commit", "dev", ship_it=True)
         sent = []
         r = server.deploy_now(self.c, "web", runner=sent.append)
-        self.assertIn("RIVER_FOCUS=deploy:web claude go", sent[-1])
+        self.assertIn("RIVER_FOCUS=deploy:web claude --name 'deploy web' go --remote-control 'deploy web'", sent[-1])
         b = core.go(self.c, self.dir.name, None, focus=r["focus"])
         self.assertEqual((b["role"], b["item"]["id"]), ("deployer", r["deploy"]["id"]))
 
@@ -286,7 +287,7 @@ class LaunchAgent(unittest.TestCase):
         core.claim(self.c, x, "mark")
         sent = []
         t = server.open_agent_on(self.c, x, runner=sent.append, person="mark")
-        self.assertIn(f"RIVER_FOCUS=help:{x}@mark claude go", sent[-1])
+        self.assertIn(f"RIVER_FOCUS=help:{x}@mark claude --name 'help #{x} write the copy' go", sent[-1])
         b = core.go(self.c, self.dir.name, None, focus=t["focus"])
         self.assertEqual(b["role"], "helper")
         self.assertIn("mark took it to do themselves", b["help_prompt"])
@@ -341,7 +342,8 @@ class LaunchAgent(unittest.TestCase):
         sent = []
         (r,) = server.open_monitors(self.c, runner=sent.append, db=str(core.db_path()))
         self.assertEqual((r["id"], r["project"], r["model"]), (m["id"], "site", "sonnet"))
-        self.assertIn(f"RIVER_FOCUS=monitor:{m['id']} RIVER_MODEL=sonnet claude --model sonnet --effort low go", sent[-1])
+        self.assertRegex(sent[-1], rf"RIVER_FOCUS=monitor:{m['id']} RIVER_MODEL=sonnet claude --name 'monitor #{m['id']} [^']+' "
+                                   rf"--model sonnet --effort low go")
         self.assertEqual(server.open_monitors(self.c, runner=sent.append), [])  # opened once
         self.assertEqual(len(sent), 1)
         # No server answers: the command says how to start the session by hand.
@@ -414,8 +416,8 @@ class LaunchAgent(unittest.TestCase):
         self.assertIsNone(core.state(self.c)["manager"])
         sent = []
         t = server.start_manager(self.c, runner=sent.append, model="opus")
-        self.assertEqual(t["command"], "claude --model opus manage --remote-control")
-        self.assertIn(f"RIVER_AGENT={t['session_name']} RIVER_MODEL=opus claude --model opus manage", sent[-1])
+        self.assertEqual(t["command"], "claude --name 'river manager' --model opus manage --remote-control 'river manager'")
+        self.assertIn(f"RIVER_AGENT={t['session_name']} RIVER_MODEL=opus claude --name 'river manager' --model opus manage", sent[-1])
         with self.assertRaisesRegex(RiverError, "is the active manager"):
             server.start_manager(self.c, runner=sent.append)
         self.assertEqual(server.manage_command('codex "run river go in this folder"'), 'codex "run river manage in this folder"')
@@ -460,6 +462,11 @@ class LaunchAgent(unittest.TestCase):
         self.assertEqual(core.fill_launch_command('codex -m {model} -c model_reasoning_effort={effort} "go"', None, None),
                          'codex "go"')
         self.assertEqual(core.fill_launch_command("x --v --effort={effort} go", None, None), "x --v go")
+        # {name}: the session's name, quoted by river; with no name the flag before it drops out (#562).
+        self.assertEqual(core.fill_launch_command("x --name {name} go", None, None, "#7 fix it"), "x --name '#7 fix it' go")
+        self.assertEqual(core.fill_launch_command("x --name {name} go", None, None), "x go")
+        self.assertEqual(core.focus_title(self.c, "needs:@mark"), "needs you")
+        self.assertEqual(core.focus_title(self.c, "review:web"), "review web")
 
     def test_windows_opens_a_console_window_with_the_env_set(self):
         core.project_add(self.c, "shop", path=self.dir.name)
@@ -869,7 +876,7 @@ class LaunchProfiles(unittest.TestCase):
         self.assertIn(f"claude --name '#{y} more' --permission-mode acceptEdits go --remote-control '#{y} more'", sent[-1])
         # A manager: manage in place of go, the options still apply.
         t = server.start_manager(self.c, runner=sent.append, options={"remote_control": "off"})
-        self.assertEqual(t["command"], "claude manage")
+        self.assertEqual(t["command"], "claude --name 'river manager' manage")
         # Open chat says why a session has no web link.
         core.register(self.c, "w1")
         core.config_set(self.c, "claude_remote_control", "off")

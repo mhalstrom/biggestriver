@@ -5327,14 +5327,30 @@ def profile_options(conn, platform, inline=None, project_id=None, chosen=None):
             for k in pl["options"]}
 
 
-def session_title(goals, item_id, title, limit=48):
-    """The name of a session river starts for an item: the goal it opens with, else '#<id> <title>'. Short,
-    and only characters that are safe in a shell word, a console title, and a session list."""
-    text = goals[0] if goals else f"#{item_id} {title}"
+def _short_title(text, limit=48):
+    """A session name: short, and only characters that are safe in a shell word, a console title, and a
+    session list. A long one ends at a word."""
     text = " ".join(re.sub(r"[^\w #.:-]+", " ", text).split())
     if len(text) > limit:
         text = text[:limit + 1].rsplit(" ", 1)[0] if " " in text[limit // 2:limit + 1] else text[:limit]
     return text.rstrip()
+
+
+def session_title(goals, item_id, title):
+    """The name of a session river starts for an item: the goal it opens with, else '#<id> <title>'."""
+    return _short_title(goals[0] if goals else f"#{item_id} {title}")
+
+
+def focus_title(conn, focus):
+    """The name of a session river starts with RIVER_FOCUS: 'help #7 <title>', 'deploy web', 'needs you'."""
+    kind, _, rest = focus.partition(":")
+    ref = rest.split("@")[0]
+    if kind == "needs":
+        return "needs you"
+    if ref.isdigit():
+        r = conn.execute("SELECT title FROM items WHERE id=?", (int(ref),)).fetchone()
+        return _short_title(f"{kind} #{ref} {r['title'] if r else ''}")
+    return _short_title(f"{kind} {ref}")
 
 
 def build_command(platform, opts, model=None, effort=None, name=None):
@@ -5623,7 +5639,7 @@ def _launch_agent_cmd(conn, project_id, agent, model=None, effort=None, options=
         raise RiverError(f"{pick[0]} is a custom command ({pick[1]}), so it has no launch options; "
                          f"give it a profile in launch_agents (@claude-code or @codex) for them")
     else:
-        opts, cmd = {}, fill_launch_command(pick[1], mid, effort or None)
+        opts, cmd = {}, fill_launch_command(pick[1], mid, effort or None, name)
     return {"agent": pick[0], "command": cmd, "platform": prof[0] if prof else None, "options": opts,
             "model": model, "model_id": mid, "effort": effort or None,
             "env": {"RIVER_MODEL": model} if model else {}}
@@ -5656,10 +5672,11 @@ MODEL_NOTES = {
 }
 
 
-def fill_launch_command(cmd, model, effort):
-    """Put the model and effort into a launch command. Without a value the placeholder goes, and with it
-    the flag just before it: '--model {model}' and '-c model_reasoning_effort={effort}' drop out whole."""
-    for key, value in (("model", model), ("effort", effort)):
+def fill_launch_command(cmd, model, effort, name=None):
+    """Put the model, effort, and session name into a launch command. Without a value the placeholder goes,
+    and with it the flag just before it: '--model {model}' and '-c model_reasoning_effort={effort}' drop out
+    whole. The name goes in quoted for the shell: write '--name {name}' with no quotes of your own."""
+    for key, value in (("model", model), ("effort", effort), ("name", _shell_quote(name) if name else None)):
         ph = "{" + key + "}"
         if value:
             cmd = cmd.replace(ph, value)

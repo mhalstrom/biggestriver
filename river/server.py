@@ -236,8 +236,9 @@ def open_monitors(conn, runner=None, db=None):
 def _open_focused(conn, p, focus, runner, agent, model=None, effort=None, launch_in=None, options=None):
     """Open the chosen agent in a project folder with RIVER_FOCUS set; its river go reads it."""
     _can_open_terminal(runner, f"cd {p['path']}, set RIVER_FOCUS={focus}, then claude go")
-    t = {"project": p["name"], "path": p["path"], "focus": focus,
-         **core._launch_agent_cmd(conn, p["id"], agent, model, effort, options),
+    name = core.focus_title(conn, focus)
+    t = {"project": p["name"], "path": p["path"], "focus": focus, "session_title": name,
+         **core._launch_agent_cmd(conn, p["id"], agent, model, effort, options, name),
          "launch_in": core._launch_in(conn, p["id"], launch_in)}
     _open_terminal(t, {"RIVER_FOCUS": focus, **t["env"]}, runner)
     return t
@@ -266,7 +267,8 @@ def start_manager(conn, runner=None, agent=None, actor=None, model=None, effort=
     if p is None:
         raise RiverError("no project has a folder, so river cannot start a session: river project path <name> <folder>")
     _can_open_terminal(runner, f"cd {p['path']} && claude manage")
-    t = {"project": p["name"], "path": p["path"], **core._launch_agent_cmd(conn, p["id"], agent, model, effort, options),
+    t = {"project": p["name"], "path": p["path"], "session_title": "river manager",
+         **core._launch_agent_cmd(conn, p["id"], agent, model, effort, options, "river manager"),
          "launch_in": core._launch_in(conn, p["id"], launch_in)}
     t["command"] = manage_command(t["command"])
     name = f"manager-{secrets.token_hex(2)}"
