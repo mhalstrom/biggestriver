@@ -74,7 +74,11 @@ Stop when the user tells you to, and tell the user what you did.
 
 ## Your tools
 
-- `river launch [--project P | --item N] [--agent A] [--model M] [--effort E] [--tab|--window] [--dry-run]`
+- `river launch [--project P | --item N] [--agent A] [--model M] [--effort E] [--tab|--window|--tmux] [--dry-run]`
+  `--tmux` (or the setting `launch_in tmux`) starts the session as a pane of the tmux session `river`. It needs
+  no Terminal app, so it works over SSH and on Linux. The user sees every such agent side by side with
+  `river view` in a terminal (`--windows`: one window each; `--tidy`: close the panes of ended agents);
+  `river view --list` prints the panes for you. A sandbox around your session blocks tmux: run the launch outside it.
 - `river queue add <agent> <id> [--first|--before <id>]`, `river queue add <agent> --message "..."`,
   `river queue list|move|remove`: an agent's own queue comes before the project queue.
 - `river note|alert|ask <agent> "..."`: messages (they also go through the

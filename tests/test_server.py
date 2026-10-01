@@ -540,6 +540,244 @@ class LaunchAgent(unittest.TestCase):
         self.assertEqual(s.count("do script"), 3)  # the tab, the fallback window, and the no-window case
 
 
+class FakeTmux:
+    """Enough of tmux for river's commands: panes in windows of one session, with the options river sets."""
+
+    def __init__(self):
+        self.session, self.panes, self.windows, self.calls, self.n = False, [], {}, [], 0
+        self.full = False  # True: no space for one more pane in a window
+
+    def _pane(self, window=None, name=None):
+        if window is None:
+            window = f"@{self.n}"
+            self.windows[window] = {"name": name, "tile": ""}
+        pane = {"id": f"%{self.n}", "window": window, "name": "", "agent": "", "running": "claude", "keys": []}
+        self.n += 1
+        self.panes.append(pane)
+        return pane["id"]
+
+    def __call__(self, a):
+        self.calls.append(a)
+        cmd, opt = a[0], lambda flag: a[a.index(flag) + 1] if flag in a else None
+        pane = next((p for p in self.panes if p["id"] in (opt("-t"), opt("-s"))), None)
+        if cmd == "has-session":
+            return "" if self.session and self.panes else None
+        if cmd == "new-session":
+            self.session = True
+            return self._pane(name=opt("-n"))
+        if cmd == "new-window":
+            return self._pane(name=opt("-n"))
+        if cmd == "split-window":
+            return None if self.full else self._pane(window=opt("-t"))
+        if cmd == "set-option" and "-p" in a:
+            pane[{"@river_name": "name", "@river_agent": "agent"}[a[-2]]] = a[-1]
+        elif cmd == "set-option" and "-w" in a and "@river_tile" in a:
+            self.windows[opt("-t")]["tile"] = "" if "-u" in a else "1"
+        elif cmd == "send-keys":
+            pane["keys"].append(a[-1])
+        elif cmd == "rename-window":
+            self.windows[opt("-t")]["name"] = a[-1]
+        elif cmd == "join-pane":
+            if self.full:
+                return None
+            pane["window"] = opt("-t")
+        elif cmd == "break-pane":
+            pane["window"] = f"@{self.n}"
+            self.windows[pane["window"]] = {"name": opt("-n"), "tile": ""}
+            self.n += 1
+        elif cmd == "kill-pane":
+            self.panes.remove(pane)
+        elif cmd == "list-panes":
+            return "\n".join("|".join([p["id"], p["window"], self.windows[p["window"]]["tile"],
+                                       str(sum(q["window"] == p["window"] for q in self.panes)), p["running"],
+                                       "/dev/ttys00" + p["id"][1:], p["agent"], p["name"]]) for p in self.panes)
+        elif cmd == "show-options":
+            return "C-b"
+        return ""
+
+
+class LaunchInTmux(unittest.TestCase):
+    """launch_in tmux: each agent is a pane of the tmux session river, and river view shows them side by side."""
+
+    def setUp(self):
+        self.platform, core.PLATFORM = core.PLATFORM, "linux"  # no Terminal app: tmux needs none
+        self.dir = tempfile.TemporaryDirectory()
+        os.environ["RIVER_DB"] = os.path.join(self.dir.name, "t.db")
+        self.c = core.connect()
+        core.project_add(self.c, "shop", path=self.dir.name)
+        self.tmux = server.TMUX_RUNNER = FakeTmux()
+
+    def tearDown(self):
+        core.PLATFORM, server.TMUX_RUNNER = self.platform, None
+        self.c.close()
+        os.environ.pop("RIVER_DB", None)
+        self.dir.cleanup()
+
+    def test_each_agent_starts_in_a_pane_of_the_river_session(self):
+        x = core.item_add(self.c, "shop", "first: the work")["id"]
+        y = core.item_add(self.c, "shop", "second")["id"]
+        with self.assertRaisesRegex(RiverError, "works on macOS and Windows only"):
+            server.launch_agent(self.c)  # the setting says tab, and Linux has no Terminal app
+        with self.assertRaisesRegex(RiverError, "launch_in is tab, window, or tmux"):
+            core.config_set(self.c, "launch_in", "screen")
+        core.config_set(self.c, "launch_in", "tmux")
+        t = server.launch_agent(self.c)
+        first = self.tmux.panes[0]
+        self.assertEqual((t["launch_in"], t["tmux_pane"]), ("tmux", "%0"))
+        # The first agent makes the session; its window and its pane carry the session's name and the agent's.
+        self.assertEqual(self.tmux.calls[1][:6], ["new-session", "-d", "-s", "river", "-n", f"#{x} first: the work"])
+        self.assertEqual((first["name"], first["agent"]), (f"#{x} first: the work", t["session_name"]))
+        # river types the command line into the pane's shell: the folder, the session's variables, the command.
+        self.assertEqual(first["keys"][1], "Enter")
+        self.assertIn(f"RIVER_AGENT={t['session_name']} RIVER_FOCUS=item:{x} {t['command']}", first["keys"][0])
+        self.assertTrue(first["keys"][0].startswith("cd "))
+        # The next agent is a window of the same session, opened in the background (-d): no window takes the keyboard.
+        t = server.dispatch_item(self.c, y, launch_in="tmux")
+        self.assertEqual([c for c in self.tmux.calls if c[0] == "new-window"][0][:6],
+                         ["new-window", "-d", "-t", "=river:", "-n", f"#{y} second"])
+        self.assertEqual(self.tmux.panes[1]["window"], "@1")
+        # A session for another purpose has no river name yet: its pane has the purpose only.
+        core.register(self.c, "mark", human=True)
+        z = core.item_add(self.c, "shop", "sign the form", doer="human")["id"]
+        t = server.open_agent_on(self.c, z, person="mark")
+        self.assertEqual((self.tmux.panes[2]["name"], self.tmux.panes[2]["agent"]), (f"help #{z} sign the form", ""))
+        # One launch can still pick a Terminal tab, which this system does not have.
+        core.item_add(self.c, "shop", "third")
+        with self.assertRaisesRegex(RiverError, "works on macOS and Windows only"):
+            server.launch_agent(self.c, launch_in="tab")
+
+    def test_river_view_puts_the_agents_side_by_side_and_back(self):
+        core.config_set(self.c, "launch_in", "tmux")
+        with self.assertRaisesRegex(RiverError, "no agent runs in tmux"):
+            server.tmux_view("tile")
+        for n in range(3):
+            core.item_add(self.c, "shop", f"work {n}")
+            server.launch_agent(self.c)
+        self.tmux.panes.append({"id": "%9", "window": "@1", "name": "", "agent": "", "running": "vim", "keys": []})  # a person's own pane
+        v = server.tmux_view(None)
+        self.assertEqual([p["pane"] for p in v["panes"]], ["%0", "%1", "%2"])  # only the panes river made
+        self.assertFalse(any(c[0] in ("join-pane", "break-pane") for c in self.tmux.calls))  # --list changes nothing
+        v = server.tmux_view("tile")
+        self.assertEqual({p["window"] for p in v["panes"]}, {"@0"})
+        self.assertEqual((self.tmux.windows["@0"], v["left"]), ({"name": "agents", "tile": "1"}, []))
+        self.assertIn(["set-option", "-w", "-t", "@0", "pane-border-format", " #{@river_name} "], self.tmux.calls)
+        self.assertIn(["select-window", "-t", "@0"], self.tmux.calls[-3:])
+        self.assertEqual(v["show"][:4], ["tmux", "attach-session", "-t", "=river"])
+        self.assertIn("Ctrl-b then: an arrow", v["show"][-1])
+        # While the agents are side by side, a new agent joins them; with no space left it gets its own window.
+        core.item_add(self.c, "shop", "work 3")
+        server.launch_agent(self.c)
+        self.assertEqual(self.tmux.panes[-1]["window"], "@0")
+        self.tmux.full = True
+        core.item_add(self.c, "shop", "work 4")
+        server.launch_agent(self.c)
+        self.assertNotEqual(self.tmux.panes[-1]["window"], "@0")
+        self.assertEqual(server.tmux_view("tile")["left"], [self.tmux.panes[-1]["name"]])
+        # --tidy closes a pane whose agent ended (a shell is all that runs there); --windows separates the others.
+        ended = self.tmux.panes[1]["name"]
+        self.tmux.panes[1]["running"] = "zsh"
+        v = server.tmux_view("windows", tidy=True)
+        self.assertEqual((v["closed"], ended in [p["name"] for p in v["panes"]]), ([ended], False))
+        self.assertEqual(len({p["window"] for p in v["panes"]}), len(v["panes"]))
+        self.assertEqual(self.tmux.windows["@0"], {"name": v["panes"][0]["name"], "tile": ""})
+        self.assertEqual(next(p for p in self.tmux.panes if p["id"] == "%9")["window"], "@1")  # the person's pane stays where it was
+
+    def test_the_command_line_and_the_page(self):
+        import contextlib
+        import io
+        from river import cli
+        core.register(self.c, "mark", human=True)
+        x = core.item_add(self.c, "shop", "work")["id"]
+
+        def river(*args):
+            with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(cli.run(["-q", "--as", "mark", *args]), 0)
+            return out.getvalue()
+        self.assertIn("(in a new tmux pane)", river("launch", "--dry-run", "--tmux"))
+        out = river("launch", "--tmux")
+        self.assertRegex(out, rf"started Claude Code as shop-\w+ in shop for #{x} work \(.*\); tmux pane %0: river view shows it")
+        # A command with no terminal (an agent, a test) prints the panes and attaches nothing.
+        out = river("view")
+        self.assertRegex(out, rf"%0  #{x} work  \[shop-\w+\]\n")
+        self.assertIn("A person sees the agents with: river view", out)
+        self.assertNotIn("A person sees", river("view", "--list"))
+        self.tmux.panes[0]["running"] = "zsh"
+        self.assertIn("(its agent ended: river view --tidy closes it)", river("view", "--list"))
+        self.assertIn(f"closed (its agent ended): #{x} work", river("view", "--tidy"))
+        # Open chat for an agent in a pane, with no web link, names river view.
+        self.assertIs(core.state(self.c)["tmux"], bool(__import__("shutil").which("tmux")))
+        self.tmux.panes.append({"id": "%5", "window": "@0", "name": "#9 other", "agent": "w1", "running": "claude", "keys": []})
+        self.tmux.windows["@0"] = {"name": "w", "tile": ""}
+        self.assertEqual(server._tmux_pane_of("/dev/ttys005")["name"], "#9 other")
+        self.assertIsNone(server._tmux_pane_of("/dev/ttys001"))
+
+    def test_tmux_is_not_installed(self):
+        server.TMUX_RUNNER = None
+        cmd, server.TMUX_CMD = server.TMUX_CMD, ["tmux-that-is-not-installed"]
+        self.addCleanup(setattr, server, "TMUX_CMD", cmd)
+        core.item_add(self.c, "shop", "work")
+        with self.assertRaisesRegex(RiverError, "tmux is not installed: brew install tmux .* river config set launch_in tab"):
+            server.launch_agent(self.c, launch_in="tmux")
+        self.assertEqual(core.next_item(self.c, "shop")[0]["reserved_for"], None)  # nothing was reserved for a session that never opened
+        self.assertIsNone(server._tmux_pane_of("/dev/ttys001"))
+
+    def test_an_agent_session_keeps_its_own_variables_out_of_the_panes(self):
+        old = dict(os.environ)
+        self.addCleanup(lambda: (os.environ.clear(), os.environ.update(old)))
+        os.environ.update({"RIVER_AGENT": "manager-1", "RIVER_FOCUS": "item:1", "CLAUDECODE": "1",
+                           "CLAUDE_CODE_SESSION_ID": "s", "CODEX_THREAD_ID": "t", "CLAUDE_CONFIG_DIR": "/c", "CODEX_HOME": "/h"})
+        env = server._tmux_env()
+        self.assertEqual({k for k in env if k.startswith(("RIVER_", "CLAUDE", "CODEX_"))}, {"CLAUDE_CONFIG_DIR", "CODEX_HOME"})
+        self.assertEqual(env["PATH"], os.environ["PATH"])
+
+    def test_with_a_real_tmux_server(self):
+        """The same commands against tmux itself, on a server of its own (never the user's)."""
+        import shutil
+        import time
+        if not shutil.which("tmux"):
+            self.skipTest("tmux is not installed")
+        server.TMUX_RUNNER = None
+        conf = Path(self.dir.name, "tmux.conf")
+        conf.write_text("set -g default-shell /bin/sh\n")  # a shell that starts at once, and no profile of the user
+        cmd, server.TMUX_CMD = server.TMUX_CMD, ["tmux", "-S", str(Path(self.dir.name, "tmux.sock")), "-f", str(conf)]
+        self.addCleanup(setattr, server, "TMUX_CMD", cmd)
+        try:
+            server._open_terminal({"project": "shop", "path": self.dir.name, "session_title": "#1 first: a | b",
+                                   "command": "sleep 60", "launch_in": "tmux"}, {"RIVER_AGENT": "shop-aaaa"})
+        except RiverError as e:
+            self.skipTest(f"tmux cannot run here: {e}")  # a sandbox blocks its socket
+        self.addCleanup(server._tmux, "kill-server", check=False)
+        for name, command in (("#2 second", "sleep 60"), ("needs you", "true")):
+            server._open_terminal({"project": "shop", "path": self.dir.name, "session_title": name, "command": command,
+                                   "launch_in": "tmux"}, {"RIVER_FOCUS": "needs:"})
+
+        def panes(want):
+            for _ in range(100):
+                got = {p["name"]: p for p in server.tmux_view(None)["panes"]}
+                if all(want(p) for p in got.values()):
+                    return got
+                time.sleep(0.1)
+            self.fail(f"the panes did not get there: {got}")
+        got = panes(lambda p: p["ended"] if p["name"] == "needs you" else p["running"] == "sleep")
+        self.assertEqual([got[n]["agent"] for n in ("#1 first: a | b", "#2 second", "needs you")], ["shop-aaaa", None, None])
+        self.assertEqual(len({p["window"] for p in got.values()}), 3)
+        self.assertEqual([p["ended"] for p in got.values()], [False, False, True])
+        self.assertEqual(server._tmux_pane_of(got["#2 second"]["tty"])["pane"], got["#2 second"]["pane"])
+        v = server.tmux_view("tile")
+        self.assertEqual(({p["window"] for p in v["panes"]}, {p["tile"] for p in v["panes"]}, v["left"]),
+                         ({got["#1 first: a | b"]["window"]}, {True}, []))
+        self.assertEqual(server._tmux("display-message", "-p", "-t", v["panes"][0]["window"], "#{window_name} #{pane-border-status}"),
+                         "agents top")
+        server._open_terminal({"project": "shop", "path": self.dir.name, "session_title": "#4 fourth", "command": "sleep 60",
+                               "launch_in": "tmux"}, {})
+        self.assertEqual(len({p["window"] for p in server.tmux_view(None)["panes"]}), 1)  # it joined the others
+        v = server.tmux_view("windows", tidy=True)
+        self.assertEqual((v["closed"], len(v["panes"]), len({p["window"] for p in v["panes"]})), (["needs you"], 3, 3))
+        self.assertEqual({p["tile"] for p in v["panes"]}, {False})
+        names = server._tmux("list-windows", "-t", "=river", "-F", "#{window_name}").splitlines()
+        self.assertEqual(sorted(names), ["#1 first: a | b", "#2 second", "#4 fourth"])
+
+
 class Watched(unittest.TestCase):
     def test_dev_reload_sees_subfolders_but_not_vendor(self):
         from pathlib import Path

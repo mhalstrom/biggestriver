@@ -557,7 +557,7 @@ def build_parser():
     x.add_argument("--chat", action="store_true", default=os.environ.get("RIVER_CHAT") == "1",
                    help="a chat app session with no folder (default $RIVER_CHAT=1)")
 
-    x = sub.add_parser("launch", help="start an agent session in a new terminal tab or window, like the page's Start")
+    x = sub.add_parser("launch", help="start an agent session in a new terminal tab, window, or tmux pane, like the page's Start")
     g = x.add_mutually_exclusive_group()
     g.add_argument("--project", help="its most important ready item (default: first a project with no agent yet)")
     g.add_argument("--item", type=int, help="this ready item (Dispatch)")
@@ -570,7 +570,16 @@ def build_parser():
     g = x.add_mutually_exclusive_group()
     g.add_argument("--tab", dest="launch_in", action="store_const", const="tab")
     g.add_argument("--window", dest="launch_in", action="store_const", const="window")
+    g.add_argument("--tmux", dest="launch_in", action="store_const", const="tmux",
+                   help="in a pane of the tmux session 'river' (river view shows them); no Terminal app needed")
     x.add_argument("--dry-run", action="store_true", help="say what it would start; open nothing")
+    x = sub.add_parser("view", help="show every agent that runs in tmux (launch_in tmux) side by side in this terminal")
+    g = x.add_mutually_exclusive_group()
+    g.add_argument("--windows", dest="layout", action="store_const", const="windows", default="tile",
+                   help="one tmux window for each agent, not side by side")
+    g.add_argument("--list", dest="layout", action="store_const", const=None,
+                   help="print the agents' panes; change and show nothing")
+    x.add_argument("--tidy", action="store_true", help="first close the panes whose agent has ended")
     x = sub.add_parser("stop", help="ask an agent to stop: it commits, releases its item, and ends (not a kill)")
     x.add_argument("agent"); x.add_argument("--reason", required=True, help="why; the agent sees it")
     x.add_argument("--kill", action="store_true",
@@ -999,6 +1008,10 @@ def _run(args, conn):
     core.record_session_url(conn, me, core.session_url_from_env())
     with core.tx(conn):
         core.sync_needs_you(conn)  # the command may have made a human item ready, or sent a question to a person
+    if (args.cmd == "view" and args.layout and res["show"] and res["panes"] and not args.json
+            and sys.stdin.isatty() and sys.stdout.isatty()):
+        conn.close()
+        os.execvp(res["show"][0], res["show"])  # tmux takes this terminal: the agents, side by side
     if args.json:
         print(json.dumps(res, indent=2, default=str))
     else:
@@ -1333,6 +1346,9 @@ def dispatch(conn, a, actor):
                                         launch_in=a.launch_in, options=opts or None)
         return server.launch_agent(conn, a.project, agent=a.agent, actor=actor, model=a.model, effort=a.effort,
                                    launch_in=a.launch_in, options=opts or None)
+    if c == "view":
+        from . import server
+        return server.tmux_view(a.layout, a.tidy)
     if c == "stop":
         if a.kill:
             return core.kill_agent(conn, a.agent, a.reason, actor)
@@ -2230,12 +2246,26 @@ def render(a, res):
                 print(f"  no terminal: {res['would_push_to']} waits for work in {res['project']} and would get it")
             else:
                 print("  command: " + "".join(f"{k}={v} " for k, v in res["env"].items()) + res["command"]
-                      + f"   (in a new {res['launch_in']})")
+                      + f"   (in a new {'tmux pane' if res['launch_in'] == 'tmux' else res['launch_in']})")
         elif res.get("pushed_to"):
             print(f"gave {it} to {res['pushed_to']}, which was waiting for work in {res['project']}")
         else:
             print(f"started {res['agent']} as {res['session_name']} in {res['project']} for {it}"
-                  + (f" ({res['why']})" if res.get("why") else ""))
+                  + (f" ({res['why']})" if res.get("why") else "")
+                  + (f"; tmux pane {res['tmux_pane']}: river view shows it" if res.get("tmux_pane") else ""))
+        return
+    if c == "view":
+        for name in res["closed"]:
+            print(f"closed (its agent ended): {name}")
+        for p in res["panes"]:
+            print(f"{p['pane']:>4}  {p['name']}" + (f"  [{p['agent']}]" if p["agent"] else "")
+                  + ("  (its agent ended: river view --tidy closes it)" if p["ended"] else ""))
+        if not res["panes"]:
+            print(f"(no agent panes in the tmux session {res['session']})")
+        for name in res["left"]:
+            print(f"no space to show it beside the others; it keeps its own window: {name}")
+        if res["panes"] and a.layout:
+            print("This command has no terminal of its own, so it shows nothing here. A person sees the agents with: river view")
         return
     if c == "stop" and "killed" in res:
         print(f"{'killed' if res['killed'] else 'found dead'}: {res['agent']} (PID {res['pid']}); released "

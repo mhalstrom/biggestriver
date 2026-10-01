@@ -81,7 +81,13 @@ def _applescript_str(s):
 TERMINAL_RUNNER = None
 
 
-def _can_open_terminal(runner, hint):
+def _can_open_terminal(runner, hint, launch_in=None):
+    if launch_in == "tmux":  # no Terminal app needed: any system with tmux, over SSH too
+        import shutil
+        if TMUX_RUNNER is None and not shutil.which(TMUX_CMD[0]):
+            raise RiverError("launch_in is tmux, and tmux is not installed: brew install tmux (Linux: apt install tmux), "
+                             "or use a Terminal tab: river config set launch_in tab")
+        return
     runner = runner or TERMINAL_RUNNER
     if core.PLATFORM not in ("darwin", "win32") and runner is None:
         raise RiverError(f"starting an agent from the page works on macOS and Windows only; start one yourself: {hint}")
@@ -100,7 +106,7 @@ def launch_agent(conn, project=None, runner=None, agent=None, actor=None, model=
     if waiting:
         core.push(conn, t["item"]["id"], waiting, "from the Start button: you were waiting for work", actor)
         return {**t, "pushed_to": waiting}
-    _can_open_terminal(runner, "cd <project folder> && claude go")
+    _can_open_terminal(runner, "cd <project folder> && claude go", t["launch_in"])
     return _start_for_item(conn, t, runner, actor, "Start opened this session for it")
 
 
@@ -115,7 +121,7 @@ def dispatch_item(conn, item_id, runner=None, agent=None, actor=None, model=None
     if waiting:
         core.push(conn, t["item"]["id"], waiting, "from the page: Dispatch; you were waiting for work", actor)
         return {**t, "pushed_to": waiting}
-    _can_open_terminal(runner, f"cd <project folder> && RIVER_FOCUS=item:{t['item']['id']} claude go")
+    _can_open_terminal(runner, f"cd <project folder> && RIVER_FOCUS=item:{t['item']['id']} claude go", t["launch_in"])
     return _start_for_item(conn, t, runner, actor, "Dispatch started this session for it")
 
 
@@ -231,11 +237,12 @@ def open_monitors(conn, runner=None, db=None):
 
 def _open_focused(conn, p, focus, runner, agent, model=None, effort=None, launch_in=None, options=None):
     """Open the chosen agent in a project folder with RIVER_FOCUS set; its river go reads it."""
-    _can_open_terminal(runner, f"cd {p['path']}, set RIVER_FOCUS={focus}, then claude go")
+    launch_in = core._launch_in(conn, p["id"], launch_in)
+    _can_open_terminal(runner, f"cd {p['path']}, set RIVER_FOCUS={focus}, then claude go", launch_in)
     name = core.focus_title(conn, focus)
     t = {"project": p["name"], "path": p["path"], "focus": focus, "session_title": name,
          **core._launch_agent_cmd(conn, p["id"], agent, model, effort, options, name),
-         "launch_in": core._launch_in(conn, p["id"], launch_in)}
+         "launch_in": launch_in}
     _open_terminal(t, {"RIVER_FOCUS": focus, **t["env"]}, runner)
     return t
 
@@ -262,10 +269,11 @@ def start_manager(conn, runner=None, agent=None, actor=None, model=None, effort=
     p = next((core._project(conn, x["name"]) for x in core.project_list(conn) if x.get("path")), None)
     if p is None:
         raise RiverError("no project has a folder, so river cannot start a session: river project path <name> <folder>")
-    _can_open_terminal(runner, f"cd {p['path']} && claude manage")
+    launch_in = core._launch_in(conn, p["id"], launch_in)
+    _can_open_terminal(runner, f"cd {p['path']} && claude manage", launch_in)
     t = {"project": p["name"], "path": p["path"], "session_title": "river manager",
          **core._launch_agent_cmd(conn, p["id"], agent, model, effort, options, "river manager"),
-         "launch_in": core._launch_in(conn, p["id"], launch_in)}
+         "launch_in": launch_in}
     t["command"] = manage_command(t["command"])
     name = f"manager-{secrets.token_hex(2)}"
     core.register(conn, name, note="started from the page as the manager")
@@ -293,6 +301,10 @@ def open_chat(conn, agent, runner=None):
             tty = ""
         if tty and tty not in ("??", "?") and (core.PLATFORM == "darwin" or runner or TERMINAL_RUNNER):
             dev = tty if tty.startswith("/dev/") else "/dev/" + tty
+            pane = _tmux_pane_of(dev)
+            if pane:
+                return {"agent": agent, "tmux_pane": pane["pane"],
+                        "hint": f"{agent} runs in tmux ({pane['name'] or pane['pane']}): `river view` in a terminal shows it."}
             script = "\n".join([
                 'tell application "Terminal"',
                 '  repeat with w in windows',
@@ -319,8 +331,9 @@ def open_chat(conn, agent, runner=None):
 
 def _open_terminal(t, env, runner=None):
     """Run the agent command (t["command"]) in the project folder (t["path"]) with env set: in a new
-    Terminal tab or window on macOS (launch_in), in a new console window on Windows. runner (tests) gets
-    the AppleScript on macOS, and {"args", "cwd", "env"} on Windows."""
+    Terminal tab or window on macOS (launch_in), in a new console window on Windows, or with launch_in
+    tmux in a pane of the river tmux session on any system. runner (tests) gets the AppleScript on macOS,
+    and {"args", "cwd", "env"} on Windows; TMUX_RUNNER gets the tmux commands."""
     import os
     import shlex
     import subprocess
@@ -328,6 +341,10 @@ def _open_terminal(t, env, runner=None):
     # The agent uses the same queue as this page: a page on a RIVER_DB queue starts agents on it too.
     if os.environ.get("RIVER_DB"):
         env = {"RIVER_DB": str(core.db_path()), **env}
+    if t["launch_in"] == "tmux":
+        t["tmux_pane"] = _tmux_open(t, env, f"cd {shlex.quote(t['path'])} && "
+                                    + "".join(f"{k}={shlex.quote(v)} " for k, v in env.items()) + t["command"])
+        return
     if core.PLATFORM == "win32":
         # cmd /k keeps the window open when the agent ends; the command line goes to cmd as written.
         title = f"title {t['session_title']} & " if t.get("session_title") else ""
@@ -382,6 +399,159 @@ def _open_terminal(t, env, runner=None):
         why = (getattr(e, "stderr", "") or str(e)).strip()
         raise RiverError(f"could not open Terminal: {why}. macOS may ask once to let river control Terminal "
                          f"(System Settings, Privacy & Security, Automation)")
+
+
+# launch_in tmux: each agent river starts is a pane of one tmux session, so one terminal shows them all
+# (river view), over SSH too, and nothing needs AppleScript. TMUX_CMD is the tmux program (the tests give
+# it a server of their own); TMUX_RUNNER (tests) gets each argument list in its place and returns the
+# output, or None for a command that fails.
+TMUX_CMD = ["tmux"]
+TMUX_SESSION = "river"
+TMUX_RUNNER = None
+TMUX_SHELLS = {"sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "tcsh", "nu"}
+# One line per pane: the free text (the session's name) comes last.
+_TMUX_PANE = "#{pane_id}|#{window_id}|#{@river_tile}|#{window_panes}|#{pane_current_command}|#{pane_tty}|#{@river_agent}|#{@river_name}"
+
+
+def _tmux(*args, check=True):
+    """Run one tmux command and return its output. When it fails: RiverError with tmux's own words, or
+    None with check off (has-session: no such session; split-window: no space)."""
+    import subprocess
+    if TMUX_RUNNER is not None:
+        out = TMUX_RUNNER(list(args))
+        if out is None and check:
+            raise RiverError(f"tmux {args[0]} failed")
+        return out
+    try:
+        r = subprocess.run([*TMUX_CMD, *args], capture_output=True, text=True, timeout=15, env=_tmux_env())
+    except (OSError, subprocess.SubprocessError) as e:
+        raise RiverError(f"tmux {args[0]}: {e}")
+    if r.returncode:
+        why = (r.stderr or r.stdout).strip()
+        # A sandboxed session (Claude Code's sandbox, Codex's) cannot reach the tmux socket at all.
+        if "Operation not permitted" in why or "Permission denied" in why:
+            raise RiverError(f"tmux {args[0]}: {why}. A sandbox around this session blocks the tmux socket: run "
+                             f"this command outside the sandbox, or start the session from the river page")
+        if check:
+            raise RiverError(f"tmux {args[0]}: {why}")
+        return None
+    return r.stdout.rstrip("\n")
+
+
+def _tmux_env():
+    """The environment for a tmux command. The first command starts the tmux server, and every pane gets
+    the server's environment: when an agent session runs river launch, its own name, focus, and session
+    ids (RIVER_*, CLAUDE*, CODEX_*) must stay out, or each new agent would start as a copy of that session."""
+    import os
+    keep = ("CLAUDE_CONFIG_DIR", "CODEX_HOME")
+    return {k: v for k, v in os.environ.items() if k in keep or not k.startswith(("RIVER_", "CLAUDE", "CODEX_"))}
+
+
+def _tmux_panes(everywhere=False):
+    """The panes of the river tmux session (everywhere: of every session); [] when there is none."""
+    out = _tmux("list-panes", *(["-a"] if everywhere else ["-s", "-t", "=" + TMUX_SESSION]), "-F", _TMUX_PANE,
+                check=False)
+    rows = []
+    for line in (out or "").splitlines():
+        f = line.split("|", 7)
+        if len(f) == 8:
+            rows.append({"pane": f[0], "window": f[1], "tile": f[2] == "1", "window_panes": int(f[3] or 1),
+                         "running": f[4].lstrip("-"), "ended": f[4].lstrip("-") in TMUX_SHELLS, "tty": f[5],
+                         "agent": f[6] or None, "name": f[7]})
+    return rows
+
+
+def _tmux_pane_of(tty):
+    """The tmux pane on this terminal device, or None (also when tmux is not installed or not running)."""
+    import shutil
+    if TMUX_RUNNER is None and not shutil.which(TMUX_CMD[0]):
+        return None
+    try:
+        return next((p for p in _tmux_panes(everywhere=True) if p["tty"] == tty), None)
+    except RiverError:
+        return None
+
+
+def _tmux_open(t, env, line):
+    """Start an agent in a new pane of the river tmux session and return the pane id: a window of its own,
+    or one more pane of the side-by-side window when river view made one. tmux starts the pane's own login
+    shell and river types the command line into it, as Terminal's do script does: the shell's PATH finds
+    the agent CLI, and the pane stays (with what the agent printed) after the agent ends. Nothing takes
+    the keyboard: a person who answers a prompt in another pane keeps typing there."""
+    name = t.get("session_title") or t["project"]
+    new = ["-c", t["path"], "-P", "-F", "#{pane_id}"]
+    pane = None
+    if _tmux("has-session", "-t", "=" + TMUX_SESSION, check=False) is None:
+        # With no terminal attached yet, a window gets this size; it follows the terminal that attaches.
+        pane = _tmux("new-session", "-d", "-s", TMUX_SESSION, "-n", name, "-x", "200", "-y", "50", *new)
+        _tmux("set-option", "-t", f"={TMUX_SESSION}:", "default-size", "200x50")
+    else:
+        tile = next((p["window"] for p in _tmux_panes() if p["tile"]), None)
+        if tile:  # no space left there for one more pane: a window of its own
+            pane = _tmux("split-window", "-d", "-t", tile, *new, check=False)
+            if pane:
+                _tmux("select-layout", "-t", tile, "tiled")
+        pane = pane or _tmux("new-window", "-d", "-t", f"={TMUX_SESSION}:", "-n", name, *new)
+    _tmux("set-option", "-p", "-t", pane, "@river_name", name)
+    if env.get("RIVER_AGENT"):
+        _tmux("set-option", "-p", "-t", pane, "@river_agent", env["RIVER_AGENT"])
+    _tmux("send-keys", "-t", pane, "-l", line)
+    _tmux("send-keys", "-t", pane, "Enter")
+    return pane
+
+
+def tmux_view(layout=None, tidy=False):
+    """The agents river started in tmux (launch_in tmux), for river view. layout "tile" puts every agent
+    pane side by side in one window, and new agents then join it; "windows" gives each agent a window of
+    its own again; None changes nothing. tidy first closes the panes whose agent has ended (only a shell
+    runs there). Panes that a person made are left alone. Returns the panes and the tmux command that
+    shows the session: attach, or switch-client inside tmux."""
+    import os
+    target = "=" + TMUX_SESSION
+    if _tmux("has-session", "-t", target, check=False) is None:
+        raise RiverError(f"no agent runs in tmux (there is no tmux session {TMUX_SESSION!r}). Start agents there: "
+                         f"river launch --tmux, or for every start: river config set launch_in tmux")
+    mine = lambda: [p for p in _tmux_panes() if p["name"]]
+    closed, left = [], []
+    if tidy:
+        for p in mine():
+            if p["ended"]:
+                _tmux("kill-pane", "-t", p["pane"])
+                closed.append(p["name"])
+        if closed and _tmux("has-session", "-t", target, check=False) is None:
+            return {"session": TMUX_SESSION, "panes": [], "closed": closed, "left": [], "layout": layout, "show": None}
+    panes = mine()
+    tile = next((p["window"] for p in panes if p["tile"]), None)
+    if layout == "tile" and panes:
+        if tile is None:
+            tile = panes[0]["window"]
+            _tmux("set-option", "-w", "-t", tile, "@river_tile", "1")
+            _tmux("rename-window", "-t", tile, "agents")
+            # Each pane shows its session's name on its top border.
+            _tmux("set-option", "-w", "-t", tile, "pane-border-status", "top")
+            _tmux("set-option", "-w", "-t", tile, "pane-border-format", " #{@river_name} ")
+        for p in panes:
+            if p["window"] != tile:
+                if _tmux("join-pane", "-d", "-s", p["pane"], "-t", tile, check=False) is None:
+                    left.append(p["name"])  # no space for one more pane: it keeps its window
+                _tmux("select-layout", "-t", tile, "tiled")
+        _tmux("select-layout", "-t", tile, "tiled")
+        _tmux("select-window", "-t", tile)
+    elif layout == "windows" and tile:
+        inside = [p for p in panes if p["window"] == tile]
+        for p in inside[1:]:
+            _tmux("break-pane", "-d", "-s", p["pane"], "-n", p["name"], "-t", f"{target}:")
+        _tmux("set-option", "-w", "-u", "-t", tile, "@river_tile")
+        _tmux("set-option", "-w", "-u", "-t", tile, "pane-border-status")
+        _tmux("set-option", "-w", "-u", "-t", tile, "pane-border-format")
+        if inside:
+            _tmux("rename-window", "-t", tile, inside[0]["name"])
+    # The keys a person needs, in the status line for a few seconds after the session shows.
+    prefix = (_tmux("show-options", "-gv", "prefix", check=False) or "C-b").replace("C-", "Ctrl-")
+    hint = f"{prefix} then: an arrow = the next pane, z = one pane large (and back), n = the next window, d = leave"
+    show = ["switch-client", "-t", target] if os.environ.get("TMUX") else ["attach-session", "-t", target]
+    return {"session": TMUX_SESSION, "panes": mine(), "closed": closed, "left": left, "layout": layout,
+            "show": [*TMUX_CMD, *show, ";", "display-message", "-d", "6000", hint]}
 
 
 REPO = PKG.parent
@@ -694,7 +864,7 @@ def setup_ntfy(conn, actor=None):
 
 # Operations the page may call. Each maps JSON args to one core function.
 def _launch_args(a):
-    """The launch dialog's choices: model, effort, tab or window, and profile options (each optional)."""
+    """The launch dialog's choices: model, effort, tab, window, or tmux, and profile options (each optional)."""
     return {**{k: a.get(k) or None for k in ("model", "effort", "launch_in")},
             "options": {k: str(v) for k, v in (a.get("options") or {}).items()} or None}
 

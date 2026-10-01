@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
@@ -82,6 +83,8 @@ DEFAULT_SETTINGS = {
     # Any other command is custom: {model} and {effort} take the launch dialog's choices, and with no
     # choice the flag before them drops out.
     "launch_agents": "Claude Code=@claude-code",
+    # Where a new session opens: a Terminal tab or window (macOS; Windows always opens a console window), or
+    # tmux: a pane of the tmux session "river" on any system, and `river view` shows them all side by side.
     "launch_in": "tab",
     # How river reaches a running session through its own platform, so a working agent sees a queue
     # instruction, a stop, or a message at once: "Label=ENV_VAR: command" entries separated by ";". river go
@@ -140,6 +143,9 @@ DEFAULT_SETTINGS = {
     "agent_rules": "",
     "default_agent": "",
 }
+
+# Where a new session can open (the setting launch_in).
+LAUNCH_INS = ("tab", "window", "tmux")
 
 # Agent platforms river can start from a launch profile ("Label=@claude-code" in launch_agents). Each option
 # maps to the CLI's own flags, as `claude --help` and `codex --help` name them. Codex has no Remote Control
@@ -813,8 +819,8 @@ def config_set(conn, key, value, project=None, item=None, agent=None, actor=None
         raise RiverError("review is on or off")
     elif key == "setup_done" and value not in ("on", "off"):
         raise RiverError("setup_done is on or off")
-    elif key == "launch_in" and value not in ("tab", "window"):
-        raise RiverError("launch_in is tab or window")
+    elif key == "launch_in" and value not in LAUNCH_INS:
+        raise RiverError("launch_in is tab, window, or tmux")
     elif key == "auto_continue" and value not in ("on", "off"):
         raise RiverError("auto_continue is on or off")
     elif key == "default_prerequisite_mode" and value not in ("keep", "release"):
@@ -5781,8 +5787,8 @@ def _start_next(conn):
 
 
 def _launch_in(conn, project_id, choice=None):
-    if choice not in (None, "", "tab", "window"):
-        raise RiverError("launch_in is tab or window")
+    if choice not in (None, "", *LAUNCH_INS):
+        raise RiverError("launch_in is tab, window, or tmux")
     return choice or setting(conn, "launch_in", project_id=project_id)
 
 
@@ -5922,6 +5928,7 @@ def state(conn):
         "model_ids": model_ids(conn),
         "launch_options": launch_options(conn),
         "launch_in": setting(conn, "launch_in"),
+        "tmux": bool(shutil.which("tmux")),  # the launch dialog offers tmux only when it is installed
         "start_next": _start_next(conn),
         "queues": {r["agent"]: queue_list(conn, r["agent"], ann)["entries"]
                    for r in conn.execute("SELECT DISTINCT agent FROM queue_entries ORDER BY agent")},
