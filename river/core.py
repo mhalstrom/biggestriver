@@ -119,6 +119,13 @@ DEFAULT_SETTINGS = {
     # A session the page (or river launch) started that runs no river command within connect_within is a
     # finding (not connected): its agent did not start, or waits on a prompt in its terminal.
     "connect_within": "5m",
+    # An agent in a tmux pane that waits on a prompt in its terminal (a permission prompt, a trust question):
+    # river serve reads each agent's pane every notify_interval. When one of the last lines on the screen
+    # matches prompt_pattern (a regular expression; empty: no watch) and those lines stay the same for
+    # prompt_wait, each person gets an alert, with the agent's Terminal on the page. The words are those of
+    # Claude Code and Codex; add the words of another CLI or a new version with | (river config set).
+    "prompt_pattern": r"Do you (want to|trust)|Would you like to|[Ee]nter to confirm|[❯›]\s*\d+\.\s",
+    "prompt_wait": "20s",
     "manage_every": "30m",
     # river cleanup lists a ready item that nobody claimed for this long.
     "stale_after": "14d",
@@ -789,8 +796,14 @@ def config_set(conn, key, value, project=None, item=None, agent=None, actor=None
     if key not in DEFAULT_SETTINGS:
         raise RiverError(f"unknown setting {key!r}; known: {', '.join(sorted(DEFAULT_SETTINGS))}")
     if key.endswith(("_ttl", "_after", "_before", "_interval", "_window")) or key in (
-            "wait_max", "wait_step", "human_wait_max", "goal_lease", "wait_too_long", "manage_every", "connect_within"):
+            "wait_max", "wait_step", "human_wait_max", "goal_lease", "wait_too_long", "manage_every", "connect_within",
+            "prompt_wait"):
         parse_duration(value)
+    elif key == "prompt_pattern":
+        try:
+            re.compile(value)
+        except re.error as e:
+            raise RiverError(f"prompt_pattern is a regular expression, and this one has an error: {e}")
     elif key in ("keep_prereq_limit", "replan_threshold", "max_leases", "goal_max_leases", "serve_port", "smtp_port"):
         if not value.isdigit():
             raise RiverError(f"{key} takes a whole number")
@@ -3981,6 +3994,16 @@ def _agent_state(conn, a):
 
 # The note of a session that river started for an item (Start, Dispatch, river launch).
 STARTED_NOTE = "started from the page for"
+# The first words of the alert river sends for an agent that waits on a prompt in its terminal
+# (server.watch_prompts); the page and the notification link open that agent's Terminal for it.
+PROMPT_NOTE = "waits on a prompt in its terminal"
+
+
+def prompt_alert_agent(conn, message_id):
+    """The agent whose terminal prompt this alert is about, or None for any other message."""
+    r = conn.execute("SELECT from_agent, body FROM messages WHERE id=? AND kind='alert'", (message_id,)).fetchone() \
+        if message_id is not None else None
+    return r["from_agent"] if r and r["body"].startswith(PROMPT_NOTE) else None
 
 
 def not_connected(conn, a):

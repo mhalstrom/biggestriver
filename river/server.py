@@ -620,6 +620,10 @@ def terminal_screen(conn, agent):
     pane = agent_terminals(conn).get(agent)
     if not pane:
         raise RiverError(f"{agent} does not run in a tmux pane on this computer (start agents there: river config set launch_in tmux)")
+    return _pane_screen(agent, pane)
+
+
+def _pane_screen(agent, pane):
     out = _tmux("display-message", "-p", "-t", pane,
                 "#{pane_width}|#{pane_height}|#{cursor_x}|#{cursor_y}|#{pane_current_command}|#{@river_name}",
                 ";", "capture-pane", "-p", "-e", "-t", pane)
@@ -629,6 +633,72 @@ def terminal_screen(conn, agent):
         raise RiverError(f"tmux gave no answer for pane {pane}")
     return {"agent": agent, "pane": pane, "width": int(f[0]), "height": int(f[1]), "cursor": [int(f[2]), int(f[3])],
             "ended": f[4].lstrip("-") in TMUX_SHELLS, "name": f[5], "text": text}
+
+
+# An agent that waits on a prompt in its terminal (a permission prompt, a trust question) stops, and nobody
+# sees it until a person looks. PROMPTS remembers, for each agent whose screen shows a prompt now, the lines
+# river saw ("sig"), since when, and the alert it sent for them ("told").
+PROMPTS = {}
+PROMPT_LINES = 15  # a prompt is at the end of the screen: text further up is what the agent wrote before
+_ESCAPES = None
+
+
+def watch_prompts(conn):
+    """One look at every agent's tmux pane (the notify loop of river serve, every notify_interval): when one of
+    the last lines matches the setting prompt_pattern and those lines stay the same for prompt_wait, each
+    person gets an alert from that agent (core.PROMPT_NOTE and the line), which opens a needs-you event; the
+    page shows the agent's Terminal for it. When the prompt is gone (answered, or the agent ended), river marks
+    the alert read, which closes the event. A prompt that stays on the screen alerts once. Returns
+    {"waiting": {agent: line}, "told": [agents], "closed": [message ids]}."""
+    import re
+    global _ESCAPES
+    _ESCAPES = _ESCAPES or re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]")
+    pattern = core.setting(conn, "prompt_pattern").strip()
+    waiting = {}
+    if pattern:
+        rx = re.compile(pattern)
+        for agent, pane in sorted(agent_terminals(conn).items()):
+            try:
+                screen = _pane_screen(agent, pane)
+            except RiverError:
+                continue  # the pane closed since the list
+            if screen["ended"]:
+                continue  # a shell: what the agent printed stays, and nobody waits there
+            tail = [x.rstrip() for x in _ESCAPES.sub("", screen["text"]).splitlines() if x.strip()][-PROMPT_LINES:]
+            line = next((x.strip() for x in tail if rx.search(x)), None)
+            if line:
+                waiting[agent] = (f"{core.PROMPT_NOTE}: {line[:200]}", "\n".join(tail))
+    t, wait = core.now(), core.parse_duration(core.setting(conn, "prompt_wait"))
+    for agent in [a for a in PROMPTS if a not in waiting]:
+        del PROMPTS[agent]
+    told = []
+    alerts = [dict(r) for r in conn.execute(
+        "SELECT id, from_agent, body FROM messages WHERE kind='alert' AND read_at IS NULL AND body LIKE ?",
+        (core.PROMPT_NOTE + "%",))]
+    closed = [m["id"] for m in alerts if waiting.get(m["from_agent"], ("",))[0] != m["body"]]
+    if not waiting and not closed:
+        return {"waiting": {}, "told": [], "closed": []}  # the usual pass: nothing to write
+    with core.tx(conn):
+        core._mark_read(conn, closed)
+        people = [r["name"] for r in conn.execute("SELECT name FROM agents WHERE kind='human' ORDER BY name")]
+        for agent, (body, sig) in waiting.items():
+            st = PROMPTS.get(agent)
+            if not st or st["sig"] != sig:
+                st = PROMPTS[agent] = {"sig": sig, "since": t, "told": st["told"] if st else None}
+            if any(m["from_agent"] == agent and m["id"] not in closed for m in alerts):
+                st["told"] = body  # also after river serve started again: the alert is there
+            if st["told"] == body or t - st["since"] < wait:
+                continue
+            held = conn.execute("SELECT id FROM items WHERE assignee=? AND status IN ('in_progress','held') ORDER BY id",
+                                (agent,)).fetchone()
+            for person in people:
+                core._send(conn, "alert", agent, body, to=person, item_id=held and held["id"])
+            if people:  # with no person in the queue yet, the first one who registers gets it
+                st["told"] = body
+                told.append(agent)
+        if told or closed:
+            core.sync_needs_you(conn)
+    return {"waiting": {a: b[len(core.PROMPT_NOTE) + 2:] for a, (b, _) in waiting.items()}, "told": told, "closed": closed}
 
 
 def terminal_keys(conn, agent, keys, who=None):

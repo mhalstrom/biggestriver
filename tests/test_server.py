@@ -937,6 +937,74 @@ class LaunchInTmux(unittest.TestCase):
         self.assertIn("only this computer may call river serve", body["error"])
         self.assertEqual(len(self.tmux.panes[0]["keys"]), sent)
 
+    def test_a_prompt_in_an_agents_terminal_reaches_the_person(self):
+        import threading
+        from unittest import mock
+        from river import notify
+        core.config_set(self.c, "launch_in", "tmux")
+        core.config_set(self.c, "notify_channels", "log")
+        core.register(self.c, "mark", human=True)
+        core.item_add(self.c, "shop", "work")
+        name = server.launch_agent(self.c)["session_name"]
+        pane, clock = self.tmux.panes[0], [core.now()]
+        self.addCleanup(server.PROMPTS.clear)
+        fake_now = mock.patch.object(core, "now", lambda: clock[0])
+        fake_now.start()
+        self.addCleanup(fake_now.stop)
+
+        def watch(after=30):
+            clock[0] += core.timedelta(seconds=after)
+            return server.watch_prompts(self.c)
+        events = lambda: [(e["summary"], e["from_agent"]) for e in core.needs_you(self.c, "mark")]
+        ask = "\x1b[1mBash command\x1b[0m\n  rm -rf build\n\nDo you want to proceed?\n\x1b[34m❯ 1. Yes\x1b[0m\n  2. No"
+        # An agent that works, then one that asks: the person hears of it when the prompt stays (prompt_wait).
+        pane["screen"] = "⏺ Read 3 files\n✻ Pondering… (12s)"
+        self.assertEqual(watch(), {"waiting": {}, "told": [], "closed": []})
+        pane["screen"] = ask
+        self.assertEqual(watch(), {"waiting": {name: "Do you want to proceed?"}, "told": [], "closed": []})
+        self.assertEqual(watch(5)["told"], [])
+        self.assertEqual(watch()["told"], [name])
+        self.assertEqual(events(), [(f"alert from {name}: waits on a prompt in its terminal: Do you want to proceed?", name)])
+        self.assertEqual(watch()["told"], [])  # once for a prompt
+        # The notification opens the agent's Terminal on the page; its web session when it has one (a phone).
+        (row,) = core.outbox(self.c)
+        self.assertEqual(notify.compose(self.c, [row])[2], f"http://127.0.0.1:8765/#terminal-{name}")
+        self.c.execute("UPDATE agents SET session_url='https://claude.ai/code/session_1' WHERE name=?", (name,))
+        self.assertEqual(notify.compose(self.c, [row])[2], "https://claude.ai/code/session_1")
+        # river serve starts again while the prompt waits: no second alert.
+        server.PROMPTS.clear()
+        self.assertEqual((watch()["told"], watch()["told"], len(events())), ([], [], 1))
+        # The person only marks it read: nothing more for the same prompt. A new prompt is a new alert.
+        server.OPS["message_read"](self.c, {"msg": row["message_id"]}, "mark")
+        self.assertEqual((watch()["told"], watch()["told"], events()), ([], [], []))
+        pane["screen"] = ask.replace("Do you want to proceed?", "Do you want to make this edit to a.py?")
+        self.assertEqual((watch()["told"], watch()["told"]), ([], [name]))
+        self.assertIn("make this edit to a.py?", events()[0][0])
+        # The person answers in the Terminal: the screen moves on, and river closes the alert.
+        pane["screen"] = "⏺ Edited a.py"
+        (mid,) = watch()["closed"]
+        self.assertEqual((events(), core.message_show(self.c, mid)["state"], server.PROMPTS), ([], "read", {}))
+        # Not a prompt: the words further up the screen, and the screen an ended agent left behind.
+        pane["screen"] = "Do you want to proceed?\n" + "\n".join(f"line {n}" for n in range(server.PROMPT_LINES))
+        self.assertEqual(watch()["waiting"], {})
+        pane["screen"], pane["running"] = ask, "zsh"
+        self.assertEqual((watch()["waiting"], watch()["told"]), ({}, []))
+        # The words are a setting: another CLI's prompt needs no code change; empty turns the watch off.
+        pane["screen"], pane["running"] = "Allow the command? [y/N]", "codex"
+        self.assertEqual(watch()["waiting"], {})
+        core.config_set(self.c, "prompt_pattern", core.DEFAULT_SETTINGS["prompt_pattern"] + r"|\[y/N\]")
+        core.config_set(self.c, "prompt_wait", "1m")
+        self.assertEqual((watch()["told"], watch()["told"], watch()["told"]), ([], [], [name]))
+        core.config_set(self.c, "prompt_pattern", "")
+        self.assertEqual((len(watch()["closed"]), events()), (1, []))
+        with self.assertRaisesRegex(RiverError, "regular expression"):
+            core.config_set(self.c, "prompt_pattern", "(")
+        # The loop of river serve looks at the panes on every pass, with or without a notification channel.
+        stop, looks = threading.Event(), []
+        with mock.patch.object(server, "watch_prompts", lambda c: (looks.append(1), stop.set())):
+            notify.loop(stop, interval_s=1)
+        self.assertEqual(looks, [1])
+
     def test_with_a_real_tmux_server(self):
         """The same commands against tmux itself, on a server of its own (never the user's)."""
         import shutil

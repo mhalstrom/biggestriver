@@ -186,17 +186,21 @@ def _is_local(url):
     return (urllib.parse.urlparse(url).hostname or "") in ("127.0.0.1", "localhost", "::1")
 
 
-def page_url(conn, item_id=None):
+def page_url(conn, item_id=None, terminal=None):
+    """The river page: on an item, or on the Terminal of an agent (the agent's name)."""
+    import urllib.parse
     base = f"http://127.0.0.1:{SERVE_PORT['port'] or core.setting(conn, 'serve_port')}/"
-    return base + (f"#item-{item_id}" if item_id else "")
+    return base + (f"#terminal-{urllib.parse.quote(terminal, safe='')}" if terminal else f"#item-{item_id}" if item_id else "")
 
 
 def compose(conn, rows):
     """One message for a batch of outbox rows on one channel."""
     if len(rows) == 1:
         r = rows[0]
-        # Open the session of the agent that asked or added the item, when it has a web link.
-        url = core.origin_session_url(conn, r["item_id"], r["message_id"]) or page_url(conn, r["item_id"])
+        # Open the session of the agent that asked or added the item, when it has a web link. An agent that
+        # waits on a prompt in its terminal and has no such link: its Terminal on the page.
+        url = (core.origin_session_url(conn, r["item_id"], r["message_id"])
+               or page_url(conn, r["item_id"], core.prompt_alert_agent(conn, r["message_id"])))
         return "River: needs you", r["summary"], url
     lines = [f"- {r['summary']}" for r in rows[:10]]
     if len(rows) > 10:
@@ -283,6 +287,8 @@ def loop(stop, interval_s=None):
         conn = core.connect()
         try:
             wait = interval_s or core.parse_duration(core.setting(conn, "notify_interval")).total_seconds()
+            from . import server
+            server.watch_prompts(conn)  # an agent that waits on a prompt in its tmux pane: tell the person
             if core._channels(core.setting(conn, "notify_channels")):
                 run(conn)
         except Exception as e:  # keep the loop alive; the next pass retries

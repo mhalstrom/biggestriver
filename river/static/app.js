@@ -587,6 +587,9 @@ async function pollNeedsYou() {
   renderNeedsYou(); notifyNew();
 }
 
+// An alert river sent for an agent that waits on a prompt in its terminal (core.PROMPT_NOTE): its Terminal answers it.
+const promptAlert = e => e.message_kind === "alert" && (e.body || "").startsWith("waits on a prompt in its terminal");
+
 function renderNeedsYou() {
   document.title = NY.length ? `(${NY.length}) Biggest River` : "Biggest River";
   $("#notifyOn").classList.toggle("hidden", !("Notification" in window) || Notification.permission !== "default");
@@ -603,7 +606,8 @@ function renderNeedsYou() {
       ? `<button class="btn" data-open="${e.item_id}">Open</button><button class="btn" data-ny="claim" data-id="${e.item_id}">Claim</button><button class="btn" data-copy-prompt="${e.item_id}" title="A prompt for an agent that explains this and helps you do it">Copy prompt</button>${agentStart(S && S.launch_agents, { label: "Open agent", attrs: `data-agent-help="${e.item_id}"`, title: "Open an agent session with that prompt, in the project folder" })}<button class="btn primary" data-ny="done" data-id="${e.item_id}">Done</button>`
       : (e.message_kind === "question"
           ? `<button class="btn primary" data-ny="answer" data-msg="${e.message_id}">Answer</button>`
-          : `<button class="btn" data-ny="read" data-msg="${e.message_id}">Mark read</button>`)
+          : (promptAlert(e) ? `<button class="btn primary" data-terminal="${esc(e.from_agent)}" title="Read the prompt and answer it">Terminal</button>` : "")
+            + `<button class="btn" data-ny="read" data-msg="${e.message_id}">Mark read</button>`)
         + (e.item_id ? `<button class="btn" data-open="${e.item_id}">Open #${e.item_id}</button>` : "");
     // One line each; a click opens the details and the buttons (design: the Board fits one screen).
     const title = isItem ? `#${e.item_id} ${e.item_title}` : `${e.message_kind} from ${e.from_agent}: ${e.body || ""}`;
@@ -625,7 +629,7 @@ function notifyNew() {
   if (!first && "Notification" in window && Notification.permission === "granted") {
     for (const e of fresh.slice(0, 5)) {
       const n = new Notification("River: needs you", { body: e.summary, tag: "river-" + e.id });
-      n.onclick = () => { window.focus(); if (e.item_id) openDrawer(e.item_id); n.close(); };
+      n.onclick = () => { window.focus(); if (promptAlert(e)) openTerminal(e.from_agent); else if (e.item_id) openDrawer(e.item_id); n.close(); };
     }
   }
   store("river.ny.seen", JSON.stringify([...known, ...fresh.map(e => e.id)].slice(-500)));
@@ -909,7 +913,8 @@ function setTab(name, push = true) {
   renderLog(true);
   return renderGraph(true);
 }
-// Links into the page: #item-4, #tab-graph, #as-alex, or several joined with & (#as-alex&item-4).
+// Links into the page: #item-4, #tab-graph, #as-alex, or several joined with & (#as-alex&item-4);
+// #terminal-<agent> (a notification for an agent that waits on a prompt) opens that agent's Terminal.
 // Setup guide: an overlay that shows until the user dismisses it for good (setting setup_done).
 let setupSeen = false;
 // Ready for agents: every ready agent item, most important first, each with Dispatch (one session for one item).
@@ -1101,8 +1106,9 @@ function maybeSetup() {
 async function openFromHash() {
   let tabIn = null, itemIn = false;
   for (const part of location.hash.slice(1).split("&")) {
-    const m = part.match(/^(item|tab|as)-(.+)$/); if (!m) continue;
+    const m = part.match(/^(item|tab|as|terminal)-(.+)$/); if (!m) continue;
     const v = decodeURIComponent(m[2]);
+    if (m[1] === "terminal") openTerminal(v);
     if (m[1] === "as" && [...$("#actor").options].some(o => o.value === v)) { $("#actor").value = v; store("river.actor", v); inboxGen++; await pollInbox().catch(() => {}); }
     if (m[1] === "tab" && TABS.includes(v)) tabIn = v;
     if (m[1] === "item") { itemIn = true; await openDrawer(+v); }
