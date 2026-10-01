@@ -9,6 +9,7 @@ import { makeDialog } from "./components/dialog.js";
 import { agentStart } from "./components/agentStart.js";
 import { chooseLaunch, launchArgs } from "./components/launchDialog.js";
 import { managerHtml, queueHtml, agentButtons, chooseStop } from "./components/agentActions.js";
+import { openTerminal } from "./components/terminalDialog.js";
 import { makePanZoom } from "./components/panZoom.js";
 import { folderForm, wireFolderForms } from "./components/folderForm.js";
 hooks.refresh = refresh;
@@ -154,7 +155,7 @@ function agentHolds(a) {
       ${(S.goals || []).filter(g => g.owner === a.name && g.status === "open").map(g => `<div class="st">owns goal <span class="link" data-goal="${esc(g.name)}">${esc(g.name)}</span>${g.owner_expires_at ? " · " + left(g.owner_expires_at) + " left" : ""}</div>`).join("")}
       ${a.holds.map(h => `<div class="st">holds <span class="link" data-open="${h.id}">#${h.id} ${esc(h.title)}</span>${h.lease_expires_at ? " · " + left(h.lease_expires_at) + " left" : ""}</div>`).join("") || '<div class="st">holds nothing</div>'}
       ${S.items.filter(i => i.status === "open" && i.reserved_until && i.reserved_for === a.name).map(i => `<div class="st">pushed <span class="link" data-open="${i.id}">#${i.id} ${esc(i.title)}</span> · ${left(i.reserved_until)} left · <span class="link" data-unpush="${i.id}">cancel</span></div>`).join("")}
-      ${queueHtml((S.queues || {})[a.name], a.name)}${agentButtons(a)}`;
+      ${queueHtml((S.queues || {})[a.name], a.name)}${agentButtons(a, S)}`;
 }
 function agentSession(a) {
   return `${a.model ? `<span class="chip c-p" title="the model this session runs (RIVER_MODEL)">${esc(a.model)}</span> ` : ""}${a.session ? `<span title="Claude Code session">${esc(a.session)}${a.session_ref ? " [" + esc(a.session_ref) + "]" : ""}</span>` : ""}${a.session_url ? ` <a class="link" href="${esc(a.session_url)}" target="_blank" rel="noopener">open</a>` : ""}`;
@@ -681,9 +682,11 @@ document.addEventListener("click", async (e) => {
     return; }
   if (t.dataset.chat) {
     try { const r = await act("open_chat", { agent: t.dataset.chat });
-      if (r.url) window.open(r.url, "_blank", "noopener"); else if (r.focused) toast(`Opened the terminal tab of ${r.agent}`); else toast(r.hint, true);
+      if (r.url) window.open(r.url, "_blank", "noopener"); else if (r.focused) toast(`Opened the terminal tab of ${r.agent}`);
+      else if (r.tmux_pane) openTerminal(r.agent); else toast(r.hint, true);
     } catch (e) { /* toast shown */ }
     return; }
+  if (t.dataset.terminal) return openTerminal(t.dataset.terminal);
   if (t.dataset.stopAgent) {
     if (!actor()) return toast("Choose your name in 'You are' first", true);
     const a = S.agents.find(x => x.name === t.dataset.stopAgent); if (!a) return;

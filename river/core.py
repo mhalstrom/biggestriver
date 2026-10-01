@@ -5479,6 +5479,13 @@ def codex_models():
 PLATFORM = sys.platform
 
 
+def tmux_path():
+    """The tmux program, or None when it is not installed: on PATH, else where Homebrew or MacPorts put it
+    (the desktop app starts river serve from the Dock, with a short PATH)."""
+    return shutil.which("tmux") or next((p for p in ("/opt/homebrew/bin/tmux", "/usr/local/bin/tmux",
+                                                     "/opt/local/bin/tmux") if os.access(p, os.X_OK)), None)
+
+
 def _shell_quote(s):
     import shlex
     if PLATFORM == "win32":
@@ -5928,7 +5935,7 @@ def state(conn):
         "model_ids": model_ids(conn),
         "launch_options": launch_options(conn),
         "launch_in": setting(conn, "launch_in"),
-        "tmux": bool(shutil.which("tmux")),  # the launch dialog offers tmux only when it is installed
+        "tmux": bool(tmux_path()),  # the launch dialog offers tmux only when it is installed
         "start_next": _start_next(conn),
         "queues": {r["agent"]: queue_list(conn, r["agent"], ann)["entries"]
                    for r in conn.execute("SELECT DISTINCT agent FROM queue_entries ORDER BY agent")},

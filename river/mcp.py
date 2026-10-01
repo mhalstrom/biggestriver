@@ -230,17 +230,18 @@ def _host_only(value):
     return v.rsplit(":", 1)[0] if v.count(":") == 1 else v
 
 
-def local_refusal(client_ip, headers):
+def local_refusal(client_ip, headers, what="/mcp"):
     """Why a /mcp request is refused, or None. Until the endpoint has OAuth (#438) it answers only requests
     made on this computer, straight to river serve: never through a tunnel or proxy, whose requests also
-    arrive from 127.0.0.1. The Origin check stops a web page from calling it (DNS rebinding)."""
+    arrive from 127.0.0.1. The Origin check stops a web page from calling it (DNS rebinding). The page's
+    agent terminals (what) follow the same rule."""
     h = {k.lower(): v for k, v in headers.items()}
     if client_ip not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
-        return "only this computer may call /mcp"
+        return f"only this computer may call {what}"
     if any(x in h for x in PROXY_HEADERS):
-        return "/mcp has no sign-in yet, so it refuses requests through a tunnel or proxy"
+        return f"{what} has no sign-in yet, so it refuses requests through a tunnel or proxy"
     if _host_only(h.get("host")) not in LOCAL_HOSTS:
-        return "/mcp answers only on 127.0.0.1 or localhost"
+        return f"{what} answers only on 127.0.0.1 or localhost"
     origin = h.get("origin")
     if origin and _host_only(origin.split("://", 1)[-1].split("/", 1)[0]) not in LOCAL_HOSTS:
         return "cross-origin request refused"

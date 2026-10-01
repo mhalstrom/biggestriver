@@ -1,5 +1,6 @@
 // The manager section, each agent's queue, and the Stop dialog (a page dialog, not a browser alert).
-// Actions go through the server ops start_manager, open_chat, queue_add, queue_remove, stop_agent, kill_agent.
+// Actions go through the server ops start_manager, open_chat, queue_add, queue_remove, stop_agent, kill_agent;
+// Terminal opens terminalDialog.js.
 import { $, esc, ago } from "../lib.js";
 import { chip } from "./chip.js";
 import { makeDialog } from "./dialog.js";
@@ -13,7 +14,7 @@ export function managerHtml(S) {
   }
   return `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="dot ${esc(m.state)}"></span><b>${esc(m.name)}</b>
       ${m.platform ? chip("c-p", esc(m.platform)) : ""}${m.model ? chip("c-p", esc(m.model)) : ""}${chip(m.state === "active" ? "c-ready" : "c-waiting", esc(m.state))}
-      <span class="spacer" style="flex:1"></span><button class="btn" data-chat="${esc(m.name)}">Open chat</button></div>
+      <span class="spacer" style="flex:1"></span><button class="btn" data-chat="${esc(m.name)}">Open chat</button>${terminalButton(S, m.name)}</div>
     ${(m.asked || []).map(q => `<div class="st">asks you: ${esc(q.body)}${q.item_id ? ` <span class="link" data-open="${q.item_id}">#${q.item_id}</span>` : ""}</div>`).join("")}
     ${(m.actions || []).map(e => `<div class="ev">${ago(e.at)} · ${esc(e.change.replace(/ \(by manager [^)]*\)$/, ""))}</div>`).join("")
       || '<div class="st muted">No actions yet.</div>'}`;
@@ -27,10 +28,15 @@ export function queueHtml(entries, agent) {
     : `<div class="st">· ${e.kind === "stop" ? "<b>stop</b>" : "note"}: ${esc(e.body)}${e.native_status ? ` <span class="muted">[${esc(e.native_status)}]</span>` : ""} <span class="link" data-qremove="${esc(agent)}" data-ref="e${e.entry}" title="${e.kind === "stop" ? "Withdraw the stop" : "Remove"}">×</span></div>`).join("");
 }
 
-// The buttons on an agent row: Open chat, and Stop for a session that is not stopped.
-export function agentButtons(a) {
+// The Terminal button of an agent that runs in a tmux pane (S.terminals): its terminal on the page.
+export function terminalButton(S, name) {
+  return (S.terminals || {})[name] ? `<button class="btn" data-terminal="${esc(name)}" title="Show this agent's terminal here (its tmux pane): read it, and answer a prompt that waits there">Terminal</button>` : "";
+}
+
+// The buttons on an agent row: Open chat, Terminal (an agent in tmux), and Stop for a session that is not stopped.
+export function agentButtons(a, S) {
   if (a.kind === "human") return "";
-  return `<div class="actions" style="margin-top:4px"><button class="btn" data-chat="${esc(a.name)}">Open chat</button>${a.state !== "stopped" ? `<button class="btn" data-stop-agent="${esc(a.name)}">Stop</button>` : ""}</div>`;
+  return `<div class="actions" style="margin-top:4px"><button class="btn" data-chat="${esc(a.name)}">Open chat</button>${terminalButton(S || {}, a.name)}${a.state !== "stopped" ? `<button class="btn" data-stop-agent="${esc(a.name)}">Stop</button>` : ""}</div>`;
 }
 
 let dlg = null, done = null;

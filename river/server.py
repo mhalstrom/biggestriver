@@ -83,8 +83,7 @@ TERMINAL_RUNNER = None
 
 def _can_open_terminal(runner, hint, launch_in=None):
     if launch_in == "tmux":  # no Terminal app needed: any system with tmux, over SSH too
-        import shutil
-        if TMUX_RUNNER is None and not shutil.which(TMUX_CMD[0]):
+        if TMUX_RUNNER is None and not _tmux_cmd():
             raise RiverError("launch_in is tmux, and tmux is not installed: brew install tmux (Linux: apt install tmux), "
                              "or use a Terminal tab: river config set launch_in tab")
         return
@@ -309,7 +308,7 @@ def open_chat(conn, agent, runner=None):
             dev = tty if tty.startswith("/dev/") else "/dev/" + tty
             pane = _tmux_pane_of(dev)
             if pane:
-                return {"agent": agent, "tmux_pane": pane["pane"],
+                return {"agent": agent, "tmux_pane": pane["pane"],  # the page opens its terminal view
                         "hint": f"{agent} runs in tmux ({pane['name'] or pane['pane']}): `river view` in a terminal shows it."}
             script = "\n".join([
                 'tell application "Terminal"',
@@ -408,15 +407,24 @@ def _open_terminal(t, env, runner=None):
 
 
 # launch_in tmux: each agent river starts is a pane of one tmux session, so one terminal shows them all
-# (river view), over SSH too, and nothing needs AppleScript. TMUX_CMD is the tmux program (the tests give
-# it a server of their own); TMUX_RUNNER (tests) gets each argument list in its place and returns the
-# output, or None for a command that fails.
-TMUX_CMD = ["tmux"]
+# (river view), over SSH too, and nothing needs AppleScript. TMUX_CMD (tests) is a tmux command line with a
+# server of its own; TMUX_RUNNER (tests) gets each argument list in its place and returns the output, or
+# None for a command that fails.
+TMUX_CMD = None
 TMUX_SESSION = "river"
 TMUX_RUNNER = None
 TMUX_SHELLS = {"sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "tcsh", "nu"}
 # One line per pane: the free text (the session's name) comes last.
 _TMUX_PANE = "#{pane_id}|#{window_id}|#{@river_tile}|#{window_panes}|#{pane_current_command}|#{pane_tty}|#{@river_agent}|#{@river_name}"
+
+
+def _tmux_cmd():
+    """The tmux command line, or None when tmux is not installed."""
+    import shutil
+    if TMUX_CMD:
+        return TMUX_CMD if shutil.which(TMUX_CMD[0]) else None
+    exe = core.tmux_path()
+    return [exe] if exe else None
 
 
 def _tmux(*args, check=True):
@@ -428,8 +436,11 @@ def _tmux(*args, check=True):
         if out is None and check:
             raise RiverError(f"tmux {args[0]} failed")
         return out
+    cmd = _tmux_cmd()
+    if not cmd:
+        raise RiverError("tmux is not installed: brew install tmux (Linux: apt install tmux)")
     try:
-        r = subprocess.run([*TMUX_CMD, *args], capture_output=True, text=True, timeout=15, env=_tmux_env())
+        r = subprocess.run([*cmd, *args], capture_output=True, text=True, timeout=15, env=_tmux_env())
     except (OSError, subprocess.SubprocessError) as e:
         raise RiverError(f"tmux {args[0]}: {e}")
     if r.returncode:
@@ -469,8 +480,7 @@ def _tmux_panes(everywhere=False):
 
 def _tmux_pane_of(tty):
     """The tmux pane on this terminal device, or None (also when tmux is not installed or not running)."""
-    import shutil
-    if TMUX_RUNNER is None and not shutil.which(TMUX_CMD[0]):
+    if TMUX_RUNNER is None and not _tmux_cmd():
         return None
     try:
         return next((p for p in _tmux_panes(everywhere=True) if p["tty"] == tty), None)
@@ -557,7 +567,94 @@ def tmux_view(layout=None, tidy=False):
     hint = f"{prefix} then: an arrow = the next pane, z = one pane large (and back), n = the next window, d = leave"
     show = ["switch-client", "-t", target] if os.environ.get("TMUX") else ["attach-session", "-t", target]
     return {"session": TMUX_SESSION, "panes": mine(), "closed": closed, "left": left, "layout": layout,
-            "show": [*TMUX_CMD, *show, ";", "display-message", "-d", "6000", hint]}
+            "show": [*(_tmux_cmd() or ["tmux"]), *show, ";", "display-message", "-d", "6000", hint]}
+
+
+# The keys the page may send to an agent's terminal by name (tmux's names); any other input is plain text.
+TERMINAL_KEYS = ("Enter", "Escape", "Tab", "BTab", "BSpace", "DC", "Space", "Up", "Down", "Left", "Right", "Home", "End",
+                 "PPage", "NPage", *(f"C-{c}" for c in "abcdefghijklmnopqrstuvwxyz"))
+
+
+def agent_terminals(conn):
+    """{agent: pane} for the agents that run in a tmux pane on this host, in any tmux session: the page
+    shows such an agent's terminal. An agent has the pane on the terminal device of its process; a session
+    river started that ran no river command yet (it may wait on a prompt, which is when a person most
+    needs its terminal) has the pane that got its name at launch."""
+    import subprocess
+    if TMUX_RUNNER is None and not _tmux_cmd():
+        return {}
+    try:
+        panes = _tmux_panes(everywhere=True)
+    except RiverError:
+        return {}
+    if not panes:
+        return {}
+    agents = [dict(r) for r in conn.execute("SELECT name, pid, host FROM agents WHERE kind='ai'")]
+    out = {}
+    pids = {str(a["pid"]): a["name"] for a in agents if a["pid"] and a["host"] == core.this_host()}
+    if pids and core.PLATFORM != "win32":
+        try:
+            ps = (PS_RUNNER or (lambda p: subprocess.run(["ps", "-o", "pid=,tty=", "-p", ",".join(p)], capture_output=True,
+                                                         text=True, timeout=5).stdout))(sorted(pids))
+        except (OSError, subprocess.SubprocessError):
+            ps = ""
+        by_tty = {p["tty"]: p["pane"] for p in panes}
+        for line in ps.splitlines():
+            pid, _, tty = line.strip().partition(" ")
+            tty = tty.strip()
+            pane = by_tty.get(tty if tty.startswith("/dev/") else "/dev/" + tty)
+            if pane and pid in pids:
+                out[pids[pid]] = pane
+    for p in panes:
+        if p["agent"] and p["pane"] not in out.values() and any(a["name"] == p["agent"] for a in agents):
+            out.setdefault(p["agent"], p["pane"])
+    return out
+
+
+PS_RUNNER = None  # tests: gets the pids, returns the lines "pid tty"
+
+
+def terminal_screen(conn, agent):
+    """What an agent's tmux pane shows now, for the page: the lines with their colours (escape sequences),
+    the size, and the cursor. One tmux command."""
+    pane = agent_terminals(conn).get(agent)
+    if not pane:
+        raise RiverError(f"{agent} does not run in a tmux pane on this computer (start agents there: river config set launch_in tmux)")
+    out = _tmux("display-message", "-p", "-t", pane,
+                "#{pane_width}|#{pane_height}|#{cursor_x}|#{cursor_y}|#{pane_current_command}|#{@river_name}",
+                ";", "capture-pane", "-p", "-e", "-t", pane)
+    head, _, text = out.partition("\n")
+    f = head.split("|", 5)
+    if len(f) != 6:
+        raise RiverError(f"tmux gave no answer for pane {pane}")
+    return {"agent": agent, "pane": pane, "width": int(f[0]), "height": int(f[1]), "cursor": [int(f[2]), int(f[3])],
+            "ended": f[4].lstrip("-") in TMUX_SHELLS, "name": f[5], "text": text}
+
+
+def terminal_keys(conn, agent, keys, who=None):
+    """Type into an agent's tmux pane from the page: keys is a list of {"text": "..."} (typed as it is) and
+    {"key": "Enter"} (a key in TERMINAL_KEYS). Only a person does this: an agent does not answer another
+    agent's prompts through river."""
+    row = conn.execute("SELECT kind FROM agents WHERE name=?", (who,)).fetchone() if who else None
+    if row and row["kind"] != "human":
+        raise RiverError("only a person types into an agent's terminal")
+    pane = agent_terminals(conn).get(agent)
+    if not pane:
+        raise RiverError(f"{agent} does not run in a tmux pane on this computer")
+    if not isinstance(keys, list) or len(keys) > 200:
+        raise RiverError("keys is a list of at most 200 entries")
+    for k in keys:
+        if isinstance(k, dict) and isinstance(k.get("text"), str) and 0 < len(k["text"]) <= 4000:
+            continue
+        if isinstance(k, dict) and k.get("key") in TERMINAL_KEYS:
+            continue
+        raise RiverError(f"not a key river sends: {k!r}")
+    for k in keys:
+        if "text" in k:
+            _tmux("send-keys", "-t", pane, "-l", "--", k["text"])
+        else:
+            _tmux("send-keys", "-t", pane, k["key"])
+    return {"agent": agent, "pane": pane, "sent": len(keys)}
 
 
 REPO = PKG.parent
@@ -956,10 +1053,15 @@ OPS = {
     "kill_agent": lambda c, a, who: core.kill_agent(c, a["agent"], _page_reason(a, who), who),
     "start_manager": lambda c, a, who: start_manager(c, agent=a.get("agent"), actor=who, **_launch_args(a)),
     "open_chat": lambda c, a, who: open_chat(c, a["agent"]),
+    "terminal_keys": lambda c, a, who: terminal_keys(c, a["agent"], a.get("keys"), who),
     "decline_message": lambda c, a, who: core.decline_message(c, int(a["msg"]), a.get("note"), who),
     "update": lambda c, a, who: _no_update_in_app() or update_apply(),
     "restart": lambda c, a, who: _no_update_in_app() or (_restart_soon(), {"restarting": True})[1],
 }
+
+
+# Operations that type into a terminal: for the page on this computer only (Handler._not_local).
+LOCAL_OPS = ("terminal_keys",)
 
 
 def _message_read(conn, msg_id):
@@ -1009,7 +1111,20 @@ class Handler(BaseHTTPRequestHandler):
                 if DEV["on"]:
                     st["dev_build"] = _build_id()
                 st["desktop"] = DESKTOP
+                st["terminals"] = agent_terminals(conn)  # the agents whose tmux pane the page can show
                 return self._send(200, st)
+            finally:
+                conn.close()
+        if path == "/api/terminal":
+            from urllib.parse import parse_qs, urlsplit
+            why = self._not_local()
+            if why:
+                return self._send(403, {"error": why})
+            conn = core.connect()
+            try:
+                return self._send(200, terminal_screen(conn, parse_qs(urlsplit(self.path).query).get("agent", [""])[0]))
+            except RiverError as e:
+                return self._send(409, {"error": str(e)})
             finally:
                 conn.close()
         if path == "/api/log":
@@ -1094,6 +1209,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, *got)
         return self._send(404, {"error": "not found"})
 
+    def _not_local(self):
+        """Why this request may not read or type into an agent's terminal, or None: only this computer,
+        straight to river serve, from the page itself."""
+        from . import mcp
+        return mcp.local_refusal(self.client_address[0], dict(self.headers.items()), "an agent's terminal")
+
     def _mcp(self, method):
         """/mcp: river's MCP tools over Streamable HTTP, for this computer only (mcp.local_refusal)."""
         from . import mcp
@@ -1141,6 +1262,10 @@ class Handler(BaseHTTPRequestHandler):
             op = OPS.get(body.get("op"))
             if not op:
                 return self._send(400, {"error": f"unknown op {body.get('op')!r}"})
+            if body.get("op") in LOCAL_OPS:
+                why = self._not_local()
+                if why:
+                    return self._send(403, {"error": why})
             actor = body.get("actor") or None
             _same_queue(body.get("args", {}).get("db"))  # only a river command sends it (cli.ask_server)
             conn = core.connect()

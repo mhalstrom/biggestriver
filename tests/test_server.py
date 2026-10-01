@@ -678,6 +678,8 @@ class FakeTmux:
                                        "/dev/ttys00" + p["id"][1:], p["agent"], p["name"]]) for p in self.panes)
         elif cmd == "show-options":
             return "C-b"
+        elif cmd == "display-message":  # terminal_screen: the pane's size and cursor, then what it shows
+            return f"120|40|3|7|{pane['running']}|{pane['name']}\n" + pane.get("screen", "")
         return ""
 
 
@@ -747,7 +749,7 @@ class LaunchInTmux(unittest.TestCase):
         self.assertEqual((self.tmux.windows["@0"], v["left"]), ({"name": "agents", "tile": "1"}, []))
         self.assertIn(["set-option", "-w", "-t", "@0", "pane-border-format", " #{@river_name} "], self.tmux.calls)
         self.assertIn(["select-window", "-t", "@0"], self.tmux.calls[-3:])
-        self.assertEqual(v["show"][:4], ["tmux", "attach-session", "-t", "=river"])
+        self.assertEqual(v["show"][1:4], ["attach-session", "-t", "=river"])
         self.assertIn("Ctrl-b then: an arrow", v["show"][-1])
         # While the agents are side by side, a new agent joins them; with no space left it gets its own window.
         core.item_add(self.c, "shop", "work 3")
@@ -819,6 +821,83 @@ class LaunchInTmux(unittest.TestCase):
         self.assertEqual({k for k in env if k.startswith(("RIVER_", "CLAUDE", "CODEX_"))}, {"CLAUDE_CONFIG_DIR", "CODEX_HOME"})
         self.assertEqual(env["PATH"], os.environ["PATH"])
 
+    def test_the_page_shows_an_agents_terminal_and_types_into_it(self):
+        core.config_set(self.c, "launch_in", "tmux")
+        core.register(self.c, "mark", human=True)
+        x = core.item_add(self.c, "shop", "work")["id"]
+        t = server.launch_agent(self.c)
+        name, pane = t["session_name"], self.tmux.panes[0]
+        pane["screen"] = "\x1b[1mDo you trust this folder?\x1b[0m\n> 1. Yes"
+        # The session ran no river command yet (it waits on a prompt): the pane that got its name is its terminal.
+        self.assertEqual(server.agent_terminals(self.c), {name: "%0"})
+        got = server.terminal_screen(self.c, name)
+        self.assertEqual((got["pane"], got["width"], got["height"], got["cursor"], got["ended"], got["name"]),
+                         ("%0", 120, 40, [3, 7], False, f"#{x} work"))
+        self.assertEqual(got["text"], pane["screen"])
+        # A person answers the prompt from the page: text as it is, and keys by name.
+        pane["keys"].clear()
+        r = server.OPS["terminal_keys"](self.c, {"agent": name, "keys": [{"text": "1"}, {"key": "Enter"}, {"text": "-l; rm"}]}, "mark")
+        self.assertEqual((r["sent"], pane["keys"]), (3, ["1", "Enter", "-l; rm"]))
+        self.assertEqual(self.tmux.calls[-1], ["send-keys", "-t", "%0", "-l", "--", "-l; rm"])  # typed, never read as a key name
+        # Nothing goes when one entry is not a key river sends; an agent may not type into another agent's terminal.
+        for bad in ([{"key": "Enter"}, {"key": "kill-server"}], [{"text": ""}], [{"text": "x" * 4001}], "Enter", [{"key": "C-c"}] * 201):
+            with self.assertRaisesRegex(RiverError, "not a key river sends|a list of at most 200"):
+                server.terminal_keys(self.c, name, bad, "mark")
+        core.register(self.c, "other-agent")
+        with self.assertRaisesRegex(RiverError, "only a person types into an agent's terminal"):
+            server.terminal_keys(self.c, name, [{"key": "Enter"}], "other-agent")
+        self.assertEqual(pane["keys"], ["1", "Enter", "-l; rm"])
+        # An agent that runs in no pane, and a pane of no agent, have no terminal on the page.
+        with self.assertRaisesRegex(RiverError, "other-agent does not run in a tmux pane"):
+            server.terminal_screen(self.c, "other-agent")
+        with self.assertRaisesRegex(RiverError, "does not run in a tmux pane"):
+            server.terminal_keys(self.c, "other-agent", [{"key": "Enter"}], "mark")
+        # A session the person started in tmux by hand: its process's terminal device names the pane.
+        self.tmux.panes.append({"id": "%7", "window": "@0", "name": "", "agent": "", "running": "claude", "keys": []})
+        self.c.execute("UPDATE agents SET pid=4242, host=? WHERE name='other-agent'", (core.this_host(),))
+        server.PS_RUNNER = lambda pids: "".join(f" {p} ttys007\n" for p in pids)
+        self.addCleanup(setattr, server, "PS_RUNNER", None)
+        self.assertEqual(server.agent_terminals(self.c), {name: "%0", "other-agent": "%7"})
+        self.assertEqual(server.open_chat(self.c, name).get("hint", "")[:16], "No chat to open ")  # no process recorded for it
+        # The page's state lists them, and without tmux there are none.
+        server.TMUX_RUNNER = lambda a: ""
+        self.assertEqual(server.agent_terminals(self.c), {})
+
+    def test_an_agents_terminal_answers_this_computer_only(self):
+        core.config_set(self.c, "launch_in", "tmux")
+        core.item_add(self.c, "shop", "work")
+        name = server.launch_agent(self.c)["session_name"]
+
+        def call(method, path, headers, body=None, ip="127.0.0.1"):
+            import io
+            from email.message import Message
+            h = server.Handler.__new__(server.Handler)
+            h.path, h.client_address, h.headers, out = path, (ip, 5555), Message(), {}
+            raw = json.dumps(body).encode() if body is not None else b""
+            for k, v in {"Content-Length": str(len(raw)), **headers}.items():
+                h.headers[k] = v
+            h.rfile = io.BytesIO(raw)
+            h._send = lambda code, body, ctype=None: out.update(code=code, body=body)
+            getattr(h, "do_" + method)()
+            return out["code"], out["body"]
+        local = {"Host": "127.0.0.1:8765"}
+        keys = {"op": "terminal_keys", "args": {"agent": name, "keys": [{"key": "Enter"}]}}
+        self.assertEqual(call("GET", f"/api/terminal?agent={name}", local)[0], 200)
+        self.assertEqual(call("GET", "/api/state", local)[1]["terminals"], {name: "%0"})
+        self.assertEqual(call("POST", "/api/action", {**local, "Origin": "http://127.0.0.1:8765"}, keys)[1]["result"]["sent"], 1)
+        self.assertEqual(call("GET", "/api/terminal?agent=nobody", local)[0], 409)
+        sent = len(self.tmux.panes[0]["keys"])
+        # A page of another site whose name points at this computer (DNS rebinding), a tunnel or proxy, another computer.
+        for headers, ip in (({"Host": "evil.example:8765", "Origin": "http://evil.example:8765"}, "127.0.0.1"),
+                            ({**local, "Origin": "http://evil.example"}, "127.0.0.1"),
+                            ({**local, "X-Forwarded-For": "203.0.113.9"}, "127.0.0.1"),
+                            (local, "192.168.1.20")):
+            self.assertEqual(call("GET", f"/api/terminal?agent={name}", headers, ip=ip)[0], 403, headers)
+            code, body = call("POST", "/api/action", headers, keys, ip=ip)
+            self.assertEqual(code, 403, headers)
+        self.assertIn("an agent's terminal", body["error"])
+        self.assertEqual(len(self.tmux.panes[0]["keys"]), sent)
+
     def test_with_a_real_tmux_server(self):
         """The same commands against tmux itself, on a server of its own (never the user's)."""
         import shutil
@@ -865,6 +944,18 @@ class LaunchInTmux(unittest.TestCase):
         self.assertEqual({p["tile"] for p in v["panes"]}, {False})
         names = server._tmux("list-windows", "-t", "=river", "-F", "#{window_name}").splitlines()
         self.assertEqual(sorted(names), ["#1 first: a | b", "#2 second", "#4 fourth"])
+        # The page's terminal: read a pane and type into it (a shell here, never an agent).
+        core.register(self.c, "shop-aaaa")
+        server._tmux("send-keys", "-t", got["#1 first: a | b"]["pane"], "C-c")
+        self.assertEqual(server.agent_terminals(self.c), {"shop-aaaa": got["#1 first: a | b"]["pane"]})
+        server.terminal_keys(self.c, "shop-aaaa", [{"text": "printf '\\033[31m%s\\033[0m\\n' river-$((40+2))"}, {"key": "Enter"}])
+        for _ in range(100):
+            scr = server.terminal_screen(self.c, "shop-aaaa")
+            if "river-42" in scr["text"]:
+                break
+            time.sleep(0.1)
+        self.assertIn("\x1b[31mriver-42", scr["text"])  # the colours come with the text
+        self.assertEqual((scr["name"], scr["ended"], scr["width"] > 20), ("#1 first: a | b", True, True))
 
 
 class Watched(unittest.TestCase):
