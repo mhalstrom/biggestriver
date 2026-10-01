@@ -166,6 +166,7 @@ river done 12 --output "merged in abc123"
 river goal add website checkout --outcome "customers can pay" --done-when "a test order succeeds"
 river add "Payment form" --goal checkout         # tag an item with a goal (repeatable)
 river goal own checkout                          # own it: its agent items are reserved for you (goal_lease 4h)
+river goal edit checkout --shared                # no owner: several agents work on its items at the same time (--owned undoes it)
 river goal done checkout --result "live since 2026-10-02"
 river blockers 12                                # tree of what item 12 waits on
 river plan                                       # planner session: overview, open questions; plans, takes no work
@@ -412,8 +413,11 @@ blocker trees, the agent registry, capacity, settings, and the web page.
   tags (none, one, or several). `river go` gives an owner its goal's items,
   then what blocks them, then asks whether the goal is done; it gives an
   agent a free goal only when the best ready work serves it, and
-  `river go --role owner` takes the next free goal. The page shows goal cards
-  with owner and progress, and filters by goal.
+  `river go --role owner` takes the next free goal. A shared goal
+  (`river goal edit <name> --shared`) has no owner: `river go` gives it to no
+  agent, and its items stay open to every agent, so several agents work on it
+  at the same time. The page shows goal cards with owner and progress, and
+  filters by goal.
 - `river go` roles: owner, worker, unblocker, planner, deployer, idle. After
   `done`, an agent takes the next item at once (`auto_continue`). With no
   item, it runs `river wait`, which returns when work is pushed to it or gets
