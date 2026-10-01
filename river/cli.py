@@ -705,7 +705,8 @@ def build_parser():
     x = sub.add_parser("register", help="register this agent or person")
     x.add_argument("name"); x.add_argument("--human", action="store_true"); x.add_argument("--note", default="")
     x.add_argument("--session", help="the Claude Code session this agent runs in")
-    x = sub.add_parser("session", help="record the Claude Code session you run in"); x.add_argument("name")
+    x = sub.add_parser("session", help="record the Claude Code session you run in: river session \"<name>\" --ref <ref>")
+    x.add_argument("name", nargs="+", help="the name ListAgents prints; put it in quotes when it has spaces or starts with #")
     x.add_argument("--ref", help="the short code in brackets after the name in ListAgents")
     x = sub.add_parser("unregister", help="remove an agent that holds nothing"); x.add_argument("name")
     x = sub.add_parser("note", help="set your status note; with an agent, --holder-of, or --item: send a note")
@@ -1564,7 +1565,7 @@ def dispatch(conn, a, actor):
     if c == "session":
         if not actor:
             raise RiverError("set RIVER_AGENT or pass --as <name>")
-        return core.set_session(conn, actor, a.name, a.ref)
+        return core.set_session(conn, actor, " ".join(a.name), a.ref)
     if c == "unregister":
         return core.unregister(conn, a.name, actor)
     if c == "note":
@@ -1825,7 +1826,7 @@ def render_go(b):
     # Only Claude Code has session names and ListAgents; it sets CLAUDECODE in the commands it runs.
     if not b.get("session") and os.environ.get("CLAUDECODE"):
         out.append(f"Record your Claude Code session name once, so others can message this session "
-                   f"(ListAgents prints 'This session is <name> [<ref>]'): {r} session <name> --ref <ref>")
+                   f"(ListAgents prints 'This session is <name> [<ref>]'): {r} session \"<name>\" --ref <ref>")
     for n in b["projects"]:
         d = b["descriptions"].get(n)
         out.append(f"Project {n}: {d}" if d else f"Project {n}.")

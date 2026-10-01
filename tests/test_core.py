@@ -1286,8 +1286,11 @@ class Sessions(Base):
         self.assertIsNone(b["session"])  # a new agent: the briefing asks for it
         b = core.go(self.c, self.dir.name, actor=b["agent"], session="web-7")
         self.assertEqual(b["session"], "web-7")
-        with self.assertRaises(RiverError):
-            core.set_session(self.c, "ag", "two words")
+        for bad in ("", "  ", "x" * 129, "two\x07words", "name [not a ref!]"):
+            with self.assertRaises(RiverError):
+                core.set_session(self.c, "ag", bad)
+        r = core.set_session(self.c, "ag", "#581 A goal can be marked  no owner [412676]")  # a name river gave
+        self.assertEqual((r["session"], r["session_ref"]), ("#581 A goal can be marked no owner", "412676"))
         r = core.set_session(self.c, "ag", "toolscaledcore-90 [46d1d3]")
         self.assertEqual((r["session"], r["session_ref"]), ("toolscaledcore-90", "46d1d3"))
         r = core.set_session(self.c, "ag", "toolscaledcore-90", ref="922c83")

@@ -3901,11 +3901,12 @@ def set_session(conn, name, session, ref=None):
 
     Session names can repeat, so keep the short ref too: ListAgents prints 'name [ref]', and either
     form is accepted here ('name [ref]' in one string, or name plus ref)."""
-    m = re.match(r"^\s*(\S+)\s*(?:\[\s*([0-9A-Za-z]+)\s*\])?\s*$", session or "")
-    if not m or len(m.group(1)) > 128:
-        raise RiverError("a session name is one word of up to 128 characters, optionally with its ref: "
-                         "river session <name> --ref <ref>  (ListAgents prints 'This session is <name> [<ref>]')")
-    session, ref = m.group(1), (ref or m.group(2) or "").strip("[] ") or None
+    # A name can have spaces: river names the sessions it starts '#<id> <title>'.
+    m = re.match(r"^([^\[\]\x00-\x1f]+?)(?:\[\s*([0-9A-Za-z]+)\s*\])?$", " ".join((session or "").split()))
+    if not m or len(m.group(1).strip()) > 128:
+        raise RiverError("a session name is one line of up to 128 characters, optionally with its ref: "
+                         "river session \"<name>\" --ref <ref>  (ListAgents prints 'This session is <name> [<ref>]')")
+    session, ref = m.group(1).strip(), (ref or m.group(2) or "").strip("[] ") or None
     if ref and not re.match(r"^[0-9A-Za-z]{1,32}$", ref):
         raise RiverError("a session ref is the short code in brackets that ListAgents prints, such as b5e2e0")
     with tx(conn):

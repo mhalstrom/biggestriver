@@ -15,7 +15,7 @@ Run `river go` in the project folder and follow the briefing. It names you,
 picks your role (owner, worker, unblocker, planner, deployer, idle), claims
 an item when there is one, and ends with the command to run next. Pass `--as <your-name>` on
 every later command. When the briefing asks, record your Claude Code session
-name once (`river --as <your-name> session <name> --ref <ref>`; ListAgents
+name once (`river --as <your-name> session "<name>" --ref <ref>`; ListAgents
 prints `This session is <name> [<ref>]`, and names can repeat, so keep the ref), so
 people and agents can message your session directly. After `river done`, run `river --as <your-name> go` again
 at once, in the same turn: do not stop to report between items. When go gives
