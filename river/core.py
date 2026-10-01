@@ -2841,6 +2841,7 @@ def annotate(conn):
             fed_by=sorted(feeds[i]),
             conflicts=sorted(c for c in conflicts[i] if is_open[c]),
             busy_conflicts=sorted(busy),
+            conflict_holders=sorted({items[c]["assignee"] or "" for c in busy}),
             unblocks_count=len(deps_i),
             effective_priority=eff,
             priority_from=source,
@@ -2927,8 +2928,16 @@ def history(conn, actor, limit=20):
     return out
 
 
-def ready_list(conn, project=None, unblocks=None, doer_for=None, ann=None, near=None, mine=None):
-    """Ready items drawn from the area the agent chooses.
+def ready_for(a, actor):
+    """Whether an agent can take an item now: it is ready, or only conflicts with items the agent holds
+    itself keep it back. A conflict keeps two agents out of the same files; one agent edits them in turn."""
+    return a["ready"] or bool(actor and a["status"] == "open" and not a["open_blockers"] and not a["blocked_reason"]
+                              and a["conflict_holders"] == [actor])
+
+
+def ready_list(conn, project=None, unblocks=None, doer_for=None, ann=None, near=None, mine=None, actor=None):
+    """Ready items drawn from the area the agent chooses. With `actor`: also the items that only conflict
+    with what that agent holds itself (ready_for).
 
     The agent picks the area where it holds context: one or more projects
     (`project`, a name or comma list), the prerequisites of an item or project
@@ -2937,7 +2946,7 @@ def ready_list(conn, project=None, unblocks=None, doer_for=None, ann=None, near=
     is every project.
     """
     ann = ann or annotate(conn)
-    pool = [a for a in ann.values() if a["ready"] and not a["project_archived"]]
+    pool = [a for a in ann.values() if ready_for(a, actor) and not a["project_archived"]]
     if project:
         names = [n.strip() for n in str(project).split(",") if n.strip()]
         for n in names:
@@ -4171,10 +4180,10 @@ def next_item(conn, project=None, unblocks=None, claim=False, actor=None, limit=
 
     if not claim:
         return [{k: v for k, v in a.items() if k != 'sort_key'}
-                for a in takeable(ready_list(conn, project, unblocks, doer_for, near=near, mine=who_mine))[:limit]]
+                for a in takeable(ready_list(conn, project, unblocks, doer_for, near=near, mine=who_mine, actor=actor))[:limit]]
     with tx(conn):
         _sweep(conn)
-        pool = takeable(ready_list(conn, project, unblocks, doer_for, near=near, mine=who_mine))
+        pool = takeable(ready_list(conn, project, unblocks, doer_for, near=near, mine=who_mine, actor=actor))
         if not pool:
             return []
         _claim_row(conn, pool[0]["id"], actor)
@@ -4196,7 +4205,7 @@ def claim(conn, item_id, actor=None):
     with tx(conn):
         _sweep(conn)
         a = annotate(conn)[_item(conn, item_id)["id"]]
-        if not a["ready"]:
+        if not ready_for(a, actor):
             why = (f"waits on {', '.join('#' + str(b) for b in a['open_blockers'])}" if a["open_blockers"]
                    else a["blocked_text"] if a["blocked_reason"]
                    else f"conflicts with {', '.join('#' + str(b) for b in a['busy_conflicts'])}, which is in progress "
@@ -6090,7 +6099,7 @@ def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None
         if parent["status"] == "held":
             ann = annotate(conn)
             mine = sorted((ann[b] for b in _open_prereqs(conn, parent["id"])
-                           if ann[b]["ready"] and ann[b]["reserved_for"] == actor), key=lambda a: a["sort_key"])
+                           if ready_for(ann[b], actor) and ann[b]["reserved_for"] == actor), key=lambda a: a["sort_key"])
             if mine:
                 try:
                     item = claim(conn, mine[0]["id"], actor)
@@ -6188,7 +6197,7 @@ def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None
                                    f"is ready for an agent now (river blockers {f['id']}).")
     if role in (None, "worker"):
         ann = annotate(conn)
-        pushed = sorted((a for a in ann.values() if a["reserved_for"] == actor and a["reserved_until"] and a["ready"]),
+        pushed = sorted((a for a in ann.values() if a["reserved_for"] == actor and a["reserved_until"] and ready_for(a, actor)),
                         key=lambda a: a["sort_key"])
         for a in pushed:
             try:
@@ -6261,7 +6270,7 @@ def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None
         if g is not None:
             gb = brief["goal"] = _goal_brief(conn, g["name"], actor)
             ann = annotate(conn)
-            tagged = sorted((a for a in ann.values() if g["name"] in a["goals"] and a["ready"] and a["doer"] != "human"
+            tagged = sorted((a for a in ann.values() if g["name"] in a["goals"] and ready_for(a, actor) and a["doer"] != "human"
                              and a["kind"] not in ("deploy", "review") and a["reserved_for"] in (None, actor)), key=lambda a: a["sort_key"])
             for a in tagged:  # (1) the next ready item of the goal
                 try:

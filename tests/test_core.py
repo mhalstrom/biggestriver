@@ -586,9 +586,20 @@ class Kinds(Base):
         self.assertFalse(ann[whole]["ready"])
         self.assertEqual(ann[whole]["busy_conflicts"], [api])
         self.assertTrue(ann[docs]["ready"])
-        with self.assertRaises(RiverError):
+        with self.assertRaisesRegex(RiverError, f"conflicts with #{api}, which is in progress"):
             core.claim(self.c, whole, "bo")
         self.assertEqual([a["id"] for a in core.ready_list(self.c)], [docs])
+        # The agent that holds the other item can take it: a conflict keeps two agents apart, not one (#600).
+        self.assertEqual([a["id"] for a in core.ready_list(self.c, actor="ag")], [whole, docs])
+        self.c.execute("INSERT OR REPLACE INTO settings(scope,key,value) VALUES ('global','max_leases','2')")
+        core.push(self.c, whole, "ag", actor="bo")
+        self.assertEqual(core.accept(self.c, whole, "ag")["assignee"], "ag")
+        core.release(self.c, whole, actor="ag")
+        third = core.item_add(self.c, "a", "api tests", touches=["src/api.py", "README.md"])["id"]
+        core.claim(self.c, docs, "bo")
+        with self.assertRaisesRegex(RiverError, "which is in progress"):
+            core.claim(self.c, third, "ag")  # bo holds one of the items it conflicts with
+        core.release(self.c, docs, actor="bo")
         core.done(self.c, api, "ok", "ag")
         self.assertTrue(core.annotate(self.c)[whole]["ready"])
 

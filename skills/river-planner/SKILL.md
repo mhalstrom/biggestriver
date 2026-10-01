@@ -179,6 +179,8 @@ river replanned <id> [--note "..."]   # clear the replan mark after you split or
 
 An item is ready when it is open, has no outside blocker, everything it
 waits on is done or dropped, and no item it conflicts with is in progress.
+A conflict keeps two agents apart: the agent that holds the other item can
+take the item (it edits the same files in sequence).
 River adds a conflict by itself when two open items' `--touches` overlap (the
 same file, or a directory and a file in it); change the touches and river
 removes it. Use `feeds` when the later item needs a name, path, or signature
