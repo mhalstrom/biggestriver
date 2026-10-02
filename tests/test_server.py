@@ -4,6 +4,7 @@ import re
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from river import core, server
 from river.core import RiverError
@@ -757,8 +758,11 @@ class LaunchInTmux(unittest.TestCase):
         self.c = core.connect()
         core.project_add(self.c, "shop", path=self.dir.name)
         self.tmux = server.TMUX_RUNNER = FakeTmux()
+        self.in_tmux = os.environ.pop("TMUX", None)  # the tests can run in a tmux pane (an agent river started there)
 
     def tearDown(self):
+        if self.in_tmux is not None:
+            os.environ["TMUX"] = self.in_tmux
         core.PLATFORM, server.TMUX_RUNNER = self.platform, None
         self.c.close()
         os.environ.pop("RIVER_DB", None)
@@ -815,6 +819,8 @@ class LaunchInTmux(unittest.TestCase):
         self.assertIn(["select-window", "-t", "@0"], self.tmux.calls[-3:])
         self.assertEqual(v["show"][1:4], ["attach-session", "-t", "=river"])
         self.assertIn("Ctrl-b then: an arrow", v["show"][-1])
+        with mock.patch.dict(os.environ, {"TMUX": "/tmp/tmux-501/default,1,0"}):  # run from a tmux pane: no attach inside tmux
+            self.assertEqual(server.tmux_view(None)["show"][1:4], ["switch-client", "-t", "=river"])
         # While the agents are side by side, a new agent joins them; with no space left it gets its own window.
         core.item_add(self.c, "shop", "work 3")
         server.launch_agent(self.c)
