@@ -11,6 +11,7 @@ import { chooseLaunch, launchArgs } from "./components/launchDialog.js";
 import { managerHtml, queueHtml, agentButtons, chooseStop } from "./components/agentActions.js";
 import { openTerminal } from "./components/terminalDialog.js";
 import { makePanZoom } from "./components/panZoom.js";
+import { graphItems, graphText, GRAPH_LIMITS, GRAPH_MAX } from "./components/graphText.js";
 import { folderForm, wireFolderForms } from "./components/folderForm.js";
 hooks.refresh = refresh;
 let S = null, openItem = null, tab = "board", graphSig = "";
@@ -392,33 +393,23 @@ async function renderGraph(force) {
   renderGraphSide(withDone);
   $("#graphTitle").textContent = proj ? "Dependency graph: " + proj : "Dependency graph: all projects";
   const items = S.items.filter(i => (withDone || !["done", "dropped"].includes(i.status)));
-  const ids = new Set(items.map(i => i.id));
   const G = goalSel();
-  const base = items.filter(i => (!proj || i.project === proj) && inGoal(i));
-  const show = proj || G ? new Set(base.flatMap(i => [i.id, ...i.waits_on, ...i.unblocks]).filter(x => ids.has(x))) : ids;
+  const { show, total, hidden } = graphItems(items, proj || G ? items.filter(i => (!proj || i.project === proj) && inGoal(i)) : null);
   const sig = JSON.stringify([proj, G, withDone, items.filter(i => show.has(i.id)).map(i => [i.id, i.status, i.ready, i.waits_on])]);
   if (!force && sig === graphSig) return;
   graphSig = sig;
-  const lab = (s) => { const t = s.replace(/["<>#|{}\[\]]/g, " "); if (t.length <= 60) return t; const cut = t.slice(0, 60); return cut.slice(0, cut.lastIndexOf(" ") > 30 ? cut.lastIndexOf(" ") : 60) + "…"; };
-  let g = "flowchart LR\n";
-  for (const p of S.projects) {
-    const mine = items.filter(i => i.project === p.name && show.has(i.id));
-    if (!mine.length) continue;
-    g += `subgraph P${p.id}["${lab(p.name)}"]\n`;
-    for (const i of mine) g += `  N${i.id}["#${i.id} ${lab(i.title)}"]\n`;
-    g += "end\n";
-  }
-  for (const i of items) if (show.has(i.id)) for (const b of i.waits_on) if (show.has(b)) g += `N${b} --> N${i.id}\n`;
-  g += "classDef ready fill:#dcf5e3,stroke:#1a7f37,color:#0b3d1b\nclassDef prog fill:#fff3c4,stroke:#9a6700,color:#3d2a00\nclassDef wait fill:#eceff2,stroke:#8c959f,color:#24292f\nclassDef done fill:#f0f1f3,stroke:#c4c9cf,color:#8c959f\nclassDef human stroke:#8250df,stroke-width:3px\n";
-  for (const i of items) if (show.has(i.id)) {
-    const cls = ["done", "dropped"].includes(i.status) ? "done" : ["in_progress", "held"].includes(i.status) ? "prog" : i.ready ? "ready" : "wait";
-    g += `class N${i.id} ${cls}\n`;
-    if (i.doer === "human") g += `class N${i.id} human\n`;
-    g += `click N${i.id} call riverOpen(${i.id})\n`;
+  const note = $("#graphNote");
+  note.textContent = hidden ? `The graph has ${total} items, more than the ${GRAPH_MAX} it draws at one time: ${hidden} finished items that are not next to an open item are left out.` : "";
+  note.classList.toggle("hidden", !hidden);
+  const { text, nodes, edges } = graphText(S.projects, items, show);
+  // Above its limits Mermaid draws its own error picture and reports no error: say it here, with the counts.
+  if (text.length > GRAPH_LIMITS.maxTextSize || edges > GRAPH_LIMITS.maxEdges) {
+    graphView.show(`<div class="muted">The graph is too large to draw: ${nodes} items and ${edges} links. Choose a project or a goal.</div>`, null);
+    return;
   }
   try {
     const elk = await loadElk();
-    const { svg, bindFunctions } = await mermaid.render("g" + Date.now(), (elk ? "---\nconfig:\n  layout: elk\n---\n" : "") + g);
+    const { svg, bindFunctions } = await mermaid.render("g" + Date.now(), (elk ? "---\nconfig:\n  layout: elk\n---\n" : "") + text);
     // The same project, goal and done choice keeps the zoom and position across refreshes.
     const stage = graphView.show(svg, JSON.stringify([proj, G, withDone]));
     bindFunctions && bindFunctions(stage);
@@ -888,7 +879,7 @@ function applyTheme() {
   const t = themeChoice(), root = document.documentElement;
   if (t === "system") delete root.dataset.theme; else root.dataset.theme = t;
   const dark = t === "dark" || (t === "system" && darkQuery.matches);
-  if (window.mermaid) mermaid.initialize({ startOnLoad: false, securityLevel: "loose", theme: dark ? "dark" : "default", flowchart: { useMaxWidth: true } });
+  if (window.mermaid) mermaid.initialize({ startOnLoad: false, securityLevel: "loose", theme: dark ? "dark" : "default", flowchart: { useMaxWidth: true }, ...GRAPH_LIMITS });
   if (S) renderGraph(true);
 }
 $("#theme").value = themeChoice();

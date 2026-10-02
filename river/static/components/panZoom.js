@@ -17,7 +17,14 @@ export function makePanZoom(el) {
   const stage = el.querySelector(".pz-stage");
   let v = { x: 0, y: 0, k: 1 }, key = null, size = { w: 1, h: 1 };
   const apply = () => { stage.style.transform = `translate(${v.x}px, ${v.y}px) scale(${v.k})`; };
-  const clampK = (k) => Math.min(MAX, Math.max(MIN, k));
+  // The scale at which the whole drawing shows. A drawing of many hundred boxes needs less than MIN,
+  // so the lower limit of the zoom follows it.
+  const PAD = 16;
+  const fitK = () => {
+    const W = el.clientWidth - 2 * PAD, H = el.clientHeight - 2 * PAD;
+    return W > 0 && H > 0 ? Math.min(1, W / size.w, H / size.h) : MIN;  // a hidden box has no size
+  };
+  const clampK = (k) => Math.min(MAX, Math.max(Math.min(MIN, fitK()), k));
   // Zoom by factor f, keeping the point (px, py) of the box where it is.
   function zoomAt(f, px, py) {
     const k = clampK(v.k * f);
@@ -25,9 +32,8 @@ export function makePanZoom(el) {
     apply();
   }
   function fit() {
-    const W = el.clientWidth, H = el.clientHeight, pad = 16;
-    const k = clampK(Math.min(1, (W - 2 * pad) / size.w, (H - 2 * pad) / size.h));
-    v = { k, x: (W - size.w * k) / 2, y: Math.max(pad, (H - size.h * k) / 2) };
+    const W = el.clientWidth, H = el.clientHeight, k = fitK();
+    v = { k, x: (W - size.w * k) / 2, y: Math.max(PAD, (H - size.h * k) / 2) };
     apply();
   }
 
