@@ -126,6 +126,13 @@ DEFAULT_SETTINGS = {
     # Claude Code and Codex; add the words of another CLI or a new version with | (river config set).
     "prompt_pattern": r"Do you (want to|trust)|Would you like to|[Ee]nter to confirm|[❯›]\s*\d+\.\s",
     "prompt_wait": "20s",
+    # An agent that ended its turn at its CLI's prompt runs no river command, so a note, an answer, or a queue
+    # entry for it waits unread. river serve looks at each agent's tmux pane every notify_interval: when the agent
+    # has news that came after its last river command, and its pane shows the agent CLI with the same screen for
+    # wake_after and no prompt (prompt_pattern), river types one line into the pane ("river: note #12 from ...
+    # for you: run river --as <you> inbox"), which starts the agent's next turn. Each message wakes once.
+    # A message that reached the session through native_message needs no wake. 0s turns this off.
+    "wake_after": "1m",
     "manage_every": "30m",
     # river cleanup lists a ready item that nobody claimed for this long.
     "stale_after": "14d",
@@ -313,7 +320,8 @@ CREATE TABLE IF NOT EXISTS queue_entries (
   added_by      TEXT,
   created_at    TEXT NOT NULL,
   delivered_at  TEXT,
-  native_status TEXT                          -- native delivery: sent, failed: <why>, or no native channel
+  native_status TEXT,                         -- native delivery: sent, failed: <why>, or no native channel
+  woken_at      TEXT                          -- river typed a line into the agent's idle tmux pane for it
 );
 CREATE UNIQUE INDEX IF NOT EXISTS queue_item ON queue_entries(item_id) WHERE item_id IS NOT NULL;
 
@@ -380,7 +388,8 @@ CREATE TABLE IF NOT EXISTS messages (
   read_at     TEXT,
   closed_at   TEXT,
   nudged_at   TEXT,
-  native_status TEXT
+  native_status TEXT,
+  woken_at    TEXT
 );
 
 -- Something needs a person: a human item became ready, or a question or alert went to a human.
@@ -703,6 +712,9 @@ def _migrate(conn):
         conn.execute("ALTER TABLE queue_entries ADD COLUMN native_status TEXT")
     if "native_status" not in {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}:
         conn.execute("ALTER TABLE messages ADD COLUMN native_status TEXT")
+    for table in ("messages", "queue_entries"):
+        if "woken_at" not in {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN woken_at TEXT")
     if "synced_at" not in {r["name"] for r in conn.execute("PRAGMA table_info(item_refs)")}:
         conn.execute("ALTER TABLE item_refs ADD COLUMN synced_at TEXT")
     if "reserved_for" not in icols:

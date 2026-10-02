@@ -737,6 +737,14 @@ PROMPT_LINES = 15  # a prompt is at the end of the screen: text further up is wh
 _ESCAPES = None
 
 
+def _plain(text):
+    """A pane's text without its colours and other escape sequences."""
+    import re
+    global _ESCAPES
+    _ESCAPES = _ESCAPES or re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]")
+    return _ESCAPES.sub("", text)
+
+
 def watch_prompts(conn):
     """One look at every agent's tmux pane (the notify loop of river serve, every notify_interval): when one of
     the last lines matches the setting prompt_pattern and those lines stay the same for prompt_wait, each
@@ -745,8 +753,6 @@ def watch_prompts(conn):
     the alert read, which closes the event. A prompt that stays on the screen alerts once. Returns
     {"waiting": {agent: line}, "told": [agents], "closed": [message ids]}."""
     import re
-    global _ESCAPES
-    _ESCAPES = _ESCAPES or re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]")
     pattern = core.setting(conn, "prompt_pattern").strip()
     waiting = {}
     if pattern:
@@ -758,7 +764,7 @@ def watch_prompts(conn):
                 continue  # the pane closed since the list
             if screen["ended"]:
                 continue  # a shell: what the agent printed stays, and nobody waits there
-            tail = _prompt_tail(_ESCAPES.sub("", screen["text"]))
+            tail = _prompt_tail(_plain(screen["text"]))
             line = next((x.strip() for x in tail if rx.search(x)), None)
             if line:
                 waiting[agent] = (f"{core.PROMPT_NOTE}: {line[:200]}", "\n".join(tail))
@@ -793,6 +799,96 @@ def watch_prompts(conn):
         if told or closed:
             core.sync_needs_you(conn)
     return {"waiting": {a: b[len(core.PROMPT_NOTE) + 2:] for a, (b, _) in waiting.items()}, "told": told, "closed": closed}
+
+
+# An agent that ended its turn at its CLI's prompt runs no river command, so news for it (a note, an answer, a
+# queue entry) stays unread until a person looks. WAKES remembers, for each agent with news, the screen of its
+# pane and since when that screen has not changed.
+WAKES = {}
+
+
+def _news(conn):
+    """{agent: {"messages": [rows], "entries": [rows]}}: the unread messages and queue entries for each agent
+    that came after its last river command and did not wake it yet. A message that reached the session through
+    native_message is not news here."""
+    news = {}
+    for a in conn.execute("SELECT name, last_seen FROM agents WHERE kind='ai' AND stop_at IS NULL"):
+        msgs = [dict(r) for r in conn.execute(
+            f"SELECT m.id, m.kind, m.from_agent FROM messages m WHERE {core._TO_ME} AND m.from_agent<>? "
+            f"AND m.read_at IS NULL AND m.woken_at IS NULL AND m.created_at > ? "
+            f"AND (m.native_status IS NULL OR m.native_status<>'sent') ORDER BY m.id",
+            (a["name"], a["name"], a["name"], a["last_seen"]))]
+        entries = [dict(r) for r in conn.execute(
+            "SELECT id, kind FROM queue_entries WHERE agent=? AND delivered_at IS NULL AND woken_at IS NULL "
+            "AND created_at > ? AND (native_status IS NULL OR native_status<>'sent') ORDER BY id", (a["name"], a["last_seen"]))]
+        if msgs or entries:
+            news[a["name"]] = {"messages": msgs, "entries": entries, "last_seen": a["last_seen"]}
+    return news
+
+
+def _wake_line(agent, n):
+    """The line river types into an idle agent's pane: what came, and the command that shows it."""
+    what = [f"{m['kind']} #{m['id']} from {m['from_agent']}" for m in n["messages"][:3]]
+    if len(n["messages"]) > 3:
+        what.append(f"{len(n['messages']) - 3} more")
+    if n["entries"]:
+        what.append("an entry in your queue" if len(n["entries"]) == 1 else f"{len(n['entries'])} entries in your queue")
+    run = (f"river --as {agent} inbox" + (f", then river --as {agent} go" if n["entries"] else "")) if n["messages"] \
+        else f"river --as {agent} go"
+    return f"river: new for you: {', '.join(what)}. Run {run}"
+
+
+def wake_idle(conn):
+    """One look at the panes of the agents with news (the notify loop of river serve, every notify_interval):
+    when the pane shows the agent CLI (not a shell) with no prompt (prompt_pattern) and the same screen for
+    wake_after, and the agent ran no river command for wake_after, river types one line into the pane and
+    Enter: the agent's next turn begins with it. Each message and queue entry wakes once. A pane that waits on a
+    permission prompt gets nothing: the prompt watch tells the person. Returns {"woke": {agent: line}}."""
+    import re
+    after = core.parse_duration(core.setting(conn, "wake_after"))
+    news = _news(conn) if after.total_seconds() else {}
+    for agent in [a for a in WAKES if a not in news]:
+        del WAKES[agent]
+    if not news:
+        return {"woke": {}}  # the usual pass: no tmux command at all
+    terminals = agent_terminals(conn)
+    pattern = core.setting(conn, "prompt_pattern").strip()
+    rx = re.compile(pattern) if pattern else None
+    t, woke = core.now(), {}
+    for agent, n in sorted(news.items()):
+        pane = terminals.get(agent)
+        if not pane:
+            WAKES.pop(agent, None)
+            continue
+        try:
+            screen = _pane_screen(agent, pane)
+        except RiverError:
+            continue  # the pane closed since the list
+        text = _plain(screen["text"])
+        if screen["ended"] or (rx and any(rx.search(x) for x in _prompt_tail(text))):
+            WAKES.pop(agent, None)  # a shell, or a prompt that a person answers
+            continue
+        st = WAKES.get(agent)
+        if not st or st["sig"] != text:
+            WAKES[agent] = {"sig": text, "since": t}
+            continue
+        if t - st["since"] < after or t - core.parse_iso(n["last_seen"]) < after:
+            continue
+        line = _wake_line(agent, n)
+        _tmux("send-keys", "-t", pane, "-l", "--", line)
+        _tmux("send-keys", "-t", pane, "Enter")
+        with core.tx(conn):
+            stamp = core.iso(t)
+            for m in n["messages"]:
+                conn.execute("UPDATE messages SET woken_at=? WHERE id=?", (stamp, m["id"]))
+            for e in n["entries"]:
+                conn.execute("UPDATE queue_entries SET woken_at=? WHERE id=?", (stamp, e["id"]))
+            held = conn.execute("SELECT id FROM items WHERE assignee=? AND status IN ('in_progress','held') ORDER BY id",
+                                (agent,)).fetchone()
+            core._event(conn, held and held["id"], "river", f"woke {agent} at its prompt: {line}")
+        WAKES.pop(agent, None)
+        woke[agent] = line
+    return {"woke": woke}
 
 
 def terminal_keys(conn, agent, keys, who=None):
