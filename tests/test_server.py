@@ -1751,6 +1751,133 @@ class StaticFiles(unittest.TestCase):
         self.assertEqual(out["code"], 404)
 
 
+def _chrome():
+    """A Chrome (or Chromium, or Edge) on this computer, or None. RIVER_CHROME names one."""
+    import shutil
+    for c in (os.environ.get("RIVER_CHROME"), "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+              "/Applications/Chromium.app/Contents/MacOS/Chromium",
+              "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+              *(shutil.which(n) for n in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"))):
+        if c and os.path.exists(c):
+            return c
+    return None
+
+
+class TerminalDialogLayout(unittest.TestCase):
+    """The Terminal dialog has its size from the browser window. The columns and rows of the tmux pane do not
+    change it: the pane's text scrolls inside the dialog, and the view ends at the prompt."""
+
+    # Each screen is one answer of /api/terminal: [name, columns, rows, rows with text, the cursor's row].
+    SCREENS = [["narrow", 40, 10, 10, 9], ["wide", 400, 10, 10, 9], ["tall", 80, 300, 300, 299],
+               ["small", 20, 3, 3, 2], ["tall, text at the top", 80, 300, 5, 4]]
+    PAGE = """<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/app.css">
+<input id="actor" value="mark"><div id="toast"></div>
+<script type="module">
+const post = (o) => navigator.sendBeacon("/result", JSON.stringify(o));
+try {
+  const real = window.fetch;
+  window.fetch = (u, o) => (String(u).startsWith("/api/") ? new Promise(() => {}) : real(u, o));
+  const t = await import("/components/terminalDialog.js");
+  t.openTerminal("worker-1");
+  const box = document.querySelector("#termDlg .box"), scr = document.querySelector("#termScreen");
+  const row = (i, cols) => (String(i) + " " + "x".repeat(cols)).slice(0, cols);
+  const screen = ([name, cols, rows, used, cursor], mark = "") => ({ name, pane: "%1", width: cols, height: rows, cursor: [0, cursor],
+    text: Array.from({ length: rows }, (_, i) => (i < used - 1 ? mark + row(i, cols) : i === used - 1 ? "PROMPT>" : "")).join("\\n") + "\\n" });
+  const measure = (name) => { const b = box.getBoundingClientRect(), s = scr.getBoundingClientRect(); return { name,
+    box: [b.width, b.height], screen: [s.width, s.height], window: [innerWidth, innerHeight], inWindow: b.left >= 0 && b.top >= 0 && b.right <= innerWidth && b.bottom <= innerHeight,
+    wider: scr.scrollWidth - scr.clientWidth, taller: scr.scrollHeight - scr.clientHeight, toEnd: scr.scrollHeight - scr.clientHeight - scr.scrollTop,
+    rows: scr.textContent.split("\\n").length, last: scr.textContent.split("\\n").pop() }; };
+  const out = [measure("empty")];
+  for (const s of SCREENS) { t.showScreen(screen(s)); out.push(measure(s[0])); }
+  // The person scrolls up in a tall pane: the next screen stays there. A key shows the end again.
+  t.showScreen(screen(SCREENS[2])); scr.scrollTop = 0; t.showScreen(screen(SCREENS[2], "new ")); out.push(measure("scrolled up"));
+  scr.dispatchEvent(new KeyboardEvent("keydown", { key: "a" })); out.push(measure("after a key"));
+  post({ out, used: [t.usedRows("a\\nb\\n\\u001b[0m  \\n\\n"), t.usedRows("a\\n\\n\\n\\n", 2)] });
+} catch (e) { post({ error: String(e && e.stack || e) }); }
+</script>"""
+
+    def test_the_styles_take_no_size_from_the_text(self):
+        css = (server.STATIC / "app.css").read_text()
+        rule = lambda sel: re.search(re.escape(sel) + r" \{([^}]*)\}", css).group(1)
+        box, term = rule("#termDlg .box"), rule("#termDlg .term")
+        self.assertRegex(box, r"(?<![-\w])width: min\(\d+px, 100%\)")
+        self.assertIn("height: 100%", box)
+        for want in ("flex: 1 1 0", "min-width: 0", "min-height: 0", "overflow: auto", "white-space: pre;", "font: 12px/"):
+            self.assertIn(want, term)
+        for sized_by_text in ("max-height", "ch,", "em;"):
+            self.assertNotIn(sized_by_text, term)
+        js = (server.STATIC / "components" / "terminalDialog.js").read_text()
+        self.assertNotRegex(js, r"style\.(width|height|fontSize)|resize-pane|resize-window")
+
+    @unittest.skipUnless(_chrome(), "no Chrome on this computer (RIVER_CHROME names one)")
+    def test_the_dialog_keeps_its_size_for_each_pane_size(self):
+        import subprocess
+        import threading
+        from http.server import BaseHTTPRequestHandler
+        got, result = threading.Event(), {}
+        page = self.PAGE.replace("SCREENS", json.dumps(self.SCREENS)).encode()
+
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def _answer(self, code, body=b"", ctype="text/plain"):
+                self.send_response(code)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                found = (page, "text/html; charset=utf-8") if self.path == "/" else server.static_file(self.path)
+                self._answer(200, *found) if found else self._answer(404)
+
+            def do_POST(self):
+                result.update(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+                self._answer(204)
+                got.set()
+
+        try:
+            httpd = server._Server(("127.0.0.1", 0), H)
+        except PermissionError:
+            self.skipTest("no local port here (a sandbox)")
+        httpd.daemon_threads = True
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        with tempfile.TemporaryDirectory() as profile:
+            chrome = subprocess.Popen(
+                [_chrome(), "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
+                 "--disable-extensions", "--window-size=1000,700", f"--user-data-dir={profile}",
+                 f"http://127.0.0.1:{httpd.server_address[1]}/"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                ran = got.wait(60)
+            finally:
+                chrome.kill()
+                chrome.wait()
+                httpd.shutdown()
+                httpd.server_close()
+        if not ran:
+            self.skipTest("Chrome did not run the page here")
+        self.assertNotIn("error", result, result.get("error"))
+        self.assertEqual(result["used"], ["a\nb", "a\n\n"])
+        by = {m["name"]: m for m in result["out"]}
+        first = by["empty"]
+        self.assertTrue(first["inWindow"], first)
+        self.assertGreater(first["screen"][1], 300, first)  # the screen fills the box
+        for name, m in by.items():
+            self.assertEqual((m["box"], m["screen"]), (first["box"], first["screen"]), name)
+        # Text wider or taller than the screen scrolls inside it; lines do not wrap.
+        self.assertEqual((by["narrow"]["wider"], by["narrow"]["taller"], by["narrow"]["rows"]), (0, 0, 10))
+        self.assertGreater(by["wide"]["wider"], 1000)
+        self.assertEqual((by["wide"]["taller"], by["wide"]["rows"]), (0, 10))
+        # The end of a tall pane (the prompt) is in view; empty rows under the prompt do not push it out.
+        self.assertGreater(by["tall"]["taller"], 1000)
+        for name in ("tall", "after a key"):
+            self.assertLess(by[name]["toEnd"], 1, name)
+            self.assertEqual(by[name]["last"], "PROMPT>")
+        self.assertEqual((by["tall, text at the top"]["taller"], by["tall, text at the top"]["rows"]), (0, 5))
+        self.assertGreater(by["scrolled up"]["toEnd"], 1000)
+
+
 class ServerBind(unittest.TestCase):
     def test_the_server_starts_without_a_dns_lookup_of_its_name(self):
         # HTTPServer asks DNS for the full host name; on a Mac with a slow network that hung for minutes.

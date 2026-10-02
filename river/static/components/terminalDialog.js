@@ -1,6 +1,8 @@
 // An agent's terminal on the page: what its tmux pane shows (agents started with launch_in tmux), read
 // again twice a second while the dialog is open, and the keys a person types there go to the pane. So a
 // prompt that waits in the agent's terminal can be read and answered from the page.
+// The dialog has its own size (app.css): the pane's columns and rows never change it. A pane wider or taller
+// than the screen scrolls inside it, and the view stays at the end of the pane's text, where the prompt is.
 // Server: GET /api/terminal?agent=<name>, and the op terminal_keys; both answer this computer only.
 import { $, esc, actor, toast } from "../lib.js";
 import { makeDialog } from "./dialog.js";
@@ -17,6 +19,8 @@ function color256(n) {
   return `rgb(${step(Math.floor(c / 36))},${step(Math.floor(c / 6) % 6)},${step(c % 6)})`;
 }
 
+const SEQ = /\x1b\[([0-9;:]*)m|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-9;:?<=>]*[ -\/]*[@-~]|\x1b[()][0-9A-Za-z]|\x1b./g;
+
 // Text with terminal colour sequences (tmux capture-pane -e) as HTML. Sequences that are not colours go.
 // Safe to put in the page: every piece of text goes through esc, and a style holds only a colour made here.
 export function ansiToHtml(text) {
@@ -30,7 +34,7 @@ export function ansiToHtml(text) {
       .filter(Boolean).join(";");
     out += css ? `<span style="${css}">${esc(chunk)}</span>` : esc(chunk);
   };
-  const re = /\x1b\[([0-9;:]*)m|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-9;:?<=>]*[ -\/]*[@-~]|\x1b[()][0-9A-Za-z]|\x1b./g;
+  const re = new RegExp(SEQ);
   for (let m; (m = re.exec(text));) {
     flush(text.slice(at, m.index));
     at = re.lastIndex;
@@ -58,6 +62,15 @@ export function ansiToHtml(text) {
   return out;
 }
 
+// The pane's rows to the last one with text, or to the cursor's row when that is further down. A pane taller
+// than its text ends in empty rows; without them the end of the view is the prompt.
+export function usedRows(text, cursorRow = 0) {
+  const rows = String(text).split("\n");
+  let n = rows.length;
+  while (n > cursorRow + 1 && !rows[n - 1].replace(SEQ, "").trim()) n--;
+  return rows.slice(0, n).join("\n");
+}
+
 // A key press as what the server sends to tmux: {key: <tmux name>}, {text: <the character>}, or null
 // (the browser keeps it: Command shortcuts, a modifier alone).
 const NAMED = { Enter: "Enter", Escape: "Escape", Backspace: "BSpace", Delete: "DC", ArrowUp: "Up", ArrowDown: "Down",
@@ -71,7 +84,7 @@ export function keyOf(e) {
   return null;
 }
 
-let dlg = null, agent = null, timer = null, shown = null, pending = [], sending = false;
+let dlg = null, agent = null, timer = null, shown = null, toEnd = true, pending = [], sending = false;
 
 function el() {
   let d = $("#termDlg");
@@ -115,6 +128,8 @@ function el() {
 async function send(k) {
   const last = pending[pending.length - 1];
   if (k.text && last && last.text && last.text.length + k.text.length <= 4000) last.text += k.text; else pending.push({ ...k });
+  const scr = $("#termScreen");
+  scr.scrollTop = scr.scrollHeight;  // a key goes to the prompt: show it again after the person scrolled away
   if (sending) return;
   sending = true;
   try {
@@ -128,6 +143,20 @@ async function send(k) {
   clearTimeout(timer); tick();
 }
 
+// Draw one answer of /api/terminal. The view follows the end of the text while the person is there; after
+// the person scrolled up it stays there. Sideways it stays where it is.
+export function showScreen(j) {
+  $("#termNote").textContent = `${j.name || j.pane} · ${j.width}×${j.height}` + (j.ended ? " · the agent has ended: a shell runs here" : "");
+  if (j.text === shown) return;
+  const scr = $("#termScreen");
+  if (String(window.getSelection()) && scr.contains(window.getSelection().anchorNode)) { shown = null; return; }  // the person selects text to copy: draw again after that
+  shown = j.text;
+  const atEnd = toEnd || scr.scrollHeight - scr.scrollTop - scr.clientHeight < 4;
+  scr.innerHTML = ansiToHtml(usedRows(j.text, (j.cursor || [])[1]));
+  if (atEnd) scr.scrollTop = scr.scrollHeight;
+  toEnd = false;
+}
+
 async function tick() {
   if (!agent) return;
   const who = agent;
@@ -137,15 +166,7 @@ async function tick() {
     const j = await r.json();
     if (who !== agent) return;
     if (!r.ok) { $("#termNote").textContent = j.error || "no terminal"; wait = 3000; }
-    else {
-      $("#termNote").textContent = `${j.name || j.pane} · ${j.width}×${j.height}` + (j.ended ? " · the agent has ended: a shell runs here" : "");
-      if (j.text !== shown) {
-        shown = j.text;
-        const scr = $("#termScreen");
-        if (!String(window.getSelection()) || !scr.contains(window.getSelection().anchorNode)) scr.innerHTML = ansiToHtml(j.text);
-        else shown = null;  // the person selects text to copy: draw again after that
-      }
-    }
+    else showScreen(j);
   } catch (e) { $("#termNote").textContent = "river serve does not answer"; wait = 3000; }
   if (who === agent) timer = setTimeout(tick, wait);
 }
@@ -153,9 +174,9 @@ async function tick() {
 // Open the terminal of an agent that runs in a tmux pane (S.terminals lists them).
 export function openTerminal(name) {
   el();
-  agent = name; shown = null; pending = [];
+  agent = name; shown = null; toEnd = true; pending = [];
   $("#termTitle").textContent = `Terminal: ${name}`;
-  $("#termNote").textContent = "";
+  $("#termNote").textContent = "\u00a0";  // keeps its line, so the screen has its size before the first answer
   $("#termScreen").innerHTML = "";
   dlg.open();
   $("#termScreen").focus();
