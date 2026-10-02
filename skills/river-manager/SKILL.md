@@ -59,10 +59,11 @@ Stop when the user tells you to, and tell the user what you did.
   user (its terminal may wait on a prompt; for an agent in tmux the user reads
   and answers it with the agent's Terminal button on the page, and only a
   person does that), stop it, and launch again. River
-  takes its push back after `connect_within`, and a stop does it at once;
-  `river push <id> --cancel` takes a push back by hand, and also ends any
-  other reservation ("reserved for <agent>") that keeps an item from the
-  other agents.
+  takes its push back after `connect_within`. A stop ends every reservation
+  of the agent at once, and river does the same for an agent that is gone.
+  `river edit <id> --unreserve` ends a reservation by hand ("reserved for
+  <agent>"), so every agent can take the item. An item reserved for you:
+  `river launch --item <id>` gives it to the new session.
 - **TARGET owner away or gone**: `river target give <target> --to <agent>`
   (an active agent in one of the target's projects).
 - **A goal that several agents must work on at the same time**: an owner
