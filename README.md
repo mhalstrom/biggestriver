@@ -173,6 +173,7 @@ river plan                                       # planner session: overview, op
 river status                                     # every project's counts, recent completions, who works on what
 river log --since 7d                             # done items by day, with output and progress per project
 river who                                        # who holds what
+river view                                       # every agent that runs in tmux, side by side (launch_in tmux)
 river capacity                                   # open slots and idle sessions
 ```
 
@@ -242,8 +243,9 @@ push an item to a session of another type.
 On the page, every button that starts an agent (Start, Dispatch, Open agent,
 Claim next with an agent, Deploy now) opens one dialog: the agent, the model
 (only the agent's family, inside the item's limits, the recommendation
-preselected), the effort, the agent's launch options, the work, and a new tab
-or window. The session gets `RIVER_MODEL`. Start and Dispatch (and
+preselected), the effort, the agent's launch options, the work, and where it
+opens: a new tab, a new window, or tmux (offered when tmux is installed). The
+session gets `RIVER_MODEL`. Start and Dispatch (and
 `river launch`) name the new session (`RIVER_AGENT`), reserve the item for it,
 and set `RIVER_FOCUS=item:<id>`: the session's first `river go` claims that
 item, or says in capitals why it cannot and gives other work. A session that
@@ -291,13 +293,39 @@ placeholder drops out. river turned an older Claude Code or Codex command
 that a profile builds exactly into a profile once; `river config get
 launch_agents` says what changed.
 From the command line, `river launch [--project P | --item N] [--agent A]
-[--model M] [--effort E] [--option NAME=VALUE] [--tab|--window] [--dry-run]` does the same as the
+[--model M] [--effort E] [--option NAME=VALUE] [--tab|--window|--tmux] [--dry-run]` does the same as the
 dialog (a manager session uses it); `--dry-run` prints the project, the item,
 and the command without opening a terminal.
 Start with the work left at "Next" spreads sessions: first the project with
 ready agent work and no agent yet whose top item is most important, and only
 when every such project has an agent, the top item. Start names the new
 session and reserves its item for it, so two quick clicks go to two projects.
+
+To see every agent in one terminal, start them in tmux:
+`river config set launch_in tmux` (or `--tmux` for one launch, or the tmux
+choice in the dialog). Each session then starts as a pane of one tmux session
+named `river`, in place of a Terminal tab. `river view` shows the panes side by
+side in the terminal where you run it, each with its session's name on its
+border, and a new agent joins them. `river view --windows` gives each agent a
+tmux window of its own again, `river view --tidy` closes the panes of agents
+that ended, and `river view --list` prints the panes. A prompt of an agent
+shows in its pane: move to the pane (`Ctrl-b`, then an arrow) and answer it.
+`Ctrl-b z` makes one pane large and back, and `Ctrl-b d` leaves the view while
+the agents continue. tmux is optional (`brew install tmux`), and a Terminal tab
+stays the default. tmux needs no Terminal app, so it also works over SSH and
+on Linux. A session inside a sandbox (Claude Code's, Codex's) cannot reach
+tmux itself: its `river launch` asks the running `river serve` to start the
+session, and a person runs `river view`.
+
+An agent that runs in tmux also has a Terminal button on the page and in the
+desktop app (the Agents list, and the manager). It shows what the agent's
+terminal shows now, and the keys you type there go to the agent: a prompt that
+waits in the terminal can be read and answered from the page. This works from
+the moment the session starts, before its first river command, which is when a
+folder trust prompt or a permission prompt stops an agent. The terminal answers
+only the page on this computer: river serve refuses a request for it from
+another computer, through a tunnel or proxy, or from another site, and only a
+person types there, not an agent.
 
 An agent that waits on a person's item (`river add "..." --doer human --blocks
 <id> --keep`) holds its own item at most `human_wait_max` (30m; set it per
