@@ -118,6 +118,12 @@ const giveChoice = {};
 // fold into a detail row (the ▸ at the start of the row). A row is a drop target for an item row.
 let agentsTable = null;
 function renderAgents() {
+  // The tmux panes of sessions that are done (S.tmux_done): one button closes them, as river view --tidy does.
+  const done = S.tmux_done || [];
+  $("#tidyPanes").classList.toggle("hidden", !done.length);
+  $("#tidyPanes").textContent = `Close ${done.length} finished`;
+  $("#tidyPanes").title = "Close the tmux panes of the sessions that are done (river view --tidy). A session that holds work, or shows a prompt, stays.\n"
+    + done.map(p => `${p.name}: ${p.why}`).join("\n");
   // The panel redraws every few seconds: leave it alone while someone picks from a Give work menu.
   if (document.activeElement && document.activeElement.matches("#agents select")) return;
   const hidden = S.agents.filter(a => !agentShown(a)), showIdle = $("#showIdle").checked;
@@ -825,6 +831,10 @@ $("#goalGo").addEventListener("click", async () => {
 $("#area").addEventListener("change", renderNext);
 $("#showDone").addEventListener("change", renderProjects);
 $("#showIdle").addEventListener("change", renderAgents);
+$("#tidyPanes").addEventListener("click", async () => {
+  const r = await act("tmux_tidy", {}).catch(() => null);
+  if (r) toast(r.closed.length ? `Closed ${r.closed.length} finished: ${r.closed.map(p => p.name).join(", ")}` : "No finished session to close");
+});
 $("#graphSide").addEventListener("click", (e) => {
   const c = e.target.closest("[data-gproj]"); if (!c) return;
   graphProj = c.dataset.gproj; renderGraph(true);

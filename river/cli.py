@@ -581,7 +581,9 @@ def build_parser():
                    help="one tmux window for each agent, not side by side")
     g.add_argument("--list", dest="layout", action="store_const", const=None,
                    help="print the agents' panes; change and show nothing")
-    x.add_argument("--tidy", action="store_true", help="first close the panes whose agent has ended")
+    x.add_argument("--tidy", action="store_true",
+                   help="first close the panes of sessions that are done: the agent CLI ended, or it stays open but "
+                        "its agent left the queue, stopped, or is gone, and holds nothing; never a pane that shows a prompt")
     x = sub.add_parser("stop", help="ask an agent to stop: it commits, releases its item, and ends (not a kill)")
     x.add_argument("agent"); x.add_argument("--reason", required=True, help="why; the agent sees it")
     x.add_argument("--kill", action="store_true",
@@ -1013,6 +1015,14 @@ def _run(args, conn):
     if (args.cmd == "view" and args.layout and res["show"] and res["panes"] and not args.json
             and sys.stdin.isatty() and sys.stdout.isatty()):
         conn.close()
+        # tmux takes the screen next: these lines show again when the person leaves the view.
+        for p in res["closed"]:
+            print(f"closed ({p['why']}): {p['name']}")
+        done = sum(bool(p["done"]) for p in res["panes"])
+        if done:
+            print(f"{done} of the {len(res['panes'])} panes: the session is done. river view --tidy closes "
+                  f"{'it' if done == 1 else 'them'}; river view --list says which and why.")
+        sys.stdout.flush()
         os.execvp(res["show"][0], res["show"])  # tmux takes this terminal: the agents, side by side
     if args.json:
         print(json.dumps(res, indent=2, default=str))
@@ -1401,7 +1411,7 @@ def dispatch(conn, a, actor):
                                    launch_in=a.launch_in, options=opts or None)
     if c == "view":
         from . import server
-        return server.tmux_view(a.layout, a.tidy)
+        return server.tmux_view(a.layout, a.tidy, conn)
     if c == "stop":
         if a.kill:
             return core.kill_agent(conn, a.agent, a.reason, actor)
@@ -2312,11 +2322,11 @@ def render(a, res):
                 print("  river serve opened it: this session runs in a sandbox")
         return
     if c == "view":
-        for name in res["closed"]:
-            print(f"closed (its agent ended): {name}")
+        for p in res["closed"]:
+            print(f"closed ({p['why']}): {p['name']}")
         for p in res["panes"]:
             print(f"{p['pane']:>4}  {p['name']}" + (f"  [{p['agent']}]" if p["agent"] else "")
-                  + ("  (its agent ended: river view --tidy closes it)" if p["ended"] else ""))
+                  + (f"  ({p['done']}: river view --tidy closes it)" if p["done"] else ""))
         if not res["panes"]:
             print(f"(no agent panes in the tmux session {res['session']})")
         for name in res["left"]:

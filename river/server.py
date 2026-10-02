@@ -516,12 +516,94 @@ def _tmux_open(t, env, line):
     return pane
 
 
-def tmux_view(layout=None, tidy=False):
+def _pane_texts(panes):
+    """{pane: the text it shows now} for these pane ids, with one tmux command; {} when a pane closed meanwhile."""
+    import secrets
+    if not panes:
+        return {}
+    mark, args = f"river-pane-{secrets.token_hex(8)}:", []
+    for n, pane in enumerate(panes):  # a line of our own before each pane's text says where it starts
+        args += [";", "display-message", "-p", f"{mark}{n}", ";", "capture-pane", "-p", "-t", pane]
+    out, texts, at = _tmux(*args[1:], check=False), {}, None
+    for line in (out or "").splitlines():
+        if line.startswith(mark) and line[len(mark):].isdigit():
+            at = panes[int(line[len(mark):])]
+            texts[at] = []
+        elif at is not None:
+            texts[at].append(line)
+    return {pane: "\n".join(lines) for pane, lines in texts.items()}
+
+
+def _prompt_tail(text):
+    """The last lines of a pane's text (no blank ones): where a prompt shows."""
+    return [x.rstrip() for x in text.splitlines() if x.strip()][-PROMPT_LINES:]
+
+
+def _done_panes(conn, panes, terminals=None):
+    """{pane: why} for the panes whose session is done, which river view --tidy closes. A pane is done when
+    only a shell runs there: the agent CLI ended. With the queue (conn) a pane is also done while the agent CLI
+    stays open and idle, when the agent river named for it takes no work any more: it is not registered (its
+    river wait ended, or it unregistered), it ended after a stop (or ran no river command for away_after
+    after one), or it is gone, and it holds and owns nothing.
+    A registered agent whose process runs in the pane decides in place of the named one (a session that began
+    again under another name). A pane that shows a prompt (prompt_pattern) is never done by the queue's word:
+    a person may want to answer it. A pane with no agent name (a session for a person's item) is done only
+    by its shell. terminals: agent_terminals(conn), when the caller has it."""
+    import re
+    done = {p["pane"]: "its agent ended" for p in panes if p["ended"]}
+    if conn is None:
+        return done
+    here = {}
+    for agent, pane in (agent_terminals(conn) if terminals is None else terminals).items():
+        here.setdefault(pane, []).append(agent)
+    maybe = {}
+    registered = {r["name"] for r in conn.execute("SELECT name FROM agents")}
+    for p in panes:
+        # The named agent is registered and its process runs in another terminal: nothing here says it is done.
+        if p["ended"] or not p["agent"] or (p["agent"] in registered and not here.get(p["pane"])):
+            continue
+        why = f"{p['agent']} is not in the queue any more"
+        for name in here.get(p["pane"], ()):
+            a = core.agent_status(conn, name)
+            # A stop is a request: the agent may still commit. It ended when its last go ran (role stopped); one
+            # that ran no river command for away_after never read the stop, and river refuses its claims.
+            idle = core.now() - core.parse_iso(a["last_seen"]) > core.parse_duration(core.setting(conn, "away_after", agent=name))
+            ended = a["state"] == "gone" or (a["state"] == "stopped" and (a["role"] == "stopped" or idle))
+            if not ended or a["holds"] or a["owns"] or conn.execute(
+                    "SELECT 1 FROM goals WHERE owner=? AND status='open'", (name,)).fetchone():
+                break
+            why = (f"{name} is gone" if a["state"] == "gone" else f"{name} stopped" if a["role"] == "stopped"
+                   else f"{name} was asked to stop and is idle")
+        else:
+            maybe[p["pane"]] = why
+    pattern = core.setting(conn, "prompt_pattern").strip()
+    texts = _pane_texts(sorted(maybe)) if pattern else dict.fromkeys(maybe, "")
+    rx = re.compile(pattern) if pattern else None
+    for pane, why in maybe.items():
+        if pane in texts and not (rx and any(rx.search(x) for x in _prompt_tail(texts[pane]))):
+            done[pane] = why
+    return done
+
+
+def tmux_done(conn, terminals=None):
+    """The panes river view --tidy closes now, for the page: [{"pane", "name", "why"}]; [] with no tmux."""
+    if TMUX_RUNNER is None and not _tmux_cmd():
+        return []
+    try:
+        panes = [p for p in _tmux_panes() if p["name"]]
+        done = _done_panes(conn, panes, terminals)
+    except RiverError:
+        return []
+    return [{"pane": p["pane"], "name": p["name"], "why": done[p["pane"]]} for p in panes if p["pane"] in done]
+
+
+def tmux_view(layout=None, tidy=False, conn=None):
     """The agents river started in tmux (launch_in tmux), for river view. layout "tile" puts every agent
     pane side by side in one window, and new agents then join it; "windows" gives each agent a window of
-    its own again; None changes nothing. tidy first closes the panes whose agent has ended (only a shell
-    runs there). Panes that a person made are left alone. Returns the panes and the tmux command that
-    shows the session: attach, or switch-client inside tmux."""
+    its own again; None changes nothing. tidy first closes the panes whose session is done (_done_panes:
+    only a shell runs there, or, with conn, the agent takes no work any more). Panes that a person made are
+    left alone. Returns the panes (each with "done": why --tidy closes it, or None), the panes it closed, and
+    the tmux command that shows the session: attach, or switch-client inside tmux."""
     import os
     target = "=" + TMUX_SESSION
     if _tmux("has-session", "-t", target, check=False) is None:
@@ -530,10 +612,11 @@ def tmux_view(layout=None, tidy=False):
     mine = lambda: [p for p in _tmux_panes() if p["name"]]
     closed, left = [], []
     if tidy:
-        for p in mine():
-            if p["ended"]:
-                _tmux("kill-pane", "-t", p["pane"])
-                closed.append(p["name"])
+        panes = mine()
+        done = _done_panes(conn, panes)
+        for p in panes:
+            if p["pane"] in done and _tmux("kill-pane", "-t", p["pane"], check=False) is not None:
+                closed.append({"pane": p["pane"], "name": p["name"], "why": done[p["pane"]]})
         if closed and _tmux("has-session", "-t", target, check=False) is None:
             return {"session": TMUX_SESSION, "panes": [], "closed": closed, "left": [], "layout": layout, "show": None}
     panes = mine()
@@ -562,12 +645,23 @@ def tmux_view(layout=None, tidy=False):
         _tmux("set-option", "-w", "-u", "-t", tile, "pane-border-format")
         if inside:
             _tmux("rename-window", "-t", tile, inside[0]["name"])
+    panes = mine()
+    done = _done_panes(conn, panes)
+    for p in panes:
+        p["done"] = done.get(p["pane"])
     # The keys a person needs, in the status line for a few seconds after the session shows.
     prefix = (_tmux("show-options", "-gv", "prefix", check=False) or "C-b").replace("C-", "Ctrl-")
     hint = f"{prefix} then: an arrow = the next pane, z = one pane large (and back), n = the next window, d = leave"
+    if done:  # first, so a narrow terminal still shows it
+        hint = f"{len(done)} done (river view --tidy closes {'it' if len(done) == 1 else 'them'}) | {hint}"
     show = ["switch-client", "-t", target] if os.environ.get("TMUX") else ["attach-session", "-t", target]
-    return {"session": TMUX_SESSION, "panes": mine(), "closed": closed, "left": left, "layout": layout,
+    return {"session": TMUX_SESSION, "panes": panes, "closed": closed, "left": left, "layout": layout,
             "show": [*(_tmux_cmd() or ["tmux"]), *show, ";", "display-message", "-d", "6000", hint]}
+
+
+def tmux_tidy(conn):
+    """The page's Close button for the sessions that are done: the same as river view --list --tidy."""
+    return {"closed": tmux_view(None, tidy=True, conn=conn)["closed"]}
 
 
 # The keys the page may send to an agent's terminal by name (tmux's names); any other input is plain text.
@@ -664,7 +758,7 @@ def watch_prompts(conn):
                 continue  # the pane closed since the list
             if screen["ended"]:
                 continue  # a shell: what the agent printed stays, and nobody waits there
-            tail = [x.rstrip() for x in _ESCAPES.sub("", screen["text"]).splitlines() if x.strip()][-PROMPT_LINES:]
+            tail = _prompt_tail(_ESCAPES.sub("", screen["text"]))
             line = next((x.strip() for x in tail if rx.search(x)), None)
             if line:
                 waiting[agent] = (f"{core.PROMPT_NOTE}: {line[:200]}", "\n".join(tail))
@@ -1124,6 +1218,7 @@ OPS = {
     "start_manager": lambda c, a, who: start_manager(c, agent=a.get("agent"), actor=who, **_launch_args(a)),
     "open_chat": lambda c, a, who: open_chat(c, a["agent"]),
     "terminal_keys": lambda c, a, who: terminal_keys(c, a["agent"], a.get("keys"), who),
+    "tmux_tidy": lambda c, a, who: tmux_tidy(c),
     "decline_message": lambda c, a, who: core.decline_message(c, int(a["msg"]), a.get("note"), who),
     "update": lambda c, a, who: _no_update_in_app() or update_apply(),
     "restart": lambda c, a, who: _no_update_in_app() or (_restart_soon(), {"restarting": True})[1],
@@ -1180,6 +1275,7 @@ class Handler(BaseHTTPRequestHandler):
                     st["dev_build"] = _build_id()
                 st["desktop"] = DESKTOP
                 st["terminals"] = agent_terminals(conn)  # the agents whose tmux pane the page can show
+                st["tmux_done"] = tmux_done(conn, st["terminals"])  # the panes its Close button closes
                 return self._send(200, st)
             finally:
                 conn.close()

@@ -708,6 +708,18 @@ class FakeTmux:
 
     def __call__(self, a):
         self.calls.append(a)
+        if ";" in a:  # several commands in one: each one's output, in order; nothing when one fails
+            parts, part = [], []
+            for x in [*a, ";"]:
+                if x == ";":
+                    parts.append(self._one(part))
+                    part = []
+                else:
+                    part.append(x)
+            return None if None in parts else "\n".join(parts)
+        return self._one(a)
+
+    def _one(self, a):
         cmd, opt = a[0], lambda flag: a[a.index(flag) + 1] if flag in a else None
         pane = next((p for p in self.panes if p["id"] in (opt("-t"), opt("-s"))), None)
         if cmd == "has-session":
@@ -743,8 +755,12 @@ class FakeTmux:
                                        "/dev/ttys00" + p["id"][1:], p["agent"], p["name"]]) for p in self.panes)
         elif cmd == "show-options":
             return "C-b"
-        elif cmd == "display-message":  # terminal_screen: the pane's size and cursor, then what it shows
-            return f"120|40|3|7|{pane['running']}|{pane['name']}\n" + pane.get("screen", "")
+        elif cmd == "display-message":  # terminal_screen: the pane's size and cursor; else the text as it is
+            return f"120|40|3|7|{pane['running']}|{pane['name']}" if pane else a[-1]
+        elif cmd == "capture-pane":  # what the pane shows: with -e the colours too
+            if not pane:
+                return None
+            return pane.get("screen", "") if "-e" in a else re.sub(r"\x1b\[[0-9;]*m", "", pane.get("screen", ""))
         return ""
 
 
@@ -834,7 +850,7 @@ class LaunchInTmux(unittest.TestCase):
         ended = self.tmux.panes[1]["name"]
         self.tmux.panes[1]["running"] = "zsh"
         v = server.tmux_view("windows", tidy=True)
-        self.assertEqual((v["closed"], ended in [p["name"] for p in v["panes"]]), ([ended], False))
+        self.assertEqual(([c["name"] for c in v["closed"]], ended in [p["name"] for p in v["panes"]]), ([ended], False))
         self.assertEqual(len({p["window"] for p in v["panes"]}), len(v["panes"]))
         self.assertEqual(self.tmux.windows["@0"], {"name": v["panes"][0]["name"], "tile": ""})
         self.assertEqual(next(p for p in self.tmux.panes if p["id"] == "%9")["window"], "@1")  # the person's pane stays where it was
@@ -871,6 +887,81 @@ class LaunchInTmux(unittest.TestCase):
         self.tmux.windows["@0"] = {"name": "w", "tile": ""}
         self.assertEqual(server._tmux_pane_of("/dev/ttys005")["name"], "#9 other")
         self.assertIsNone(server._tmux_pane_of("/dev/ttys001"))
+
+    def test_tidy_closes_the_pane_of_a_session_that_is_done_while_its_cli_stays_open(self):
+        import contextlib
+        import io
+        from river import cli
+        core.config_set(self.c, "launch_in", "tmux")
+        core.register(self.c, "mark", human=True)
+        ids = [core.item_add(self.c, "shop", f"work {n}")["id"] for n in range(7)]
+        works, left, asks, stopped, gone, again, other = [server.launch_agent(self.c, "shop")["session_name"] for _ in ids]
+        panes = {name: p for name, p in zip((works, left, asks, stopped, gone, again, other), self.tmux.panes)}
+        z = core.item_add(self.c, "shop", "sign the form", doer="human")["id"]
+        server.open_agent_on(self.c, z, person="mark")  # a pane with a purpose and no agent name
+        self.tmux.panes.append({"id": "%9", "window": "@1", "name": "", "agent": "", "running": "vim", "keys": []})  # a person's own
+        done = lambda: {p["name"]: p["done"] for p in server.tmux_view(None, conn=self.c)["panes"] if p["done"]}
+        # Every agent CLI runs (no shell shows), and every session is in the queue: nothing to close.
+        self.assertEqual((done(), server.tmux_view(None, tidy=True, conn=self.c)["closed"]), ({}, []))
+        # The river work of a session ended and its CLI stays open and idle: river wait ended it (unregistered).
+        core.unregister(self.c, left)
+        self.assertEqual(done(), {panes[left]["name"]: f"{left} is not in the queue any more"})
+        self.assertEqual(server.tmux_view(None)["panes"][1]["done"], None)  # without the queue only a shell counts
+        # A pane that shows a prompt stays: a person may want to answer it.
+        core.unregister(self.c, asks)
+        panes[asks]["screen"] = "\x1b[1mBash command\x1b[0m\n  git push\n\nDo you want to proceed?\n\x1b[34m❯ 1. Yes\x1b[0m\n  2. No"
+        self.assertNotIn(panes[asks]["name"], done())
+        # A stop is a request: the pane is done after the agent's last go, not while it still commits. An agent
+        # that never read the stop (an idle CLI: no river command for away_after) is done too.
+        core.stop_agent(self.c, stopped, "the plan changed", "mark")
+        self.assertNotIn(panes[stopped]["name"], done())
+        seen = self.c.execute("SELECT last_seen FROM agents WHERE name=?", (stopped,)).fetchone()[0]
+        late = core.iso(core.now() - 2 * core.parse_duration(core.setting(self.c, "away_after")))
+        self.c.execute("UPDATE agents SET last_seen=? WHERE name=?", (late, stopped))
+        self.assertEqual(done()[panes[stopped]["name"]], f"{stopped} was asked to stop and is idle")
+        self.c.execute("UPDATE agents SET last_seen=? WHERE name=?", (seen, stopped))
+        self.assertEqual(core.go(self.c, self.dir.name, stopped)["ended"], True)
+        self.assertEqual(done()[panes[stopped]["name"]], f"{stopped} stopped")
+        # A session that is gone and holds nothing is done; one that still holds an item is not.
+        core.claim(self.c, ids[0], works)
+        old = core.iso(core.now() - core.timedelta(days=2))
+        self.c.execute("UPDATE agents SET last_seen=? WHERE name IN (?, ?)", (old, works, gone))
+        self.assertEqual((core.agent_status(self.c, works)["state"], done().get(panes[gone]["name"])), ("gone", f"{gone} is gone"))
+        self.assertNotIn(panes[works]["name"], done())
+        # The session began again in its pane under another name: that agent's process runs there, so the pane stays.
+        core.unregister(self.c, again)
+        core.register(self.c, "shop-new")
+        self.c.execute("UPDATE agents SET pid=?, host=? WHERE name='shop-new'", (os.getpid(), core.this_host()))  # a live process
+        server.PS_RUNNER = lambda pids: f" {os.getpid()} ttys00{panes[again]['id'][1:]}\n"
+        self.addCleanup(setattr, server, "PS_RUNNER", None)
+        self.assertNotIn(panes[again]["name"], done())
+        want = {panes[n]["name"] for n in (left, stopped, gone)}
+        self.assertEqual(set(done()), want)
+
+        def river(*args):
+            with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(cli.run(["-q", "--as", "mark", *args]), 0)
+            return out.getvalue()
+        out = river("view", "--list")
+        self.assertIn(f"[{left}]  ({left} is not in the queue any more: river view --tidy closes it)", out)
+        self.assertEqual(out.count("river view --tidy closes it"), 3)
+        # The page lists the same panes, and its button closes them: one tmux command reads the panes that may be done.
+        self.assertEqual({p["name"] for p in server.tmux_done(self.c)}, want)
+        self.assertEqual(sum(c[0] == "display-message" for c in self.tmux.calls[-2:]), 1)
+        self.assertIn("3 done (river view --tidy closes them) | Ctrl-b", server.tmux_view("tile", conn=self.c)["show"][-1])
+        closed = server.OPS["tmux_tidy"](self.c, {}, "mark")["closed"]
+        self.assertEqual(({c["name"] for c in closed}, closed[0]["why"]), (want, f"{left} is not in the queue any more"))
+        self.assertEqual({p["id"] for p in self.tmux.panes}, {panes[n]["id"] for n in (works, asks, again, other)} | {"%7", "%9"})
+        self.assertEqual((server.tmux_done(self.c), server.tmux_view(None, tidy=True, conn=self.c)["closed"]), ([], []))
+        # The person answered the prompt and the CLI ended: the shell that is left is done too, as before.
+        panes[asks]["running"] = "zsh"
+        self.assertIn(f"closed (its agent ended): {panes[asks]['name']}", river("view", "--list", "--tidy"))
+        # With no pattern for a prompt, the screen is not read.
+        core.config_set(self.c, "prompt_pattern", "")
+        core.unregister(self.c, other)
+        calls = len(self.tmux.calls)
+        self.assertEqual([p["name"] for p in server.tmux_done(self.c)], [panes[other]["name"]])
+        self.assertFalse(any(c[0] == "display-message" for c in self.tmux.calls[calls:]))
 
     def test_tmux_is_not_installed(self):
         server.TMUX_RUNNER = None
@@ -953,7 +1044,8 @@ class LaunchInTmux(unittest.TestCase):
         local = {"Host": "127.0.0.1:8765"}
         keys = {"op": "terminal_keys", "args": {"agent": name, "keys": [{"key": "Enter"}]}}
         self.assertEqual(call("GET", f"/api/terminal?agent={name}", local)[0], 200)
-        self.assertEqual(call("GET", "/api/state", local)[1]["terminals"], {name: "%0"})
+        state = call("GET", "/api/state", local)[1]
+        self.assertEqual((state["terminals"], state["tmux_done"]), ({name: "%0"}, []))  # the agent is in the queue: its pane stays
         self.assertEqual(call("POST", "/api/action", {**local, "Origin": "http://127.0.0.1:8765"}, keys)[1]["result"]["sent"], 1)
         self.assertEqual(call("GET", "/api/terminal?agent=nobody", local)[0], 409)
         sent = len(self.tmux.panes[0]["keys"])
@@ -1078,7 +1170,8 @@ class LaunchInTmux(unittest.TestCase):
                                "launch_in": "tmux"}, {})
         self.assertEqual(len({p["window"] for p in server.tmux_view(None)["panes"]}), 1)  # it joined the others
         v = server.tmux_view("windows", tidy=True)
-        self.assertEqual((v["closed"], len(v["panes"]), len({p["window"] for p in v["panes"]})), (["needs you"], 3, 3))
+        self.assertEqual(([c["name"] for c in v["closed"]], len(v["panes"]), len({p["window"] for p in v["panes"]})),
+                         (["needs you"], 3, 3))
         self.assertEqual({p["tile"] for p in v["panes"]}, {False})
         names = server._tmux("list-windows", "-t", "=river", "-F", "#{window_name}").splitlines()
         self.assertEqual(sorted(names), ["#1 first: a | b", "#2 second", "#4 fourth"])
@@ -1094,6 +1187,27 @@ class LaunchInTmux(unittest.TestCase):
             time.sleep(0.1)
         self.assertIn("\x1b[31mriver-42", scr["text"])  # the colours come with the text
         self.assertEqual((scr["name"], scr["ended"], scr["width"] > 20), ("#1 first: a | b", True, True))
+        # A session that left the queue while its command still runs is done; not while its pane shows a prompt.
+        # One tmux command reads the panes that may be done, and gives nothing when one of them closed meanwhile.
+        server._open_terminal({"project": "shop", "path": self.dir.name, "session_title": "#5 fifth", "command": "sleep 60",
+                               "launch_in": "tmux"}, {"RIVER_AGENT": "shop-bbbb"})
+        fifth = panes(lambda p: p["name"] != "#5 fifth" or p["running"] == "sleep")["#5 fifth"]["pane"]
+        other = got["#2 second"]["pane"]
+        texts = server._pane_texts([fifth, other])
+        flat = {pane: text.replace("\n", "") for pane, text in texts.items()}  # a long command line wraps
+        self.assertEqual((set(flat), "RIVER_AGENT=shop-bbbb sleep 60" in flat[fifth], "RIVER_FOCUS=needs: sleep 60" in flat[other]),
+                         ({fifth, other}, True, True))
+        self.assertEqual(server._pane_texts([fifth, "%999"]), {})
+        self.assertEqual([(p["name"], p["why"]) for p in server.tmux_done(self.c)],
+                         [("#1 first: a | b", "its agent ended"), ("#5 fifth", "shop-bbbb is not in the queue any more")])
+        server._tmux("send-keys", "-t", fifth, "-l", "Do you want to proceed?")  # the terminal shows what is typed
+        for _ in range(100):
+            if "proceed?" in server._pane_texts([fifth])[fifth]:
+                break
+            time.sleep(0.1)
+        self.assertEqual([p["name"] for p in server.tmux_done(self.c)], ["#1 first: a | b"])
+        self.assertEqual([c["name"] for c in server.tmux_tidy(self.c)["closed"]], ["#1 first: a | b"])
+        self.assertEqual(sorted(p["name"] for p in server.tmux_view(None, conn=self.c)["panes"]), ["#2 second", "#4 fourth", "#5 fifth"])
 
 
 class Watched(unittest.TestCase):
