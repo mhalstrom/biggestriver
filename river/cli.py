@@ -490,6 +490,8 @@ def build_parser():
     x.add_argument("--untag", action="append", help="remove a goal tag (repeatable)")
     _ref_args(x)
     x.add_argument("--unref", action="append", help="remove a tracker link (repeatable)")
+    x.add_argument("--unreserve", action="store_true", help="end the reservation of an open item (\"reserved for <agent>\"), "
+                   "so every agent can take it: that agent, a person, or a manager (the same as river push <id> --cancel)")
 
     x = sub.add_parser("list", help="list items (open by default)")
     x.add_argument("--project"); x.add_argument("--status"); x.add_argument("--all", action="store_true")
@@ -1383,7 +1385,7 @@ def dispatch(conn, a, actor):
             opts[k.strip()] = v.strip()
         if a.dry_run:
             t = core.launch_target(conn, a.project, a.agent, a.item, a.model, a.effort, a.launch_in,
-                                   spread=a.project is None and a.item is None, options=opts or None)
+                                   spread=a.project is None and a.item is None, options=opts or None, actor=actor)
             return {**t, "dry_run": True, "would_push_to": core.waiting_agent_for(conn, t["project"], t["item"]["id"])}
         if in_sandbox():
             # A sandbox blocks Terminal and tmux for this command. river serve runs outside it and opens the
@@ -1452,6 +1454,8 @@ def dispatch(conn, a, actor):
                              a.context, a.touches, a.check, a.blocks, a.mode, a.found_during, a.feeds, a.due,
                              [] if a.no_goal else a.goal, core.parse_refs(a.ref, a.ref_url), _models(a))
     if c == "edit":
+        if a.unreserve:
+            core.cancel_push(conn, a.id, actor)
         return core.item_edit(conn, a.id, a.title, a.notes, a.doer, a.project, actor, a.context, a.touches, a.check,
                               a.due, a.goal, a.untag, core.parse_refs(a.ref, a.ref_url), a.unref, _models(a))
     if c == "list":
@@ -1576,7 +1580,7 @@ def dispatch(conn, a, actor):
         if a.cancel:
             return core.cancel_push(conn, a.id, actor)
         if not a.to:
-            raise RiverError("river push <id> --to <agent> (or --cancel to take a push or a reservation back)")
+            raise RiverError("river push <id> --to <agent> (or --cancel to take a push or a reservation back; the same as river edit <id> --unreserve)")
         return core.push(conn, a.id, a.to, a.note, actor)
     if c == "accept":
         if a.message:

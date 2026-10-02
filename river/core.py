@@ -2351,6 +2351,9 @@ def _unhold(conn, parent, actor, why):
     conn.execute("UPDATE items SET status='open', assignee=NULL, claimed_at=NULL, lease_expires_at=NULL, "
                  "hold_expires_at=NULL WHERE id=?", (parent,))
     if it["assignee"]:
+        # A pushed item stays reserved for the agent that claimed it; given back, it is nobody's.
+        conn.execute("UPDATE items SET reserved_for=NULL, reserved_until=NULL, reserved_by=NULL "
+                     "WHERE id=? AND reserved_for=?", (parent, it["assignee"]))
         for r in _open_prereqs(conn, parent):
             conn.execute("UPDATE items SET reserved_for=NULL WHERE id=? AND reserved_for=?", (r, it["assignee"]))
     _event(conn, parent, actor, why)
@@ -2442,9 +2445,9 @@ def push(conn, item_id, to, note=None, actor=None):
         if it["status"] != "open":
             raise RiverError(f"#{item_id} is {it['status']}" + (f" by {it['assignee']}" if it["assignee"] else "")
                              + "; only an open item can be pushed")
-        if it["reserved_for"] and it["reserved_for"] != to:
+        if it["reserved_for"] and it["reserved_for"] not in (to, actor):  # its own reservation, the actor hands on
             raise RiverError(f"#{item_id} is already reserved for {it['reserved_for']}"
-                             + (" (pushed)" if it["reserved_until"] else " (a prerequisite of an item it holds)"))
+                             + (" (pushed)" if it["reserved_until"] else "") + f"; {_unreserve_hint(item_id)}")
         ttl = parse_duration(setting(conn, "reserve_ttl", item_id=it["id"], agent=to))
         until = now() + ttl
         conn.execute("UPDATE items SET reserved_for=?, reserved_until=?, reserved_by=? WHERE id=?",
@@ -2691,14 +2694,19 @@ def _free_pushes(conn, agent, why):
 
 
 def _free_reservations(conn, agent, why):
-    """End every reservation of an agent that is gone for good (unregistered): its pushes, and the items
-    reserved for it without a time limit (a prerequisite of an item it held, or one given to it). Inside a tx."""
+    """End every reservation of an agent that takes no work any more (stopped, gone, unregistered): its
+    pushes, and the items reserved for it without a time limit (a prerequisite of an item it held, one
+    given to it, or a pushed item it claimed and lost). Inside a tx."""
     ids = _free_pushes(conn, agent, why)
     for r in conn.execute("SELECT id FROM items WHERE reserved_for=? AND status='open'", (agent,)).fetchall():
         conn.execute("UPDATE items SET reserved_for=NULL, reserved_until=NULL, reserved_by=NULL WHERE id=?", (r["id"],))
         _event(conn, r["id"], "river", f"reservation for {agent} ended: {why}; open to everyone")
         ids.append(r["id"])
     return ids
+
+
+def _unreserve_hint(item_id):
+    return f"that agent, a person, or a manager ends the reservation: river edit {item_id} --unreserve"
 
 
 def cancel_push(conn, item_id, actor=None):
@@ -2711,7 +2719,7 @@ def cancel_push(conn, item_id, actor=None):
                 raise RiverError(f"refused: #{item_id} is reserved for {it['reserved_for']}; that agent, a person, "
                                  f"or a manager ends the reservation")
         elif not it["reserved_until"] or it["status"] != "open":
-            raise RiverError(f"#{item_id} has no open push")
+            raise RiverError(f"#{item_id} has no open push or reservation")
         to = it["reserved_for"]
         conn.execute("UPDATE items SET reserved_for=NULL, reserved_until=NULL, reserved_by=NULL WHERE id=?", (it["id"],))
         conn.execute("UPDATE messages SET state='declined', read_at=COALESCE(read_at, ?) "
@@ -3556,7 +3564,7 @@ def stop_agent(conn, agent, reason, actor=None):
         eid = conn.execute("INSERT INTO queue_entries(agent,pos,body,kind,added_by,created_at) VALUES (?,?,?,'stop',?,?)",
                            (agent, _queue_pos(conn, agent, first=True), reason.strip(), actor, t)).lastrowid
         _event(conn, None, actor, f"stopped {agent} (by {actor}: {reason.strip()})")
-        _free_pushes(conn, agent, f"{agent} was stopped")
+        _free_reservations(conn, agent, f"{agent} was stopped")
         holds = [dict(r) for r in conn.execute(
             "SELECT id, title, status FROM items WHERE assignee=? AND status IN ('in_progress','held') ORDER BY id", (agent,))]
         for h in holds:
@@ -3581,6 +3589,7 @@ def _finish_stop(conn, agent):
     with tx(conn):
         if conn.execute("SELECT 1 FROM items WHERE assignee=? AND status IN ('in_progress','held')", (agent,)).fetchone():
             return False
+        _free_reservations(conn, agent, f"{agent} stopped")
         _release_goals(conn, agent, f"{agent} stopped")
         for t in conn.execute("SELECT name FROM targets WHERE owner=?", (agent,)).fetchall():
             conn.execute("UPDATE targets SET owner=NULL, owner_expires_at=NULL WHERE name=?", (t["name"],))
@@ -3620,17 +3629,25 @@ def _sweep(conn):
         # The session may have done part or all of the work: the next taker checks first (river check).
         conn.execute("UPDATE items SET status='open', assignee=NULL, claimed_at=NULL, lease_expires_at=NULL, "
                      "needs_check=1 WHERE id=?", (r["id"],))
+        conn.execute("UPDATE items SET reserved_for=NULL, reserved_until=NULL, reserved_by=NULL "
+                     "WHERE id=? AND reserved_for=?", (r["id"], r["assignee"]))
         _event(conn, r["id"], "river", f"lease expired (was {r['assignee']}); back to open")
         _send(conn, "notice", "river", f"your lease on #{r['id']} expired; the item is open again. "
               f"Claim it again if you still work on it: river claim {r['id']}", to=r["assignee"], item_id=r["id"])
-    # A stopped session, or one river started for an item that never ran a river command, gives its pushes back.
+    # A session river started for an item that never ran a river command gives its pushes back.
     late = iso(now() - parse_duration(setting(conn, "connect_within")))
-    for r in conn.execute("SELECT DISTINCT a.name, a.stop_at FROM agents a JOIN items i ON i.reserved_for=a.name "
-                          "WHERE i.reserved_until IS NOT NULL AND i.status='open' AND (a.stop_at IS NOT NULL OR "
-                          "(a.note LIKE ? AND a.last_seen=a.registered_at AND a.registered_at < ?))",
+    for r in conn.execute("SELECT DISTINCT a.name FROM agents a JOIN items i ON i.reserved_for=a.name "
+                          "WHERE i.reserved_until IS NOT NULL AND i.status='open' AND a.stop_at IS NULL AND "
+                          "a.note LIKE ? AND a.last_seen=a.registered_at AND a.registered_at < ?",
                           (STARTED_NOTE + "%", late)).fetchall():
-        _free_pushes(conn, r["name"], f"{r['name']} was stopped" if r["stop_at"] else
-                     f"{r['name']} never connected (no river command within connect_within)")
+        _free_pushes(conn, r["name"], f"{r['name']} never connected (no river command within connect_within)")
+    # A stopped session, or one that is gone, takes no work: nothing stays reserved for it, with or
+    # without a time limit (an item it released after the stop, a prerequisite of an item it held).
+    for r in conn.execute("SELECT DISTINCT a.* FROM agents a JOIN items i ON i.reserved_for=a.name "
+                          "WHERE i.status='open' AND a.kind='ai'").fetchall():
+        state = _agent_state(conn, r)
+        if state in ("stopped", "gone"):
+            _free_reservations(conn, r["name"], f"{r['name']} was stopped" if state == "stopped" else f"{r['name']} is gone")
     # An item reserved for a name that is not registered any more: nobody could claim or give it.
     for r in conn.execute("SELECT DISTINCT reserved_for FROM items WHERE reserved_for IS NOT NULL AND status='open' "
                           "AND reserved_for NOT IN (SELECT name FROM agents)").fetchall():
@@ -4090,15 +4107,20 @@ def _claim_row(conn, item_id, actor):
     if ag["stop_at"]:
         raise RiverError(f"refused: {actor} is asked to stop (by {ag['stop_by']}: {ag['stop_reason']}); it takes no "
                          f"new work. Commit finished work, release your item, then end the session")
+    it0 = _item(conn, item_id)
     if ag["role"] in ("planner", "manager"):
         raise RiverError(f"refused: {actor} is a {ag['role']} session; it changes the plan and does not take work. "
-                         f"To work instead, run: river --as {actor} go")
-    it0 = _item(conn, item_id)
+                         f"To work instead, run: river --as {actor} go" + (
+                             f". #{item_id} is reserved for you: start a session for it (river launch --item {item_id}), "
+                             f"or open it to every agent (river edit {item_id} --unreserve)"
+                             if it0["reserved_for"] == actor and it0["status"] == "open" else ""))
     if it0["doer"] == "human" and ag["kind"] == "ai":
         raise RiverError(f"refused: #{item_id} is for a person. If you can do it or work around it, take it over "
                          f"(the user is told, and can undo it): river takeover {item_id} --note \"<how you will do it>\"")
     if it0["reserved_for"] and it0["reserved_for"] != actor:
-        raise RiverError(f"refused: #{item_id} is reserved for {it0['reserved_for']}, who holds the item it unblocks")
+        raise RiverError(f"refused: #{item_id} is reserved for {it0['reserved_for']}"
+                         + ("" if it0["reserved_until"] else ", who holds the item it unblocks or was given it")
+                         + f"; {_unreserve_hint(item_id)}")
     q = conn.execute("SELECT agent FROM queue_entries WHERE item_id=?", (item_id,)).fetchone()
     if q and q["agent"] != actor and ag["kind"] == "ai":
         raise RiverError(f"refused: #{item_id} is in the queue of {q['agent']} (river queue list {q['agent']})")
@@ -4867,7 +4889,9 @@ def release(conn, item_id, note=None, actor=None):
     with tx(conn):
         it = _item(conn, item_id)
         if it["status"] not in ("in_progress", "held"):
-            raise RiverError(f"item {item_id} is {it['status']}; only a claimed item can be released")
+            raise RiverError(f"item {item_id} is {it['status']}; only a claimed item can be released" + (
+                f". It is reserved for {it['reserved_for']}; {_unreserve_hint(item_id)}"
+                if it["status"] == "open" and it["reserved_for"] else ""))
         if actor and it["assignee"] != actor:
             raise RiverError(f"item {item_id} is held by {it['assignee']}, not {actor}")
         _unhold(conn, it["id"], actor, "released" + (f": {note}" if note else ""))
@@ -5753,24 +5777,31 @@ def project_sessions(conn, ann=None):
 
 
 def launch_target(conn, project=None, agent=None, item=None, model=None, effort=None, launch_in=None, spread=False,
-                  options=None):
+                  options=None, actor=None):
     """Where and how a new agent session should start: the folder of the project that holds the most
     important ready item an agent can take (or of the project named, or of the one item named), and the
     command of the chosen launch_agents entry (the first when none is named). Refuses when nothing is ready there.
 
     spread (Start with no project or item named): first a project with ready agent work and no agent yet,
-    the one whose top item is most important; when every such project has an agent, the top item."""
+    the one whose top item is most important; when every such project has an agent, the top item.
+
+    The one item named can be reserved for the actor (given to a manager, who takes no work): the new
+    session gets it."""
     ann = annotate(conn)
+    own = conn.execute("SELECT 1 FROM items WHERE id=? AND reserved_for=? AND status='open'",
+                       (int(item), actor)).fetchone() if item is not None and actor else None
     pool = sorted((a for a in ann.values() if a["ready"] and a["doer"] != "human" and a["kind"] not in ("deploy", "review", "monitor")
-                   and not a["reserved_for"] and not a["project_archived"]
+                   and (not a["reserved_for"] or (own and a["id"] == int(item))) and not a["project_archived"]
                    and (project is None or a["project"] == project)), key=lambda a: a["sort_key"])
     if item is not None:
         top = next((a for a in pool if a["id"] == int(item)), None)
         if top is None:
             a = ann.get(int(item))
+            held = a is not None and a["status"] == "open" and _item(conn, item)["reserved_for"]
             raise RiverError(f"#{item} is not ready for an agent" + (
                 "" if a is None else f" (status {a['status']}" + (f", reserved for {a['reserved_for']}" if a["reserved_for"] else "")
-                + (", for a person" if a["doer"] == "human" else "") + (", waits on open items" if not a["ready"] else "") + ")"))
+                + (", for a person" if a["doer"] == "human" else "") + (", waits on open items" if not a["ready"] else "") + ")")
+                + (f"; {_unreserve_hint(item)}" if held else ""))
     elif not pool:
         raise RiverError("nothing is ready for an agent" + (f" in {project}" if project else "")
                          + "; a new session would have no work")

@@ -115,7 +115,7 @@ def dispatch_item(conn, item_id, runner=None, agent=None, actor=None, model=None
     else river names a new session, reserves the item for it (push), and opens the chosen agent in the
     project folder with RIVER_AGENT set to that name and RIVER_FOCUS=item:<id>, so its first river go takes it."""
     t = core.launch_target(conn, agent=agent, item=item_id, model=model, effort=effort, launch_in=launch_in,
-                           options=options)
+                           options=options, actor=actor)
     waiting = core.waiting_agent_for(conn, t["project"], t["item"]["id"])
     if waiting:
         core.push(conn, t["item"]["id"], waiting, "from the page: Dispatch; you were waiting for work", actor)

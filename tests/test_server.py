@@ -278,6 +278,31 @@ class LaunchAgent(unittest.TestCase):
         self.assertIsNone(core.item_show(self.c, y)["reserved_for"])
         self.assertEqual([l["id"] for l in core.manager_findings(self.c)["lost_leases"]], [y])
 
+    def test_launch_hands_an_item_reserved_for_the_manager_to_the_new_session(self):
+        # #641: an item given to a manager (who takes no work) could not start, and nothing said how to free it.
+        from river import cli
+        import contextlib, io
+        core.project_add(self.c, "shop", path=self.dir.name)
+        x = core.item_add(self.c, "shop", "x")["id"]
+        y = core.item_add(self.c, "shop", "y")["id"]
+        for n in ("boss", "w"):
+            core.register(self.c, n)
+        with core.tx(self.c):
+            self.c.execute("UPDATE agents SET role='manager' WHERE name='boss'")
+            self.c.execute("UPDATE items SET reserved_for='boss' WHERE id IN (?,?)", (x, y))
+        sent = []
+        with self.assertRaisesRegex(RiverError, f"reserved for boss\\); .*river edit {x} --unreserve"):
+            server.dispatch_item(self.c, x, runner=sent.append, actor="w")
+        t = server.dispatch_item(self.c, x, runner=sent.append, actor="boss")
+        it = core._item(self.c, x)
+        self.assertEqual((it["reserved_for"], it["reserved_by"], len(sent)), (t["session_name"], "boss", 1))
+        self.assertEqual(core.go(self.c, self.dir.name, t["session_name"], focus=f"item:{x}")["item"]["id"], x)
+        with contextlib.redirect_stdout(io.StringIO()):
+            cli.run(["--as", "boss", "edit", str(y), "--unreserve"])
+        self.assertIsNone(core._item(self.c, y)["reserved_for"])
+        self.assertIn("reservation for boss cancelled", core.item_show(self.c, y)["events"][0]["change"])
+        core.claim(self.c, y, "w")
+
     def test_open_agent_on_a_person_item_or_a_waiting_item(self):
         from river import cli
         import contextlib, io

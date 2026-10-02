@@ -1915,6 +1915,45 @@ class Push(Base):
         core.cancel_push(self.c, self.first, "aa")
         self.assertIsNone(core._item(self.c, self.first)["reserved_for"])
 
+    def test_a_released_or_expired_claim_of_a_pushed_item_keeps_no_reservation(self):
+        # #641: a claim keeps reserved_for; given back, the item stayed reserved for the agent that had it.
+        core.push(self.c, self.x, "aa", None, "boss")
+        core.claim(self.c, self.x, "aa")
+        core.release(self.c, self.x, "not mine", "aa")
+        self.assertIsNone(core._item(self.c, self.x)["reserved_for"])
+        core.push(self.c, self.x, "aa", None, "boss")
+        core.claim(self.c, self.x, "aa")
+        self.c.execute("UPDATE items SET lease_expires_at=? WHERE id=?", (core.iso(core.now() - timedelta(minutes=1)), self.x))
+        core.activity(self.c, "bb")
+        it = core._item(self.c, self.x)
+        self.assertEqual((it["status"], it["reserved_for"], it["reserved_by"]), ("open", None, None))
+        core.claim(self.c, self.x, "bb")
+
+    def test_nothing_stays_reserved_for_an_agent_that_is_gone(self):
+        self.c.execute("UPDATE items SET reserved_for='aa' WHERE id=?", (self.first,))
+        core.activity(self.c, "bb")
+        self.assertEqual(core._item(self.c, self.first)["reserved_for"], "aa")  # aa is active
+        self.c.execute("UPDATE agents SET last_seen=? WHERE name='aa'", (core.iso(core.now() - timedelta(days=2)),))
+        core.activity(self.c, "bb")
+        self.assertIsNone(core._item(self.c, self.first)["reserved_for"])
+        self.assertIn("reservation for aa ended: aa is gone", core.item_show(self.c, self.first)["events"][0]["change"])
+
+    def test_the_one_an_item_is_reserved_for_pushes_it_on_and_refusals_name_the_command(self):
+        self.c.execute("UPDATE items SET reserved_for='boss' WHERE id=?", (self.x,))
+        with self.assertRaisesRegex(RiverError, f"reserved for boss; .*river edit {self.x} --unreserve"):
+            core.push(self.c, self.x, "bb", None, "aa")
+        with self.assertRaisesRegex(RiverError, f"river edit {self.x} --unreserve"):
+            core.claim(self.c, self.x, "bb")
+        with self.assertRaisesRegex(RiverError, f"reserved for boss; .*river edit {self.x} --unreserve"):
+            core.release(self.c, self.x, None, "boss")
+        self.c.execute("UPDATE agents SET role='manager' WHERE name='boss'")
+        with self.assertRaisesRegex(RiverError, f"reserved for you: .*river launch --item {self.x}.*river edit {self.x} --unreserve"):
+            core.claim(self.c, self.x, "boss")
+        core.push(self.c, self.x, "bb", None, "boss")
+        it = core._item(self.c, self.x)
+        self.assertEqual((it["reserved_for"], it["reserved_by"], bool(it["reserved_until"])), ("bb", "boss", True))
+        core.claim(self.c, self.x, "bb")
+
     def test_push_refusals(self):
         core.claim(self.c, self.first, "bb")
         with self.assertRaises(RiverError):
@@ -2923,6 +2962,26 @@ class Stop(Base):
         for n in ("s1", "s2"):
             core.register(self.c, n)
         core.register(self.c, "mark", human=True)
+
+    def test_a_stopped_agent_keeps_no_reservation(self):
+        # #641: only its pushes were taken back; an item it released after the stop stayed reserved for it.
+        x, pre, y = self.add("a", "x"), self.add("a", "a prerequisite"), self.add("a", "y")
+        core.push(self.c, x, "s1", None, "mark")
+        core.claim(self.c, x, "s1")
+        self.c.execute("UPDATE items SET reserved_for='s1' WHERE id=?", (pre,))  # no time limit, as for a kept prerequisite
+        core.stop_agent(self.c, "s1", "wrong model", "mark")
+        self.assertIsNone(core._item(self.c, pre)["reserved_for"])
+        self.assertIn("reservation for s1 ended: s1 was stopped", core.item_show(self.c, pre)["events"][0]["change"])
+        core.release(self.c, x, "stopped", "s1")
+        self.assertIsNone(core._item(self.c, x)["reserved_for"])
+        # Reserved for it after the stop (given to it): the next command of anyone, and its last go, end that.
+        self.c.execute("UPDATE items SET reserved_for='s1' WHERE id=?", (y,))
+        core.activity(self.c, "s2")
+        self.assertIsNone(core._item(self.c, y)["reserved_for"])
+        self.c.execute("UPDATE items SET reserved_for='s1' WHERE id=?", (y,))
+        self.assertTrue(core._finish_stop(self.c, "s1"))
+        self.assertIsNone(core._item(self.c, y)["reserved_for"])
+        core.claim(self.c, y, "s2")
 
     def test_a_waiting_agent_ends_at_once(self):
         core.goal_add(self.c, "a", "g")
