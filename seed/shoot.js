@@ -1,8 +1,12 @@
 // Takes the pictures for the README and biggestriver.com from the page, with the demo data of
-// seed/screenshots.sh, and writes them to site/img/. Uses the desktop app's Electron (no other packages):
+// seed/screenshots.sh, and writes them to site/img/ (or to OUT). Uses the desktop app's Electron (no other
+// packages), tmux, and ffmpeg:
 //   cd desktop && npm ci && npx electron ../seed/shoot.js
 // The server runs with a throwaway HOME (/tmp/.../alex), so no path of this computer shows in a picture.
-// The page never clicks Start or Dispatch here: those open real terminal windows.
+// The page never clicks Start or Dispatch here: those open real terminal windows. The agents of the
+// pictures are stand-ins in panes of a tmux server of its own (TMUX_TMPDIR), never this computer's tmux:
+// they give the Terminal of an agent on the page, the alert for a prompt that waits, and river view.
+// A sandbox blocks the tmux socket: run this outside one.
 const { app, BrowserWindow } = require("electron");
 const { execFileSync, spawn } = require("node:child_process");
 const fs = require("node:fs");
@@ -11,11 +15,14 @@ const os = require("node:os");
 const path = require("node:path");
 
 const repo = path.join(__dirname, "..");
-const out = path.join(repo, "site", "img");
+const out = process.env.OUT || path.join(repo, "site", "img");
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "river-shots-")));
 const home = path.join(tmp, "alex");
+const sock = fs.realpathSync(fs.mkdtempSync("/tmp/rs-"));  // short: a socket path has a length limit
 const W = 1280, H = 820;
+const COLS = 160, ROWS = 44;  // the terminal that runs river view
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const tmuxExe = ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"].find((p) => fs.existsSync(p)) || "tmux";
 
 function freePort() {
   return new Promise((resolve) => { const s = net.createServer(); s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => resolve(p)); }); });
@@ -32,22 +39,42 @@ function makeHome() {
 const riverIn = (env) => (...a) => execFileSync("python3", [path.join(repo, "bin", "river"), "-q", ...a], { env, encoding: "utf8" });
 
 // river serve on a database; returns its URL and a stop function.
+const servers = [];
 async function serve(env) {
   const port = await freePort();
   const srv = spawn("python3", [path.join(repo, "bin", "river"), "serve", "--port", String(port)], { env, stdio: "ignore" });
+  servers.push(srv);
   return { url: `http://127.0.0.1:${port}/`, stop: () => srv.kill() };
+}
+
+// What a stand-in agent shows in its pane: demo text in the look of an agent CLI.
+const E = "\x1b[", R = E + "0m";
+const tool = (name, arg, ...res) => [`${E}32m●${R} ${E}1m${name}${R}(${arg})`, ...res.map((x, i) => `${E}2m  ${i ? " " : "└"} ${x}${R}`), ""];
+const busy = (text) => [`${E}33m✻ ${text}${R}`];
+function screen(a) {
+  return [`${E}2m>${R} go`, "",
+    ...tool("Bash", "river go", `You are river agent ${a.name}. Role: WORKER.`, `YOUR ITEM #${a.id}: ${a.title}`),
+    ...a.steps.flat()].join("\n");
 }
 
 async function main() {
   fs.mkdirSync(out, { recursive: true });
   makeHome();
-  const base = { ...process.env, HOME: home, SHELL: "/bin/zsh", TZ: "UTC" };
-  for (const k of ["RIVER_AGENT", "RIVER_FOCUS", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "RIVER_DB"]) delete base[k];
+  const base = { ...process.env, HOME: home, SHELL: "/bin/zsh", TZ: "UTC", LANG: "en_US.UTF-8", LC_ALL: "en_US.UTF-8", TMUX_TMPDIR: sock };
+  for (const k of ["RIVER_AGENT", "RIVER_FOCUS", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "RIVER_DB", "TMUX", "TMUX_PANE"]) delete base[k];
+  const tmux = (...a) => execFileSync(tmuxExe, ["-u", "-f", "/dev/null", ...a], { env: base, encoding: "utf8" }).replace(/\n$/, "");
+  const outer = (...a) => tmux("-L", "outer", ...a);
+  // The tmux server of the pictures is a new one: this must find no server.
+  let other = null;
+  try { other = tmux("list-sessions"); } catch (e) { /* no server: right */ }
+  if (other !== null) throw new Error("a tmux server answers on the socket of the pictures: " + other);
+
   const win = new BrowserWindow({ width: W, height: H, show: false, paintWhenInitiallyHidden: true,
     webPreferences: { backgroundThrottling: false } });
   const js = (code) => win.webContents.executeJavaScript(code);
   let url;
   const ready = async () => { for (let i = 0; i < 50; i++) { try { await win.loadURL(url); return; } catch (e) { await sleep(200); } } };
+  const until = async (code, tries = 50) => { for (let i = 0; i < tries; i++) { if (await js(code)) return true; await sleep(200); } return false; };
 
   // Open the page on a link (#tab-graph&as-alex) in a theme, wait until it has drawn, run a step, take a picture.
   async function open(hash, theme = "light") {
@@ -55,7 +82,7 @@ async function main() {
     // A new hash alone does not load the page again: go through a blank page.
     await win.loadURL("about:blank");
     await win.loadURL(url + (hash ? "#" + hash : ""));
-    for (let i = 0; i < 50; i++) { if (await js(`!!document.querySelector("#work .row, #work .card, #work > *")`)) break; await sleep(200); }
+    await until(`!!document.querySelector("#work .row, #work .card, #work > *")`);
     await sleep(1200);
     // Paths: the throwaway HOME reads as ~, like on a person's own computer.
     await js(`(() => { const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT); let n;
@@ -73,10 +100,17 @@ async function main() {
     }
     const img = await win.webContents.capturePage(rect);
     fs.writeFileSync(path.join(out, name), img.toPNG());
-    console.log("wrote", name, img.getSize());
+    console.log("wrote", name, JSON.stringify(img.getSize()));
   }
   const frames = [];
   async function frame() { const img = await win.webContents.capturePage(); frames.push(img.toPNG()); }
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  // A terminal window with this HTML as its text.
+  const termPage = (inner, font = "13px/1.45") => "data:text/html;charset=utf-8," + encodeURIComponent(`<!doctype html><body style="margin:0;background:#1e1f24">
+    <div id="t" style="margin:24px;border-radius:10px;background:#15161a;box-shadow:0 8px 30px #0008;overflow:hidden;width:${W - 48}px">
+    <div style="height:28px;background:#2a2b31;display:flex;align-items:center;gap:8px;padding-left:12px">
+    <i style="width:12px;height:12px;border-radius:6px;background:#ff5f57"></i><i style="width:12px;height:12px;border-radius:6px;background:#febc2e"></i><i style="width:12px;height:12px;border-radius:6px;background:#28c840"></i></div>
+    <pre style="margin:0;padding:16px 18px;color:#d8dae0;font:${font} Menlo,monospace;white-space:pre-wrap">${inner}</pre></div></body>`);
 
   // The setup guide on a first start: only the person is known yet. It opens by itself.
   const first = { ...base, RIVER_DB: path.join(tmp, "first.db") };
@@ -92,11 +126,75 @@ async function main() {
   const river = riverIn(env);
   river("config", "set", "setup_done", "on");  // first, so the Recent panel shows only the demo work
   execFileSync("sh", [path.join(repo, "seed", "screenshots.sh")], { env, stdio: "ignore" });
+  // The briefing picture: before the page pictures, so the board keeps the state the seed made.
+  const brief = river("--as", "web-agent", "go", "--project", "website");
+
+  // Two more agents at work, so river view has four panes.
+  const add = (project, title, touches) => +river("--json", "--as", "alex", "add", project, title, "--doer", "ai", "--touches", touches).match(/"id":\s*(\d+)/)[1];
+  const extra = [
+    { name: "search-agent", note: "storefront work", project: "website", title: "Add search to the product list", touches: "web/search/",
+      steps: [tool("Read", "web/products/List.tsx", "Read 97 lines"), tool("Write", "web/search/SearchBox.tsx", "Wrote 58 lines"),
+        tool("Bash", "npm test -- SearchBox", "6 passed"), busy("Connecting the search box to the product list… (48s)")] },
+    { name: "email-agent", note: "backend work", project: "backend", title: "Send an email when an order ships", touches: "api/email.py",
+      steps: [tool("Read", "api/email.py", "Read 44 lines"), tool("Update", "api/email.py", "Added 31 lines"),
+        tool("Bash", "pytest tests/test_email.py", "1 failed, 7 passed"), busy("Fixing the test for the subject line… (1m 05s)")] },
+  ];
+  for (const a of extra) {
+    river("register", a.name, "--note", a.note);
+    a.id = add(a.project, a.title, a.touches);
+    river("--as", a.name, "claim", String(a.id));
+  }
+  const agents = [
+    { name: "api-agent", id: 2, title: "Build the orders API",
+      steps: [tool("Read", "api/orders.md", "Read 61 lines"), tool("Write", "api/orders.py", "Wrote 142 lines"),
+        tool("Bash", "pytest tests/test_orders.py", "12 passed in 0.84s"), busy("Adding pages to GET /orders… (2m 14s)")] },
+    { name: "web-agent", id: 10, title: "Resize the product photos",
+      steps: [tool("Bash", "node web/scripts/resize.js web/public/products", "24 photos: 4000 px to 1600 px"),
+        [`${E}32m●${R} ${E}1mBash${R}(git commit -am "Resize the product photos")`, "",
+          `  ${E}1mDo you want to proceed?${R}`, `  ${E}36m❯ 1. Yes${R}`, "    2. Yes, and don't ask again for git commit", "    3. No, and tell the agent what to do differently"]] },
+    ...extra,
+  ];
+
+  // The agents in tmux, as river launch --tmux makes them: a window each in the session river, with the
+  // session's name and the agent's name on the pane. A stand-in shows the screen and stays.
+  const standin = path.join(tmp, "agent.py");
+  fs.writeFileSync(standin, `import signal, sys, time
+text = open(sys.argv[1]).read()
+def draw(*_):
+    sys.stdout.write("\\x1b[2J\\x1b[H\\x1b[?25l" + text.replace("\\n", "\\r\\n"))
+    sys.stdout.flush()
+signal.signal(signal.SIGWINCH, draw)
+draw()
+while True:
+    time.sleep(60)
+`);
+  const cwd = path.join(home, "code", "shop");
+  agents.forEach((a, i) => {
+    const file = path.join(tmp, a.name + ".txt");
+    fs.writeFileSync(file, screen(a));
+    const name = `#${a.id} ${a.title}`.slice(0, 45);
+    const make = i ? ["new-window", "-d", "-t", "=river:"] : ["new-session", "-d", "-s", "river", "-x", String(COLS), "-y", String(ROWS)];
+    const pane = tmux(...make, "-n", name, "-c", cwd, "-P", "-F", "#{pane_id}", `exec python3 ${standin} ${file}`);
+    // The status line shows the time only: the default also shows the host name.
+    if (!i) { tmux("set-option", "-t", "=river:", "default-size", `${COLS}x${ROWS}`); tmux("set-option", "-g", "status-right", " %H:%M "); }
+    tmux("set-option", "-p", "-t", pane, "@river_name", name);
+    tmux("set-option", "-p", "-t", pane, "@river_agent", a.name);
+  });
+  console.log(river("view"));  // side by side, as a person's river view leaves them
+
+  // The prompt alert comes after a short wait here.
+  river("config", "set", "prompt_wait", "1s");
+  river("config", "set", "notify_interval", "2s");
   const s2 = await serve(env); url = s2.url; await ready();
+  await open("as-alex");
+  if (!await until(`/waits on a prompt/.test((document.querySelector("#needsYou") || {}).textContent || "")`, 150)) throw new Error("no prompt alert on the page");
 
   for (const theme of ["light", "dark"]) {
     await open("as-alex", theme);
     await shot(`board-${theme}.png`);
+    // The alert's row open: its Terminal button shows.
+    await js(`[...document.querySelectorAll("#needsYou .nyl")].find(e => /waits on a prompt/.test(e.textContent)).click()`);
+    await sleep(300);
     await shot(`needs-you-${theme}.png`, "#needsYouPanel", 8);
   }
   await open("tab-capacity&as-alex"); await shot("parallel-work.png", "#tab-capacity", 8);
@@ -105,10 +203,21 @@ async function main() {
   await open("tab-projects&as-alex");
   await js(`(() => { const s = document.querySelector("#goalFilter"); s.value = "checkout-launch"; s.dispatchEvent(new Event("change")); })()`);
   await sleep(600); await shot("goals.png", "#tab-projects", 8);
+  await js(`localStorage.removeItem("river.goal")`);  // the page remembers the goal: the pictures after this one show all work
 
-  // The tour: Board, an item, Projects, Graph, Targets, Done; two frames each, so each view stays a moment.
-  for (const h of ["as-alex", "as-alex&item-4", "tab-projects&as-alex", "tab-graph&as-alex", "tab-targets&as-alex", "tab-done&as-alex"]) {
+  // The Terminal of an agent on the page: its pane, with the prompt that waits there.
+  const termOpen = () => until(`(document.querySelector("#termScreen") || {}).textContent > ""`);
+  for (const theme of ["light", "dark"]) {
+    await open("as-alex&terminal-web-agent", theme);
+    if (!await termOpen()) throw new Error("the Terminal dialog shows nothing");
+    await sleep(400);
+    await shot(`terminal-${theme}.png`, "#termDlg .box", 16);
+  }
+
+  // The tour: Board, an agent's Terminal, an item, Projects, Graph, Targets, Done; two frames each.
+  for (const h of ["as-alex", "as-alex&terminal-web-agent", "as-alex&item-4", "tab-projects&as-alex", "tab-graph&as-alex", "tab-targets&as-alex", "tab-done&as-alex"]) {
     await open(h); if (h.includes("graph")) await sleep(1500);
+    if (h.includes("terminal")) { await termOpen(); await sleep(400); }
     await frame(); await frame();
   }
   const fd = path.join(tmp, "frames"); fs.mkdirSync(fd);
@@ -118,18 +227,32 @@ async function main() {
     "-loop", "0", path.join(out, "board-tour.gif")]);
   console.log("wrote board-tour.gif");
 
+  // river view: the command runs in a terminal of COLS x ROWS (a pane of a second tmux server), and that
+  // terminal's screen, with its colours, is the picture.
+  outer("new-session", "-d", "-s", "outer", "-x", String(COLS), "-y", String(ROWS), "-c", cwd,
+    `env -u TMUX -u TMUX_PANE python3 ${path.join(repo, "bin", "river")} view`, ";", "set-option", "-g", "status", "off");
+  await sleep(2500);
+  const view = outer("capture-pane", "-p", "-e", "-t", "outer");
+  await open("as-alex");
+  const viewHtml = await js(`import("/components/terminalDialog.js").then(m => m.ansiToHtml(${JSON.stringify(view)}))`);
+  await win.loadURL(termPage(viewHtml, "12px/1.2"));
+  await sleep(500); await shot("river-view.png", "#t", 0);
+
   // The go briefing an agent reads, drawn as a terminal window.
-  const brief = river("--as", "web-agent", "go", "--project", "website");
-  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
-  await win.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(`<!doctype html><body style="margin:0;background:#1e1f24">
-    <div id="t" style="margin:24px;border-radius:10px;background:#15161a;box-shadow:0 8px 30px #0008;overflow:hidden;width:${W - 48}px">
-    <div style="height:28px;background:#2a2b31;display:flex;align-items:center;gap:8px;padding-left:12px">
-    <i style="width:12px;height:12px;border-radius:6px;background:#ff5f57"></i><i style="width:12px;height:12px;border-radius:6px;background:#febc2e"></i><i style="width:12px;height:12px;border-radius:6px;background:#28c840"></i></div>
-    <pre style="margin:0;padding:16px 18px;color:#d8dae0;font:13px/1.45 Menlo,monospace;white-space:pre-wrap"><span style="color:#8bd5a0">~/code/shop $</span> river go\n${esc(brief.trim())}</pre></div></body>`));
+  await win.loadURL(termPage(`<span style="color:#8bd5a0">~/code/shop $</span> river go\n${esc(brief.trim())}`));
   await sleep(500); await shot("go-briefing.png", "#t", 0);
 
   s2.stop();
+  for (const t of [outer, tmux]) { try { t("kill-server"); } catch (e) { /* none */ } }
   fs.rmSync(tmp, { recursive: true, force: true });
+  fs.rmSync(sock, { recursive: true, force: true });
 }
 
-app.whenReady().then(main).then(() => app.quit(), (e) => { console.error(e); app.exit(1); });
+app.whenReady().then(main).then(() => app.quit(), (e) => {
+  console.error(e);
+  for (const srv of servers) srv.kill();
+  // Only the servers of the pictures: each by the path of its own socket.
+  const dir = path.join(sock, "tmux-" + os.userInfo().uid);
+  for (const name of ["outer", "default"]) { try { execFileSync(tmuxExe, ["-S", path.join(dir, name), "kill-server"], { stdio: "ignore" }); } catch (x) { /* none */ } }
+  app.exit(1);
+});
