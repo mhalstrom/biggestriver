@@ -3488,3 +3488,150 @@ class BusyLease(Base):
         self.assertEqual(core.busy_now(self.c), set())
         core.PROC_RUNNER = lambda: (_ for _ in ()).throw(OSError("no ps"))
         self.assertEqual(core.busy_now(self.c), set())
+
+
+class Rename(Base):
+    """maxpm project rename and maxpm target rename: everything follows, and the old name is an alias."""
+
+    def setUp(self):
+        super().setUp()
+        core.ALIASES_USED.clear()
+        self.folder = os.path.realpath(self.dir.name)
+        core.target_add(self.c, "site", "push to main")
+        core.project_add(self.c, "old", notes="the tool", path=self.folder, target="site")
+        core.project_add(self.c, "other")
+        core.project_tracker(self.c, "old", "github o/r via gh")
+        core.goal_add(self.c, "old", "launch", "it is live", "the page answers")
+        core.review_step_add(self.c, "old", "read the diff")
+        self.item = self.add("old", "write it")
+        core.register(self.c, "w1")
+        self.c.execute("UPDATE agents SET role='waiting', waiting_in='other,old' WHERE name='w1'")
+
+    def test_everything_of_the_project_follows_the_new_name(self):
+        rank = core._project(self.c, "old")["rank"]
+        res = core.project_rename(self.c, "old", "new", "t")
+        self.assertEqual((res["name"], res["was"], res["items"], res["goals"], res["settings"], res["waiting_agents"]),
+                         ("new", "old", 1, 1, 1, 1))
+        p = core.project_show(self.c, "new")
+        self.assertEqual((p["rank"], p["path"], p["target"], p["tracker"], p["description"]),
+                         (rank, self.folder, "site", "github o/r via gh", "the tool"))
+        self.assertEqual([i["id"] for i in core.item_list(self.c, "new")], [self.item])
+        self.assertEqual([g["name"] for g in core.goal_list(self.c, "new")], ["launch"])
+        self.assertEqual([s["project"] for s in core.review_steps(self.c, "new")], ["new"])
+        self.assertEqual(core.projects_for_dir(self.c, self.folder), ["new"])
+        self.assertEqual(core.item_show(self.c, self.item)["project"], "new")
+        self.assertEqual(self.c.execute("SELECT scope FROM settings WHERE key='tracker'").fetchone()[0], "project:new")
+        self.assertEqual(self.c.execute("SELECT waiting_in FROM agents WHERE name='w1'").fetchone()[0], "other,new")
+        self.assertEqual(core.waiting_agent_for(self.c, "new"), "w1")
+        self.assertIn("project old renamed to new", [e["change"].split(";")[0] for e in core.recent_events(self.c)])
+        # A new agent in the folder gets the new name as its prefix; an agent with the old prefix keeps its name.
+        core.register(self.c, "old-1a2b")
+        self.assertTrue(core.go(self.c, self.folder)["agent"].startswith("new-"))
+        self.assertEqual(core.go(self.c, self.folder, "old-1a2b")["agent"], "old-1a2b")
+
+    def test_the_old_name_finds_the_project_until_its_time_ends(self):
+        res = core.project_rename(self.c, "old", "new", "t")
+        self.assertEqual(core.project_show(self.c, "new")["aliases"], [{"name": "old", "until": res["alias_until"]}])
+        self.assertEqual(core.project_show(self.c, "old")["name"], "new")
+        self.assertEqual(core.ALIASES_USED, {("project", "old"): ("new", res["alias_until"])})
+        added = core.item_add(self.c, "old", "more", actor="t")
+        self.assertEqual(added["project"], "new")
+        self.assertEqual(len(core.item_list(self.c, "old")), 2)
+        self.assertEqual({a["project"] for a in core.ready_list(self.c, "other,old")}, {"new"})
+        self.assertEqual(core.next_item(self.c, "old", claim=True, actor="w1")[0]["project"], "new")
+        self.assertEqual(core.go(self.c, "/", "w1", project="old")["projects"], ["new"])
+        self.assertEqual(core.plan(self.c, "/", project="old")["projects"], ["new"])
+        self.assertEqual(core.config_set(self.c, "lease_ttl", "1h", project="old")["scope"], "project:new")
+        self.assertEqual(core.project_describe(self.c, "old", "the tool, renamed")["description"], "the tool, renamed")
+        self.assertEqual(core.project_known(self.c, "old"), "new")
+        self.assertEqual([p["name"] for p in core.project_list(self.c) if p["aliases"]], ["new"])
+        with self.assertRaisesRegex(RiverError, "old name of project new"):
+            core.project_add(self.c, "old")
+        with self.assertRaisesRegex(RiverError, "old name of project new"):
+            core.project_rename(self.c, "other", "old")
+        # After the alias time (90 days) the old name is refused with the new name, and it is free again.
+        with mock.patch.object(core, "now", lambda t=core.now(): t + timedelta(days=91)):
+            with self.assertRaisesRegex(RiverError, "project old is now new: use the new name"):
+                core.item_list(self.c, "old")
+            self.assertEqual(core.project_show(self.c, "new")["aliases"], [])
+            self.assertIsNone(core.project_known(self.c, "old"))
+            self.assertEqual(core.project_add(self.c, "old")["name"], "old")
+        self.assertEqual(core.item_list(self.c, "old"), [])
+
+    def test_a_rename_needs_a_free_name_and_can_go_back(self):
+        for new, why in (("other", "exists"), ("New Name", "lower-case"), ("old", "has that name already")):
+            with self.assertRaisesRegex(RiverError, why):
+                core.project_rename(self.c, "old", new)
+        with self.assertRaisesRegex(RiverError, "no project 'gone'"):
+            core.project_rename(self.c, "gone", "new")
+        self.assertEqual(core.project_rename(self.c, "old", "new", alias_for="0")["alias_until"], None)
+        # --alias-for 0: the old name stops at once.
+        with self.assertRaisesRegex(RiverError, "no project 'old'"):
+            core.item_list(self.c, "old")
+        with self.assertRaisesRegex(RiverError, "bad duration"):
+            core.project_rename(self.c, "new", "newer", alias_for="soon")
+        # Back to the first name: the name it takes back is its own alias, and the other name becomes one.
+        core.project_rename(self.c, "new", "newer", alias_for="7d")
+        core.project_rename(self.c, "new", "old")
+        self.assertEqual(sorted(a["name"] for a in core.project_show(self.c, "old")["aliases"]), ["new", "newer"])
+        core.project_rename(self.c, "newer", "new")
+        self.assertEqual([a["name"] for a in core.project_show(self.c, "new")["aliases"]], ["newer", "old"])
+        self.assertEqual([i["id"] for i in core.item_list(self.c, "old")], [self.item])
+
+    def test_a_target_takes_its_projects_its_items_and_its_deploy_project(self):
+        dep = core.ship(self.c, self.item, "t")
+        core.config_set(self.c, "review", "on", project="deploy-site")
+        self.assertEqual((dep["project"], dep["title"], dep["target"]), ("deploy-site", "Deploy site", "site"))
+        with self.assertRaisesRegex(RiverError, "maxpm target rename site"):
+            core.project_rename(self.c, "deploy-site", "releases")
+        core.target_add(self.c, "taken")
+        with self.assertRaisesRegex(RiverError, "exists"):
+            core.target_rename(self.c, "site", "taken")
+        with self.assertRaisesRegex(RiverError, "deploy items of target taken"):
+            core.project_rename(self.c, "other", "deploy-taken")
+        res = core.target_rename(self.c, "site", "web", "t")
+        self.assertEqual((res["name"], res["was"], res["projects"], res["items"], res["deploy_project"]),
+                         ("web", "site", 2, 1, "deploy-web"))
+        dep = core.item_show(self.c, dep["id"])
+        self.assertEqual((dep["project"], dep["title"], dep["target"]), ("deploy-web", "Deploy web", "web"))
+        self.assertEqual(core.project_show(self.c, "old")["target"], "web")
+        self.assertTrue(core._project(self.c, "deploy-web")["notes"].startswith("Deploys to target web,"))
+        self.assertEqual(core.setting(self.c, "review", item_id=dep["id"]), "on")
+        shown = core.target_show(self.c, "site")
+        self.assertEqual((shown["name"], [a["name"] for a in shown["aliases"]], sorted(p["name"] for p in shown["projects"])),
+                         ("web", ["site"], ["deploy-web", "old"]))
+        self.assertEqual(core.project_known(self.c, "deploy-site"), "deploy-web")
+        # The next ship request joins the same deploy item, and the old target name still takes an owner.
+        second = self.add("old", "more")
+        self.assertEqual(core.ship(self.c, second, "t")["id"], dep["id"])
+        self.assertEqual(core.target_own(self.c, "site", "w1")["owner"], "w1")
+        self.assertEqual(core.project_target(self.c, "other", "site")["target"], "web")
+        self.assertEqual([t["name"] for t in core.targets_view(self.c) if t["pending"]], ["web"])
+
+    def test_the_command_renames_and_says_when_an_old_name_was_used(self):
+        from river import cli
+        old_env = os.environ.get("RIVER_DB")
+        os.environ["RIVER_DB"] = self.path
+        try:
+            def run(*words):
+                out, err = io.StringIO(), io.StringIO()
+                core.ALIASES_USED.clear()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    cli.run(list(words))
+                return out.getvalue(), err.getvalue()
+            out, err = run("project", "rename", "old", "new", "--alias-for", "30d")
+            self.assertIn("project old is now new: 1 items, 1 goals", out)
+            self.assertIn("the old name old still works until", out)
+            self.assertNotIn("is now", err)
+            out, err = run("list", "--project", "old")
+            self.assertIn("write it", out)
+            self.assertIn("(project old is now new: use the new name; the old name works until", err)
+            self.assertIn("new  (1 open)  [target site]  (old name: old until", run("project", "list")[0])
+            out, err = run("target", "rename", "site", "web")
+            self.assertIn("target site is now web: 1 projects and 0 deploy, review and monitor items follow", out)
+            self.assertIn("web  (old name: site until", run("target", "show", "site")[0])
+        finally:
+            if old_env is None:
+                del os.environ["RIVER_DB"]
+            else:
+                os.environ["RIVER_DB"] = old_env

@@ -351,6 +351,17 @@ def _unread_text(u, actor):
     return f"inbox: {', '.join(parts)} (maxpm --as {actor} inbox)"
 
 
+def _aliases_text(row):
+    """The old names of a renamed project or target that still find it, for the line with its name."""
+    old = [f"{x['name']}" + (f" until {x['until'][:10]}" if x["until"] else "") for x in row.get("aliases") or []]
+    return f"  (old name: {', '.join(old)})" if old else ""
+
+
+def _old_name_text(old, until):
+    return (f"the old name {old} still works until {until[:10]}; agents keep their names, and a new agent "
+            f"gets the new name" if until else f"the old name {old} does not work from now on")
+
+
 def _footer(conn, actor):
     if not actor:
         return
@@ -423,6 +434,10 @@ def build_parser():
     x.add_argument("name"); x.add_argument("text", nargs="?",
                                           help="which tracker, where, what tool: \"github owner/repo via gh\"; none clears it")
     x = prs.add_parser("rank"); x.add_argument("name"); x.add_argument("rank", type=int)
+    x = prs.add_parser("rename", help="give a project a new name; the old name stays an alias for a time")
+    x.add_argument("name"); x.add_argument("new")
+    x.add_argument("--alias-for", metavar="TIME", help=f"how long the old name still finds the project "
+                   f"(default {core.ALIAS_TTL}; 0: not at all)")
     x = prs.add_parser("archive"); x.add_argument("name")
     prs.add_parser("list")
 
@@ -465,6 +480,10 @@ def build_parser():
     x = tgs.add_parser("monitor", help="what a session watches after each deploy (health links, logs, for how long)")
     x.add_argument("name"); x.add_argument("text", nargs="?", help="the monitor text; \"\" removes it; none shows it")
     x = tgs.add_parser("show", help="a target, its owner, and its projects"); x.add_argument("name")
+    x = tgs.add_parser("rename", help="give a target a new name; its projects, deploy items and deploy project follow")
+    x.add_argument("name"); x.add_argument("new")
+    x.add_argument("--alias-for", metavar="TIME", help=f"how long the old name still finds the target "
+                   f"(default {core.ALIAS_TTL}; 0: not at all)")
     x = tgs.add_parser("own", help="become the one owner of a target (runs its deploys)"); x.add_argument("name")
     x.add_argument("--takeover", metavar="WHY", help="take the target from an owner who is away or gone; "
                    "says why, and the old owner is told")
@@ -1013,6 +1032,9 @@ def run(argv=None):
     try:
         return _run(args, conn)
     finally:
+        for (kind, old), (new, until) in core.ALIASES_USED.items():
+            print(f"({kind} {old} is now {new}: use the new name" + (f"; the old name works until {until[:10]})"
+                                                                     if until else ")"), file=sys.stderr)
         conn.close()
 
 
@@ -1365,6 +1387,7 @@ def link_folder(conn, here, project=None, description="", actor=None):
     else:
         name = folder_project_name(here)
     if name:
+        name = core.project_known(conn, name) or name  # the old name of a renamed project finds it
         exists = conn.execute("SELECT 1 FROM projects WHERE name=?", (name,)).fetchone()
         if exists:
             core.project_path(conn, name, str(here), actor, move=bool(project))
@@ -1459,6 +1482,8 @@ def dispatch(conn, a, actor):
             return core.project_target(conn, a.name, a.target, actor)
         if a.pcmd == "tracker":
             return core.project_tracker(conn, a.name, a.text, actor)
+        if a.pcmd == "rename":
+            return core.project_rename(conn, a.name, a.new, actor, a.alias_for)
         if a.pcmd == "archive":
             return core.project_archive(conn, a.name, actor)
         return core.project_list(conn)
@@ -1532,6 +1557,8 @@ def dispatch(conn, a, actor):
             return core.target_describe(conn, a.name, a.text, actor)
         if a.tcmd == "show":
             return core.target_show(conn, a.name)
+        if a.tcmd == "rename":
+            return core.target_rename(conn, a.name, a.new, actor, a.alias_for)
         if a.tcmd == "monitor":
             return core.target_show(conn, a.name) if a.text is None else core.target_monitor(conn, a.name, a.text, actor)
         if a.tcmd == "own":
@@ -2393,9 +2420,14 @@ def render(a, res):
     if c == "project" and a.pcmd == "tracker":
         print(f"{res['name']}: tracker " + (res["tracker"] or "none"))
         return
+    if c == "project" and a.pcmd == "rename":
+        print(f"project {res['was']} is now {res['name']}: {res['items']} items, {res['goals']} goals, the folder, "
+              f"the rank, the target and the settings follow")
+        print("  " + _old_name_text(res["was"], res["alias_until"]))
+        return
     if c == "project":
         if isinstance(res, dict) and "ready_count" in res:
-            print(f"{res['name']} (rank {res['rank']})")
+            print(f"{res['name']} (rank {res['rank']})" + _aliases_text(res))
             print("  " + (res["description"] or "(no description: maxpm project describe " + res["name"] + " \"...\")"))
             print("  target: " + (res.get("target") or "none (maxpm project target " + res["name"] + " <target>)"))
             print("  tracker: " + (res.get("tracker") or "none (maxpm project tracker " + res["name"] + " \"<tracker> <where> via <tool>\")"))
@@ -2412,7 +2444,7 @@ def render(a, res):
         rows = res if isinstance(res, list) else [res]
         for p in rows:
             print(f"{p['rank']:>2}. {p['name']}" + (f"  ({p['open_items']} open)" if "open_items" in p else "")
-                  + (f"  [target {p['target']}]" if p.get("target") else ""))
+                  + (f"  [target {p['target']}]" if p.get("target") else "") + _aliases_text(p))
             if p.get("notes"):
                 print(f"    {p['notes']}")
         return
@@ -2472,7 +2504,13 @@ def render(a, res):
                 if t["description"]:
                     print(f"    {t['description']}")
             return
-        print(res["name"])
+        if a.tcmd == "rename":
+            print(f"target {res['was']} is now {res['name']}: {res['projects']} projects and {res['items']} deploy, "
+                  f"review and monitor items follow"
+                  + (f"; its deploy project is now {res['deploy_project']}" if res["deploy_project"] else ""))
+            print("  " + _old_name_text(res["was"], res["alias_until"]))
+            return
+        print(res["name"] + _aliases_text(res))
         print("  " + (res["description"] or f"(no description: maxpm target describe {res['name']} \"how it deploys\")"))
         print("  monitor: " + (res.get("monitor") or f"none (a session follows each deploy when you set one: "
                                                       f"maxpm target monitor {res['name']} \"<what to watch, for how long>\")"))

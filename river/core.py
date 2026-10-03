@@ -460,6 +460,17 @@ CREATE TABLE IF NOT EXISTS notifications (
   UNIQUE (event_id, channel)
 );
 
+-- The old name of a renamed project or target (maxpm project rename, maxpm target rename): it finds
+-- the row with the new name until `until` (NULL: no end), so running agents and old instructions work.
+CREATE TABLE IF NOT EXISTS aliases (
+  kind        TEXT NOT NULL CHECK (kind IN ('project','target')),
+  alias       TEXT NOT NULL,
+  ref_id      INTEGER NOT NULL,
+  created_at  TEXT NOT NULL,
+  until       TEXT,
+  PRIMARY KEY (kind, alias)
+);
+
 CREATE INDEX IF NOT EXISTS items_status ON items(status);
 CREATE INDEX IF NOT EXISTS deps_blocked_by ON deps(blocked_by);
 CREATE INDEX IF NOT EXISTS events_item ON events(item_id);
@@ -837,8 +848,7 @@ def _scope(conn, project=None, item=None, agent=None, kind=None) -> str:
             raise RiverError("--kind is an item kind, for example work, deploy, review")
         return f"kind:{kind}"
     if project is not None:
-        _project(conn, project)
-        return f"project:{project}"
+        return f"project:{_project(conn, project)['name']}"
     if item is not None:
         _item(conn, item)
         return f"item:{item}"
@@ -1218,8 +1228,73 @@ def set_agent_model(conn, name, model):
 
 # ---------------------------------------------------------------- projects
 
+# How long the old name of a renamed project or target still finds it (rename --alias-for).
+ALIAS_TTL = "90d"
+# The old names this process used, for one note to the caller: {(kind, old name): (new name, until)}.
+ALIASES_USED = {}
+
+
+def _alias(conn, kind, name):
+    """The project or target row an old name stands for; None when the name was never one. An old name
+    past its time is refused with the new name."""
+    a = conn.execute("SELECT * FROM aliases WHERE kind=? AND alias=?", (kind, name)).fetchone()
+    r = a and conn.execute(f"SELECT * FROM {kind}s WHERE id=?", (a["ref_id"],)).fetchone()
+    if not r:
+        return None
+    if a["until"] and parse_iso(a["until"]) < now():
+        raise RiverError(f"{kind} {name} is now {r['name']}: use the new name (the old name worked until {a['until']})")
+    ALIASES_USED[(kind, name)] = (r["name"], a["until"])
+    return r
+
+
+def _alias_until(alias_for):
+    """rename --alias-for as an end time: a duration (default ALIAS_TTL); 0 or none: no alias (False)."""
+    text = str(ALIAS_TTL if alias_for is None else alias_for).strip().lower()
+    if text in ("0", "none", "no", "off"):
+        return False
+    return iso(now() + parse_duration(text))
+
+
+def _new_name(conn, kind, row, new):
+    """Check the new name of a project or target (inside a tx): refused when the name is in use, as a
+    name or as the old name of another one. The row's own old name is free to take back."""
+    if not re.match(r"^[a-z0-9][a-z0-9._-]*$", new or ""):
+        raise RiverError(f"{kind} names use lower-case letters, digits, '.', '_', '-'")
+    if new == row["name"]:
+        raise RiverError(f"{kind} {new} has that name already")
+    if conn.execute(f"SELECT 1 FROM {kind}s WHERE name=?", (new,)).fetchone():
+        raise RiverError(f"{kind} {new!r} exists; a rename needs a name that is free")
+    _free_alias(conn, kind, new, but=row["id"])
+
+
+def _free_alias(conn, kind, name, but=None):
+    """Before a project or target gets `name`: refuse while it is the old name of another one; an old name
+    past its time, or of the row `but` itself, is removed. Inside a tx."""
+    a = conn.execute("SELECT * FROM aliases WHERE kind=? AND alias=?", (kind, name)).fetchone()
+    if not a:
+        return
+    r = conn.execute(f"SELECT name FROM {kind}s WHERE id=?", (a["ref_id"],)).fetchone()
+    if r and a["ref_id"] != but and not (a["until"] and parse_iso(a["until"]) < now()):
+        raise RiverError(f"{name!r} is the old name of {kind} {r['name']}"
+                         + (f" until {a['until']}" if a["until"] else "") + "; pick another name")
+    conn.execute("DELETE FROM aliases WHERE kind=? AND alias=?", (kind, name))
+
+
+def _set_alias(conn, kind, alias, ref_id, until):
+    if until:
+        conn.execute("INSERT OR REPLACE INTO aliases(kind,alias,ref_id,created_at,until) VALUES (?,?,?,?,?)",
+                     (kind, alias, ref_id, iso(now()), until))
+
+
+def aliases_of(conn, kind, ref_id):
+    """The old names of a project or target that still find it."""
+    return [{"name": a["alias"], "until": a["until"]} for a in conn.execute(
+        "SELECT alias, until FROM aliases WHERE kind=? AND ref_id=? ORDER BY created_at, alias", (kind, ref_id))
+        if not (a["until"] and parse_iso(a["until"]) < now())]
+
+
 def _project(conn, name):
-    r = conn.execute("SELECT * FROM projects WHERE name=?", (name,)).fetchone()
+    r = conn.execute("SELECT * FROM projects WHERE name=?", (name,)).fetchone() or _alias(conn, "project", name)
     if not r:
         names = [x["name"] for x in conn.execute("SELECT name FROM projects WHERE archived=0 ORDER BY rank")]
         raise RiverError(f"no project {name!r}; projects: {', '.join(names) or '(none; maxpm project add <name>)'}")
@@ -1232,6 +1307,7 @@ def project_add(conn, name, rank=None, notes="", actor=None, path=None, target=N
     with tx(conn):
         if conn.execute("SELECT 1 FROM projects WHERE name=?", (name,)).fetchone():
             raise RiverError(f"project {name!r} exists")
+        _free_alias(conn, "project", name)
         top = conn.execute("SELECT COALESCE(MAX(rank),0) m FROM projects").fetchone()["m"]
         conn.execute("INSERT INTO projects(name,rank,notes,created_at) VALUES (?,?,?,?)",
                      (name, top + 1, notes, iso(now())))
@@ -1248,7 +1324,7 @@ def project_add(conn, name, rank=None, notes="", actor=None, path=None, target=N
 def project_rank(conn, name, rank, actor=None):
     """Move a project to position `rank` (1 = most important) and renumber the rest."""
     with tx(conn):
-        _project(conn, name)
+        name = _project(conn, name)["name"]
         names = [r["name"] for r in conn.execute(
             "SELECT name FROM projects WHERE archived=0 ORDER BY rank, id") if r["name"] != name]
         rank = max(1, min(int(rank), len(names) + 1))
@@ -1261,7 +1337,7 @@ def project_rank(conn, name, rank, actor=None):
 
 def project_archive(conn, name, actor=None):
     with tx(conn):
-        _project(conn, name)
+        name = _project(conn, name)["name"]
         conn.execute("UPDATE projects SET archived=1, rank=100000 WHERE name=?", (name,))
         _event(conn, None, actor, f"project {name} archived")
     return project_list(conn)
@@ -1272,7 +1348,8 @@ def project_path(conn, name, path, actor=None, move=False):
     folder that still exists moves only with move=True: agents in the old folder would stop finding it."""
     full = str(Path(path).expanduser().resolve()) if path else None
     with tx(conn):
-        old = _project(conn, name)["path"]
+        p = _project(conn, name)
+        name, old = p["name"], p["path"]
         if old and full and old != full and Path(old).is_dir() and not move:
             raise RiverError(f"project {name} is linked to {old}; linking it to {full} moves it, and agents in "
                              f"{old} stop finding it. Only the user decides that: maxpm project path {name} "
@@ -1285,9 +1362,9 @@ def project_path(conn, name, path, actor=None, move=False):
 def project_target(conn, name, target, actor=None):
     """Put a project in the deploy target it ships to; no target clears it."""
     with tx(conn):
-        _project(conn, name)
+        name = _project(conn, name)["name"]
         if target is not None:
-            _target(conn, target)
+            target = _target(conn, target)["name"]
         conn.execute("UPDATE projects SET target=? WHERE name=?", (target, name))
         _event(conn, None, actor, f"project {name} target {target or 'cleared'}")
     return dict(_project(conn, name))
@@ -1311,7 +1388,7 @@ def projects_for_dir(conn, cwd):
 def project_describe(conn, name, text, actor=None):
     """The project description tells an agent what the project covers and what context helps."""
     with tx(conn):
-        _project(conn, name)
+        name = _project(conn, name)["name"]
         conn.execute("UPDATE projects SET notes=? WHERE name=?", (text, name))
         _event(conn, None, actor, f"project {name} description changed")
     return project_show(conn, name)
@@ -1319,6 +1396,7 @@ def project_describe(conn, name, text, actor=None):
 
 def project_show(conn, name):
     p = dict(_project(conn, name))
+    name = p["name"]
     ann = annotate(conn)
     mine = [a for a in ann.values() if a["project"] == name]
     ready = sorted((a for a in mine if a["ready"]), key=lambda a: a["sort_key"])
@@ -1336,6 +1414,7 @@ def project_show(conn, name):
         worked_recently=recent,
         goals=goal_list(conn, name, include_complete=False),
         tracker=setting(conn, "tracker", project_id=p["id"]),
+        aliases=aliases_of(conn, "project", p["id"]),
     )
     return p
 
@@ -1346,12 +1425,14 @@ def project_list(conn):
         "FROM projects p WHERE archived=0 ORDER BY rank, id")]
     for r in rows:
         r["tracker"] = setting(conn, "tracker", project_id=r["id"])
+        r["aliases"] = aliases_of(conn, "project", r["id"])
     return rows
 
 
 def project_tracker(conn, name, text=None, actor=None):
     """Show, set, or (with none) clear the outside tracker a project uses."""
     p = _project(conn, name)
+    name = p["name"]
     if text is not None:
         text = text.strip()
         if text.lower() in ("", "none"):
@@ -1360,6 +1441,96 @@ def project_tracker(conn, name, text=None, actor=None):
         else:
             config_set(conn, "tracker", text, project=name, actor=actor)
     return {"name": p["name"], "tracker": setting(conn, "tracker", project_id=p["id"])}
+
+
+def project_known(conn, name):
+    """The name now of the project with this name, or with this old name while it still works; else None."""
+    try:
+        return _project(conn, name)["name"]
+    except RiverError:
+        return None
+
+
+def _names(conn, project):
+    """A project name or a comma list as the projects' names now (the old name of a renamed project finds it)."""
+    return [_project(conn, n.strip())["name"] for n in str(project).split(",") if n.strip()]
+
+
+def _rename_project(conn, p, new, actor, until):
+    """Inside a tx: project row p gets the name new. Items, goals, review steps, the folder, the rank and the
+    target hold the project's id, so they follow; the settings of the project and the projects that waiting
+    agents named hold its name, so they change here. The old name finds the project until `until`."""
+    old = p["name"]
+    conn.execute("UPDATE projects SET name=? WHERE id=?", (new, p["id"]))
+    moved = conn.execute("UPDATE OR REPLACE settings SET scope=? WHERE scope=?",
+                         (f"project:{new}", f"project:{old}")).rowcount
+    waiting = 0
+    for a in conn.execute("SELECT name, waiting_in FROM agents WHERE waiting_in IS NOT NULL").fetchall():
+        names = a["waiting_in"].split(",")
+        if old in names:
+            conn.execute("UPDATE agents SET waiting_in=? WHERE name=?",
+                         (",".join(new if n == old else n for n in names), a["name"]))
+            waiting += 1
+    _set_alias(conn, "project", old, p["id"], until)
+    _event(conn, None, actor, f"project {old} renamed to {new}"
+           + (f"; the old name works until {until}" if until else "; the old name stops now"))
+    return {"name": new, "was": old, "alias_until": until or None, "settings": moved, "waiting_agents": waiting,
+            "items": conn.execute("SELECT COUNT(*) n FROM items WHERE project_id=?", (p["id"],)).fetchone()["n"],
+            "goals": conn.execute("SELECT COUNT(*) n FROM goals WHERE project_id=?", (p["id"],)).fetchone()["n"]}
+
+
+def project_rename(conn, old, new, actor=None, alias_for=None):
+    """Give a project a new name, in one transaction. Refused when the new name is in use. Everything of
+    the project follows: items, goals, review steps, folder, rank, target, tracker and settings. The old
+    name stays an alias for alias_for (ALIAS_TTL; 0: none), so running agents and old instructions work.
+    Agents keep their names; a new agent gets the new name as its prefix. History keeps the old texts."""
+    until = _alias_until(alias_for)
+    with tx(conn):
+        p = _project(conn, old)
+        _new_name(conn, "project", p, new)
+        t = p["name"][len("deploy-"):] if p["name"].startswith("deploy-") else None
+        if t and conn.execute("SELECT 1 FROM targets WHERE name=?", (t,)).fetchone():
+            raise RiverError(f"project {p['name']} holds the deploy items of target {t} and takes its name from "
+                             f"it; rename the target: maxpm target rename {t} <new>")
+        if new.startswith("deploy-") and conn.execute("SELECT 1 FROM targets WHERE name=?", (new[7:],)).fetchone():
+            raise RiverError(f"{new} is the name for the deploy items of target {new[7:]}; pick another name")
+        return _rename_project(conn, p, new, actor, until)
+
+
+def target_rename(conn, old, new, actor=None, alias_for=None):
+    """Give a deploy target a new name, in one transaction: its projects, its deploy, review and monitor
+    items (open ones also get the new name in their title), and its deploy project (deploy-<target>)
+    follow. Refused when the new name is in use. The old names stay aliases for alias_for (ALIAS_TTL)."""
+    until = _alias_until(alias_for)
+    with tx(conn):
+        t = _target(conn, old)
+        old = t["name"]
+        _new_name(conn, "target", t, new)
+        dp = conn.execute("SELECT * FROM projects WHERE name=?", (f"deploy-{old}",)).fetchone()
+        if dp is not None:
+            _new_name(conn, "project", dp, f"deploy-{new}")
+        conn.execute("UPDATE targets SET name=? WHERE id=?", (new, t["id"]))
+        projects = conn.execute("UPDATE projects SET target=? WHERE target=?", (new, old)).rowcount
+        items = conn.execute("UPDATE items SET target=? WHERE target=?", (new, old)).rowcount
+        for kind, was, now_ in (("deploy", f"Deploy {old}", f"Deploy {new}"),
+                                ("review", f"Review release {old}", f"Review release {new}")):
+            conn.execute(f"UPDATE items SET title=? WHERE kind=? AND target=? AND title=? AND status IN {OPEN_STATES}",
+                         (now_, kind, new, was))
+        conn.execute("UPDATE items SET title=? || found_during WHERE kind='monitor' AND target=? "
+                     f"AND title=? || found_during AND status IN {OPEN_STATES}",
+                     (f"Monitor the {new} deploy #", new, f"Monitor the {old} deploy #"))
+        res = {"name": new, "was": old, "alias_until": until or None, "projects": projects, "items": items,
+               "deploy_project": None}
+        if dp is not None:
+            res["deploy_project"] = _rename_project(conn, dp, f"deploy-{new}", actor, until)["name"]
+            was = f"Deploys to target {old},"
+            if dp["notes"].startswith(was):
+                conn.execute("UPDATE projects SET notes=? WHERE id=?",
+                             (f"Deploys to target {new}," + dp["notes"][len(was):], dp["id"]))
+        _set_alias(conn, "target", old, t["id"], until)
+        _event(conn, None, actor, f"target {old} renamed to {new}"
+               + (f"; the old name works until {until}" if until else "; the old name stops now"))
+    return res
 
 
 # ---------------------------------------------------------------- goals
@@ -1416,7 +1587,7 @@ def goal_add(conn, project, name, outcome="", done_when="", actor=None, rank=Non
         top = conn.execute("SELECT COALESCE(MAX(rank),0) m FROM goals WHERE project_id=?", (p["id"],)).fetchone()["m"]
         conn.execute("INSERT INTO goals(project_id,name,outcome,done_when,rank,created_at,shared) VALUES (?,?,?,?,?,?,?)",
                      (p["id"], name, outcome or "", done_when or "", top + 1, iso(now()), 1 if shared else 0))
-        _event(conn, None, actor, f"goal {name} added to {project}" + (" (shared: no owner)" if shared else ""))
+        _event(conn, None, actor, f"goal {name} added to {p['name']}" + (" (shared: no owner)" if shared else ""))
     if rank is not None:
         goal_rank(conn, name, rank, actor)
     return goal_show(conn, name)
@@ -1425,6 +1596,7 @@ def goal_add(conn, project, name, outcome="", done_when="", actor=None, rank=Non
 def goal_list(conn, project=None, include_complete=False):
     """Goals in order: project rank, then goal rank. Each with its owner and tagged-item progress."""
     ann = annotate(conn)
+    project = _project(conn, project)["name"] if project else None
     sql = ("SELECT g.* FROM goals g JOIN projects p ON p.id=g.project_id WHERE p.archived=0"
            + ("" if include_complete else " AND g.status='open'") + (" AND p.name=?" if project else "")
            + " ORDER BY g.status='complete', p.rank, g.rank, g.id")
@@ -1618,7 +1790,7 @@ def goal_reopen(conn, name, actor=None):
 # ---------------------------------------------------------------- deploy targets
 
 def _target(conn, name):
-    r = conn.execute("SELECT * FROM targets WHERE name=?", (name,)).fetchone()
+    r = conn.execute("SELECT * FROM targets WHERE name=?", (name,)).fetchone() or _alias(conn, "target", name)
     if not r:
         names = [x["name"] for x in conn.execute("SELECT name FROM targets ORDER BY name")]
         raise RiverError(f"no target {name!r}; targets: {', '.join(names) or '(none; maxpm target add <name> --description ...)'}")
@@ -1632,6 +1804,7 @@ def target_add(conn, name, description="", actor=None):
     with tx(conn):
         if conn.execute("SELECT 1 FROM targets WHERE name=?", (name,)).fetchone():
             raise RiverError(f"target {name!r} exists")
+        _free_alias(conn, "target", name)
         conn.execute("INSERT INTO targets(name,description,created_at) VALUES (?,?,?)", (name, description, iso(now())))
         _event(conn, None, actor, f"target {name} added")
     return target_show(conn, name)
@@ -1639,7 +1812,7 @@ def target_add(conn, name, description="", actor=None):
 
 def target_describe(conn, name, text, actor=None):
     with tx(conn):
-        _target(conn, name)
+        name = _target(conn, name)["name"]
         conn.execute("UPDATE targets SET description=? WHERE name=?", (text, name))
         _event(conn, None, actor, f"target {name} description changed")
     return target_show(conn, name)
@@ -1649,7 +1822,7 @@ def target_monitor(conn, name, text, actor=None):
     """What to watch after each deploy of the target: health links, logs, error rates, and for how long.
     With it set, claiming a deploy item adds a monitor item, and maxpm serve opens a session for it."""
     with tx(conn):
-        _target(conn, name)
+        name = _target(conn, name)["name"]
         conn.execute("UPDATE targets SET monitor=? WHERE name=?", (text.strip(), name))
         _event(conn, None, actor, f"target {name} monitor " + ("changed" if text.strip() else "removed"))
     return target_show(conn, name)
@@ -1695,6 +1868,7 @@ def target_own(conn, name, actor=None, takeover=None):
         _sweep(conn)
         _agent(conn, actor)
         t = _target(conn, name)
+        name = t["name"]
         prior = t["owner"] if t["owner"] and t["owner"] != actor else None
         if prior:
             owner = conn.execute("SELECT * FROM agents WHERE name=?", (prior,)).fetchone()
@@ -1729,6 +1903,7 @@ def target_own(conn, name, actor=None, takeover=None):
 def target_release(conn, name, actor=None):
     with tx(conn):
         t = _target(conn, name)
+        name = t["name"]
         if t["owner"] != actor:
             raise RiverError(f"target {name} is owned by {t['owner'] or 'nobody'}, not {actor}")
         conn.execute("UPDATE targets SET owner=NULL, owner_expires_at=NULL WHERE name=?", (name,))
@@ -1742,6 +1917,7 @@ def target_give(conn, name, to, actor=None):
     with tx(conn):
         _sweep(conn)
         t = _target(conn, name)
+        name = t["name"]
         giver = conn.execute("SELECT kind FROM agents WHERE name=?", (actor,)).fetchone() if actor else None
         role = conn.execute("SELECT role FROM agents WHERE name=?", (actor,)).fetchone() if actor else None
         by_person = bool(giver) and (giver["kind"] == "human" or (role and role["role"] == "manager")) \
@@ -1776,6 +1952,8 @@ def target_list(conn):
 
 def target_show(conn, name):
     t = dict(_target(conn, name))
+    name = t["name"]
+    t["aliases"] = aliases_of(conn, "target", t["id"])
     t["projects"] = [dict(r) for r in conn.execute(
         "SELECT p.name, p.rank, p.notes, (SELECT COUNT(*) FROM items i WHERE i.project_id=p.id "
         "AND i.status IN ('open','in_progress','held')) open_items "
@@ -1904,7 +2082,7 @@ def item_add(conn, project, title, priority=2, notes="", doer="any", after=(), a
             (p["id"], title, notes, int(priority), top + 1, doer, context or "", _touches(touches) or "",
              check or "", iso(now())))
         iid = cur.lastrowid
-        _event(conn, iid, actor, f"added to {project} at P{priority}")
+        _event(conn, iid, actor, f"added to {p['name']} at P{priority}")
         # Goal tags: the ones named, else the goal the actor owns in this item's project (if any).
         # goals=[] means no goal.
         names = list(goals) if goals is not None else [r["name"] for r in conn.execute(
@@ -2085,7 +2263,7 @@ def parse_plan(text, priority=2, doer="any"):
 def add_plan(conn, project, text, actor=None, priority=2, doer="any", dry_run=False):
     """Add every item of a plan file (see parse_plan) to one project; each line waits on its steps."""
     rows = parse_plan(text, priority, doer)
-    _project(conn, project)
+    project = _project(conn, project)["name"]
     if dry_run:
         return {"project": project, "dry_run": True, "items": rows}
     ids = [item_add(conn, project, r["title"], r["priority"], "", r["doer"], (), actor)["id"] for r in rows]
@@ -2135,7 +2313,7 @@ def item_edit(conn, item_id, title=None, notes=None, doer=None, project=None, ac
         if project is not None and _project(conn, project)["id"] != it["project_id"]:
             p = _project(conn, project)
             conn.execute("UPDATE items SET project_id=? WHERE id=?", (p["id"], it["id"]))
-            _event(conn, it["id"], actor, f"moved to project {project}")
+            _event(conn, it["id"], actor, f"moved to project {p['name']}")
         for col, val in (("context", context), ("touches", _touches(touches)), ("check", check)):
             if val is not None and val != it[col]:
                 conn.execute(f'UPDATE items SET "{col}"=? WHERE id=?', (val, it["id"]))
@@ -3044,16 +3222,14 @@ def ready_list(conn, project=None, unblocks=None, doer_for=None, ann=None, near=
     ann = ann or annotate(conn)
     pool = [a for a in ann.values() if ready_for(a, actor) and not a["project_archived"]]
     if project:
-        names = [n.strip() for n in str(project).split(",") if n.strip()]
-        for n in names:
-            _project(conn, n)
+        names = _names(conn, project)
         pool = [a for a in pool if a["project"] in names]
     if unblocks is not None:
         if str(unblocks).isdigit():
             _item(conn, unblocks)
             roots = [int(unblocks)]
         else:
-            _project(conn, unblocks)
+            unblocks = _project(conn, unblocks)["name"]
             roots = [a["id"] for a in ann.values() if a["project"] == unblocks and a["status"] in OPEN_STATES]
         closure = set()
         for r in roots:
@@ -4694,6 +4870,7 @@ def _renumber_steps(conn, project_id):
 
 def review_steps(conn, project=None):
     """The review steps of one project, or of every project, in order."""
+    project = _project(conn, project)["name"] if project else None
     q = ("SELECT s.id, s.pos, s.kind, s.text, p.name project FROM review_steps s JOIN projects p ON p.id=s.project_id "
          + ("WHERE p.name=? " if project else "WHERE p.archived=0 ") + "ORDER BY p.rank, p.id, s.pos, s.id")
     if project:
@@ -4713,7 +4890,7 @@ def review_step_add(conn, project, text, run=False, at=None, actor=None):
         conn.execute("UPDATE review_steps SET pos=pos+1 WHERE project_id=? AND pos>=?", (p["id"], pos))
         cur = conn.execute("INSERT INTO review_steps(project_id,pos,kind,text,created_at) VALUES (?,?,?,?,?)",
                            (p["id"], pos, "run" if run else "do", text, iso(now())))
-        _event(conn, None, actor, f"review step {pos} added to {project}: {text}")
+        _event(conn, None, actor, f"review step {pos} added to {p['name']}: {text}")
     return dict(_review_step(conn, cur.lastrowid))
 
 
@@ -4844,6 +5021,7 @@ def review_fail(conn, item_id, fixes, note=None, project=None, actor=None, ask=F
         if r is None:
             raise RiverError("the review covers no items; name the project for the fixes: --project <name>")
         project = r["name"]
+    project = _project(conn, project)["name"]
     if ask:
         body = "\n".join(f"- {t}" for t in fixes)
         h = item_add(conn, project, f"Release {it['target']} is blocked: approve {len(fixes)} proposed fix(es)",
@@ -4936,6 +5114,7 @@ def cleanup(conn, project=None, git=True):
     evidence clears the item."""
     ann = annotate(conn)
     t = now()
+    project = _project(conn, project)["name"] if project is not None else None
     items = [a for a in ann.values() if a["status"] == "open" and not a["project_archived"]
              and (project is None or a["project"] == project) and a["kind"] == "work"]
     if project is not None:
@@ -5138,7 +5317,7 @@ def item_list(conn, project=None, status=None, include_closed=False, goal=None, 
         _goal(conn, goal)
         rows = [a for a in rows if goal in a["goals"]]
     if project is not None:
-        _project(conn, project)
+        project = _project(conn, project)["name"]
         rows = [a for a in rows if a["project"] == project]
     if status is not None:
         rows = [a for a in rows if a["status"] == status]
@@ -5453,7 +5632,7 @@ def completed(conn, project=None, since="7d"):
     """
     cutoff = iso(now() - parse_duration(since)) if since else None
     if project is not None:
-        _project(conn, project)
+        project = _project(conn, project)["name"]
     sql = ("SELECT i.id, i.title, i.output, i.closed_at, p.name project, "
            "(SELECT e.actor FROM events e WHERE e.item_id=i.id AND e.change LIKE 'done%' ORDER BY e.id DESC LIMIT 1) by_agent "
            "FROM items i JOIN projects p ON p.id=i.project_id WHERE i.status='done' AND p.archived=0")
@@ -5980,6 +6159,7 @@ def launch_target(conn, project=None, agent=None, item=None, model=None, effort=
     The one item named can be reserved for the actor (given to a manager, who takes no work): the new
     session gets it."""
     ann = annotate(conn)
+    project = _project(conn, project)["name"] if project else None
     own = conn.execute("SELECT 1 FROM items WHERE id=? AND reserved_for=? AND status='open'",
                        (int(item), actor)).fetchone() if item is not None and actor else None
     pool = sorted((a for a in ann.values() if a["ready"] and a["doer"] != "human" and a["kind"] not in ("deploy", "review", "monitor")
@@ -6286,9 +6466,7 @@ def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None
     if role is not None and role not in ROLES:
         raise RiverError(f"role is one of {', '.join(ROLES)}")
     if project:
-        names = [n.strip() for n in project.split(",") if n.strip()]
-        for n in names:
-            _project(conn, n)
+        names = _names(conn, project)
     else:
         names = projects_for_dir(conn, cwd)
         # A session in a project folder is not a chat, even with RIVER_CHAT set: the Codex CLI reads the same
@@ -6702,7 +6880,7 @@ def wait(conn, cwd, actor, project=None, step=None, sleep=None, poll=3.0):
     if not actor:
         raise RiverError("waiting needs an agent name: pass --as <name>")
     _agent(conn, actor)
-    names = [n.strip() for n in project.split(",") if n.strip()] if project else projects_for_dir(conn, cwd)
+    names = _names(conn, project) if project else projects_for_dir(conn, cwd)
 
     def stopped():
         st = stop_request(conn, actor)
@@ -7030,9 +7208,7 @@ def manage_watch(conn, actor, step=None, sleep=None, poll=3.0):
 
 def plan(conn, cwd, actor=None, project=None):
     """Start or continue a planner session: the overview plus the questions a planner should raise with the user."""
-    names = [n.strip() for n in project.split(",") if n.strip()] if project else projects_for_dir(conn, cwd)
-    for n in names:
-        _project(conn, n)
+    names = _names(conn, project) if project else projects_for_dir(conn, cwd)
     new_name = False
     if not actor:
         import secrets

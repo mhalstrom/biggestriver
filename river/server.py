@@ -1285,6 +1285,7 @@ def folder_add(conn, path, name=None, description="", move=None, actor=None):
     folder = folder.resolve()
     name = (name or "").strip() or None
     if name:
+        name = core.project_known(conn, name) or name
         row = conn.execute("SELECT path FROM projects WHERE name=?", (name,)).fetchone()
         if row and row["path"] and Path(row["path"]) != folder and Path(row["path"]).is_dir():
             raise RiverError(f"project {name} is linked to {row['path']}. Pick another name for this folder, "

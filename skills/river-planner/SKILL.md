@@ -58,10 +58,12 @@ maxpm project add <name> [--rank N] --description "..."   # lower-case name
 maxpm project describe <name> "..."
 maxpm project show <name>
 maxpm project rank <name> <N>                          # 1 = most important overall
+maxpm project rename <name> <new>                      # all of it follows; the old name works 90 more days
 maxpm project list
 maxpm target add <name> --description "how it deploys"  # where projects ship to
 maxpm project target <name> <target>                   # each project has at most one
 maxpm target show <target>                             # its projects and owner
+maxpm target rename <target> <new>                     # with its deploy project deploy-<target>
 maxpm target own <target>                              # one owner per target runs its deploys
 maxpm target monitor <target> "<what to watch, for how long>"   # a session follows each deploy
 maxpm target give <target> --to <agent>                # or: maxpm target release <target>
