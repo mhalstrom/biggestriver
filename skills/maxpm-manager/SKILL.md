@@ -77,7 +77,7 @@ Stop when the user tells you to, and tell the user what you did.
 
 ## Your tools
 
-- `maxpm launch [--project P | --item N] [--agent A] [--model M] [--effort E] [--tab|--window|--tmux] [--dry-run]`
+- `maxpm launch [--project P | --item N] [--agent A] [--model M] [--effort E] [--prompt TEXT] [--tab|--window|--tmux] [--dry-run]`
   `--tmux` (or the setting `launch_in tmux`) starts the session as a pane of the tmux session `maxpm`. It needs
   no Terminal app, so it works over SSH and on Linux. The user sees every such agent side by side with
   `maxpm view` in a terminal (`--windows`: one window each; `--tidy`: close the panes of sessions that are done);
@@ -94,6 +94,14 @@ Stop when the user tells you to, and tell the user what you did.
 - `maxpm stop <agent> --reason "..."`: a request; the agent commits, releases, and ends.
 - `maxpm config set launch_agents|default_model|default_effort|default_min_model|default_max_model ...`
 - `maxpm launch ... --option remote_control=off` (or `permission_mode=plan`, `sandbox=read-only`): a launch profile option for one session; the settings `claude_*` and `codex_*` hold the defaults
+- `maxpm launch ... --prompt "<text>"`: the new session's own first instruction. The agent gets the
+  profile's prompt (go), a blank line, then the text, so it still runs go and registers. Use it when the
+  agent must have its instructions at the start, for example a session that replaces a stopped one: an
+  instruction that comes later as a queue message or an alert is second-hand, and an agent's permission
+  check can refuse a risky step on it. At most 4000 characters (put more in a file or the item's context,
+  and name it); `--dry-run` prints the whole command. It always opens a new session, also when one waits
+  for work, and the item's history records the first 200 characters. A custom launch_agents command (no
+  profile) takes no `--prompt`.
 - `maxpm target give <target> --to <agent>`
 - Planning: everything in `maxpm guide planner` (add, dep, prio, edit).
 

@@ -539,6 +539,10 @@ def build_parser():
     x.add_argument("--option", action="append", default=[], metavar="NAME=VALUE",
                    help="a launch profile option for this session, e.g. remote_control=off, permission_mode=plan, "
                         "sandbox=read-only (repeatable)")
+    x.add_argument("--prompt", metavar="TEXT",
+                   help="the session's first instruction, after the profile's prompt (go) and a blank line, so the "
+                        "session still runs go and registers; at most %d characters. It always opens a new session "
+                        "(a session that waits for work would get it only as a message)" % core.CUSTOM_PROMPT_MAX)
     g = x.add_mutually_exclusive_group()
     g.add_argument("--tab", dest="launch_in", action="store_const", const="tab")
     g.add_argument("--window", dest="launch_in", action="store_const", const="window")
@@ -1376,20 +1380,25 @@ def dispatch(conn, a, actor):
             opts[k.strip()] = v.strip()
         if a.dry_run:
             t = core.launch_target(conn, a.project, a.agent, a.item, a.model, a.effort, a.launch_in,
-                                   spread=a.project is None and a.item is None, options=opts or None, actor=actor)
-            return {**t, "dry_run": True, "would_push_to": core.waiting_agent_for(conn, t["project"], t["item"]["id"])}
+                                   spread=a.project is None and a.item is None, options=opts or None, actor=actor,
+                                   prompt=a.prompt)
+            return {**t, "dry_run": True, "would_push_to": None if t["custom_prompt"] else
+                    core.waiting_agent_for(conn, t["project"], t["item"]["id"])}
         if in_sandbox():
             # A sandbox blocks Terminal and tmux for this command. maxpm serve runs outside it and opens the
             # session, as for the page's Start and Dispatch; a terminal tab can take a while to open.
-            choice = {"agent": a.agent, "model": a.model, "effort": a.effort, "launch_in": a.launch_in, "options": opts}
+            if a.prompt is not None:
+                core.custom_prompt(a.prompt)  # refuse here, before the request
+            choice = {"agent": a.agent, "model": a.model, "effort": a.effort, "launch_in": a.launch_in, "options": opts,
+                      "prompt": a.prompt}
             res = (ask_server(conn, "dispatch_item", {"id": a.item, **choice}, actor, timeout=40) if a.item is not None
                    else ask_server(conn, "launch_agent", {"project": a.project, **choice}, actor, timeout=40))
             return {**res, "via_serve": True}
         if a.item is not None:
             return server.dispatch_item(conn, a.item, agent=a.agent, actor=actor, model=a.model, effort=a.effort,
-                                        launch_in=a.launch_in, options=opts or None)
+                                        launch_in=a.launch_in, options=opts or None, prompt=a.prompt)
         return server.launch_agent(conn, a.project, agent=a.agent, actor=actor, model=a.model, effort=a.effort,
-                                   launch_in=a.launch_in, options=opts or None)
+                                   launch_in=a.launch_in, options=opts or None, prompt=a.prompt)
     if c == "view":
         from . import server
         return server.tmux_view(a.layout, a.tidy, conn)

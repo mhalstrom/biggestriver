@@ -93,15 +93,18 @@ def _can_open_terminal(runner, hint, launch_in=None):
 
 
 def launch_agent(conn, project=None, runner=None, agent=None, actor=None, model=None, effort=None, launch_in=None,
-                 options=None):
+                 options=None, prompt=None):
     """Open a Terminal window in the project folder of the most important ready agent item and run
     the command of the chosen launch_agents entry there (default: the Claude Code profile), so one click starts one
-    agent session. macOS and Windows."""
+    agent session. macOS and Windows. prompt (maxpm launch --prompt): the new session's first instruction,
+    after the profile's prompt."""
     # With no project named, Start spreads sessions: first a project with ready work and no agent yet.
     # A session that waits for work in that project (maxpm wait) gets the item: no new session needed.
     # Else the new session gets a name and the item is pushed to it, so the next Start sees the project covered.
-    t = core.launch_target(conn, project, agent, None, model, effort, launch_in, spread=project is None, options=options)
-    waiting = core.waiting_agent_for(conn, t["project"], t["item"]["id"])
+    # A custom prompt always opens a new session: a waiting one would get it only second-hand, as a message.
+    t = core.launch_target(conn, project, agent, None, model, effort, launch_in, spread=project is None, options=options,
+                           prompt=prompt)
+    waiting = None if t["custom_prompt"] else core.waiting_agent_for(conn, t["project"], t["item"]["id"])
     if waiting:
         core.push(conn, t["item"]["id"], waiting, "from the Start button: you were waiting for work", actor)
         return {**t, "pushed_to": waiting}
@@ -110,13 +113,14 @@ def launch_agent(conn, project=None, runner=None, agent=None, actor=None, model=
 
 
 def dispatch_item(conn, item_id, runner=None, agent=None, actor=None, model=None, effort=None, launch_in=None,
-                  options=None):
+                  options=None, prompt=None):
     """Start work on one ready item: a session that waits for work in its project gets it (push);
     else river names a new session, reserves the item for it (push), and opens the chosen agent in the
-    project folder with MAXPM_AGENT set to that name and MAXPM_FOCUS=item:<id>, so its first maxpm go takes it."""
+    project folder with MAXPM_AGENT set to that name and MAXPM_FOCUS=item:<id>, so its first maxpm go takes it.
+    With a custom prompt (maxpm launch --prompt) it always opens a new session."""
     t = core.launch_target(conn, agent=agent, item=item_id, model=model, effort=effort, launch_in=launch_in,
-                           options=options, actor=actor)
-    waiting = core.waiting_agent_for(conn, t["project"], t["item"]["id"])
+                           options=options, actor=actor, prompt=prompt)
+    waiting = None if t["custom_prompt"] else core.waiting_agent_for(conn, t["project"], t["item"]["id"])
     if waiting:
         core.push(conn, t["item"]["id"], waiting, "from the page: Dispatch; you were waiting for work", actor)
         return {**t, "pushed_to": waiting}
@@ -133,6 +137,11 @@ def _start_for_item(conn, t, runner, actor, why, by="the page"):
     core.register(conn, name, note=f"{core.STARTED_NOTE} #{t['item']['id']}")
     core.push(conn, t["item"]["id"], name, f"from {by}: {why}", actor)
     _open_terminal(t, {"MAXPM_AGENT": name, "MAXPM_FOCUS": f"item:{t['item']['id']}", **t["env"]}, runner)
+    if t.get("custom_prompt"):  # what the session was told, for the people who read the item's history
+        flat = " ".join(t["custom_prompt"].split())
+        with core.tx(conn):
+            core._event(conn, t["item"]["id"], actor or "maxpm", f"{name} launched with a custom prompt: "
+                        + flat[:200] + ("..." if len(flat) > 200 else ""))
     return {**t, "session_name": name}
 
 
@@ -1489,8 +1498,11 @@ OPS = {
     "setup_skills": lambda c, a, who: setup_skills(),
     "setup_agent_add": lambda c, a, who: setup_agent_add(c, a["label"], who),
     "setup_ntfy": lambda c, a, who: setup_ntfy(c, who),
-    "launch_agent": lambda c, a, who: launch_agent(c, a.get("project"), agent=a.get("agent"), actor=who, **_launch_args(a)),
-    "dispatch_item": lambda c, a, who: dispatch_item(c, int(a["id"]), agent=a.get("agent"), actor=who, **_launch_args(a)),
+    # prompt: maxpm launch --prompt, which a command in a sandbox hands to maxpm serve.
+    "launch_agent": lambda c, a, who: launch_agent(c, a.get("project"), agent=a.get("agent"), actor=who,
+                                                   prompt=a.get("prompt"), **_launch_args(a)),
+    "dispatch_item": lambda c, a, who: dispatch_item(c, int(a["id"]), agent=a.get("agent"), actor=who,
+                                                     prompt=a.get("prompt"), **_launch_args(a)),
     "open_agent_on": lambda c, a, who: open_agent_on(c, int(a["id"]), agent=a.get("agent"), person=a.get("person"), actor=who,
                                                      **_launch_args(a)),
     "open_needs_you": lambda c, a, who: open_needs_you(c, agent=a.get("agent"), person=a.get("person"), **_launch_args(a)),

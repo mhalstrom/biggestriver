@@ -5858,6 +5858,34 @@ def build_command(platform, opts, model=None, effort=None, name=None):
     return " ".join(parts)
 
 
+# maxpm launch --prompt: a first instruction for one session. It follows the profile's prompt, so the session
+# still runs go and registers. The agent CLI gets it as the session's own first prompt.
+CUSTOM_PROMPT_MAX = 4000
+
+
+def custom_prompt(text):
+    """The text of maxpm launch --prompt, checked: not empty, at most CUSTOM_PROMPT_MAX characters, and no
+    control characters but line breaks (a launch types the command into a shell, where a tab completes and
+    Ctrl-C stops). A tab becomes a space. Windows: cmd cannot quote a line break, '"' or '%', so they are refused."""
+    text = (text or "").replace("\r\n", "\n").replace("\r", "\n").replace("\t", " ").strip()
+    if not text:
+        raise RiverError("--prompt is empty; give the session's first instruction, or leave --prompt out")
+    if len(text) > CUSTOM_PROMPT_MAX:
+        raise RiverError(f"--prompt has {len(text)} characters; at most {CUSTOM_PROMPT_MAX}. Put the long part in a "
+                         f"file or an item's context, and name it in the prompt")
+    bad = sorted({c for c in text if (ord(c) < 32 and c != "\n") or ord(c) == 127})
+    if bad:
+        raise RiverError(f"--prompt has control characters ({', '.join(repr(c) for c in bad)}); leave them out")
+    if PLATFORM == "win32" and re.search(r'[\n"%]', text):
+        raise RiverError("--prompt on Windows is one line with no '\"' or '%': cmd cannot quote them")
+    return text
+
+
+def join_prompt(first, extra):
+    """The profile's first prompt, a blank line, then the custom prompt (Windows: one line, a space between)."""
+    return f"{first} {extra}" if PLATFORM == "win32" else f"{first}\n\n{extra}"
+
+
 def entry_exe(cmd):
     """The program a launch_agents command starts (a profile's CLI, else the first word)."""
     prof = parse_profile(cmd)
@@ -6015,7 +6043,7 @@ def project_sessions(conn, ann=None):
 
 
 def launch_target(conn, project=None, agent=None, item=None, model=None, effort=None, launch_in=None, spread=False,
-                  options=None, actor=None):
+                  options=None, actor=None, prompt=None):
     """Where and how a new agent session should start: the folder of the project that holds the most
     important ready item an agent can take (or of the project named, or of the one item named), and the
     command of the chosen launch_agents entry (the first when none is named). Refuses when nothing is ready there.
@@ -6024,7 +6052,7 @@ def launch_target(conn, project=None, agent=None, item=None, model=None, effort=
     the one whose top item is most important; when every such project has an agent, the top item.
 
     The one item named can be reserved for the actor (given to a manager, who takes no work): the new
-    session gets it."""
+    session gets it. prompt: maxpm launch --prompt, after the profile's first prompt."""
     ann = annotate(conn)
     project = _project(conn, project)["name"] if project else None
     own = conn.execute("SELECT 1 FROM items WHERE id=? AND reserved_for=? AND status='open'",
@@ -6076,7 +6104,7 @@ def launch_target(conn, project=None, agent=None, item=None, model=None, effort=
     name = session_title(top["goals"], top["id"], top["title"])
     return {"project": p["name"], "path": p["path"], "item": {"id": top["id"], "title": top["title"], "agent": top["agent"]},
             "ready": len(pool), "why": why, "session_title": name,
-            **_launch_agent_cmd(conn, p["id"], agent, model, effort, options, name),
+            **_launch_agent_cmd(conn, p["id"], agent, model, effort, options, name, prompt),
             "launch_in": _launch_in(conn, p["id"], launch_in)}
 
 
@@ -6107,10 +6135,11 @@ def _launch_in(conn, project_id, choice=None):
     return ("tmux" if tmux_path() else "tab") if where == "auto" else where
 
 
-def _launch_agent_cmd(conn, project_id, agent, model=None, effort=None, options=None, name=None):
+def _launch_agent_cmd(conn, project_id, agent, model=None, effort=None, options=None, name=None, prompt=None):
     """The chosen launch_agents entry as a command: a profile builds it from its options (options: the
     launch dialog's choices) and gives the session its name, a custom command gets {model} and {effort}
-    filled in. The session also gets MAXPM_MODEL."""
+    filled in. The session also gets MAXPM_MODEL. prompt (maxpm launch --prompt) follows the profile's
+    first prompt; a custom command has no prompt option to put it in."""
     agents = parse_launch_agents(setting(conn, "launch_agents", project_id=project_id))
     pick = agents[0] if agent is None else next((a for a in agents if a[0] == agent), None)
     if pick is None:
@@ -6124,16 +6153,22 @@ def _launch_agent_cmd(conn, project_id, agent, model=None, effort=None, options=
     mid = model_id(conn, platform, model, project_id, prof[1] if prof else None)
     if effort and platform == "codex":
         _check_codex_effort(mid, effort)
+    prompt = custom_prompt(prompt) if prompt is not None else None
     if prof:
         opts = profile_options(conn, prof[0], prof[1], project_id, options)
+        if prompt:
+            opts = {**opts, "prompt": join_prompt(opts["prompt"], prompt)}
         cmd = build_command(prof[0], opts, mid, effort or None, name)
+    elif prompt:
+        raise RiverError(f"{pick[0]} is a custom command ({pick[1]}), so it takes no --prompt; give it a profile "
+                         f"in launch_agents (@claude-code or @codex) for one")
     elif options:
         raise RiverError(f"{pick[0]} is a custom command ({pick[1]}), so it has no launch options; "
                          f"give it a profile in launch_agents (@claude-code or @codex) for them")
     else:
         opts, cmd = {}, fill_launch_command(pick[1], mid, effort or None, name)
     return {"agent": pick[0], "command": cmd, "platform": prof[0] if prof else None, "options": opts,
-            "model": model, "model_id": mid, "effort": effort or None,
+            "model": model, "model_id": mid, "effort": effort or None, "custom_prompt": prompt,
             "env": {"MAXPM_MODEL": model} if model else {}}
 
 

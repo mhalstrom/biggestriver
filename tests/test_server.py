@@ -545,6 +545,15 @@ class LaunchAgent(unittest.TestCase):
         self.assertEqual(asked, [("127.0.0.1:8765", None),
                                  ("localhost:50401", "Basic " + base64.b64encode(b"us@er:pw").decode())])
         self.assertIn("boss: pushed to shop-", "\n".join(f"{e['actor']}: {e['change']}" for e in core.item_show(self.c, y)["events"]))
+        # --prompt goes to maxpm serve with the rest; the command refuses a bad one before it asks.
+        z = core.item_add(self.c, "shop", "third")["id"]
+        river("launch", "--item", str(z), "--prompt", "Read 'notes.md';\nthen fix it")
+        self.assertIn(f"""claude --name '#{z} third' 'go\n\nRead '"'"'notes.md'"'"';\nthen fix it' --remote-control""",
+                      sent[-1].replace('\\"', '"'))  # the AppleScript string, unescaped
+        del asked[:]
+        with self.assertRaisesRegex(RiverError, "--prompt is empty"):
+            cli.dispatch(self.c, cli.build_parser().parse_args(["launch", "--prompt", " "]), "boss")
+        self.assertEqual(asked, [])
         # A dry run opens nothing, so it asks nobody.
         del asked[:]
         self.assertIn(f"would start Claude Code in shop", river("launch", "--dry-run", "--model", "opus"))
@@ -564,7 +573,7 @@ class LaunchAgent(unittest.TestCase):
         os.environ.pop("http_proxy", None)
         with self.assertRaisesRegex(RiverError, "Allow the host 127.0.0.1:8765 for this command, or run it outside"):
             cli.dispatch(self.c, launch, "boss")
-        self.assertEqual(len(sent), 1)
+        self.assertEqual(len(sent), 2)
         self.assertEqual(core.item_show(self.c, x)["status"], "open")
 
     def test_manager_section_start_chat_queue_and_stop(self):
@@ -1933,6 +1942,57 @@ class LaunchProfiles(unittest.TestCase):
         core.config_set(self.c, "claude_remote_control", "off")
         self.assertIn("Remote Control is off", server.open_chat(self.c, "w1")["hint"])
 
+    def test_a_custom_prompt_follows_the_profile_prompt(self):
+        import shlex
+        core.config_set(self.c, "launch_agents", "Claude Code=@claude-code; Codex=@codex; Grok=grok go")
+        hard = 'Fix the "header", $HOME and `date`; it\'s 100% \\n done!\r\n\tthen push'
+        want = 'Fix the "header", $HOME and `date`; it\'s 100% \\n done!\n then push'  # a tab becomes a space
+        # Claude Code and Codex: the profile's prompt, a blank line, then the text, as one shell word.
+        for agent, first in (("Claude Code", "go"), ("Codex", "run maxpm go in this folder and follow the briefing")):
+            t = core._launch_agent_cmd(self.c, None, agent, name="#1 work", prompt=hard)
+            self.assertEqual(t["custom_prompt"], want)
+            self.assertIn(f"{first}\n\n{want}", shlex.split(t["command"]))
+        self.assertEqual(shlex.split(core._launch_agent_cmd(self.c, None, "Claude Code", name="w", prompt=hard)["command"])[-3:],
+                         [f"go\n\n{want}", "--remote-control", "w"])
+        # The cap, an empty text, control characters, and a custom command are refused.
+        self.assertEqual(core.custom_prompt("x" * core.CUSTOM_PROMPT_MAX), "x" * 4000)
+        for bad, why in (("x" * 4001, "4001 characters; at most 4000"), (" \n ", "--prompt is empty"),
+                         ("stop\x03", "control characters"), ("a\x1b[2J", "control characters")):
+            with self.assertRaisesRegex(RiverError, re.escape(why)):
+                core._launch_agent_cmd(self.c, None, "Claude Code", prompt=bad)
+        with self.assertRaisesRegex(RiverError, "Grok is a custom command .* takes no --prompt"):
+            core._launch_agent_cmd(self.c, None, "Grok", prompt="hi")
+        # Windows: cmd cannot quote a line break, '"' or '%'; one line goes after the prompt with a space.
+        core.PLATFORM = "win32"
+        self.assertTrue(core._launch_agent_cmd(self.c, None, "Claude Code", prompt="fix it & push")["command"]
+                        .endswith('"go fix it & push" --remote-control'))
+        for bad in ("two\nlines", 'say "hi"', "100%"):
+            with self.assertRaisesRegex(RiverError, "one line with no"):
+                core._launch_agent_cmd(self.c, None, "Claude Code", prompt=bad)
+        core.PLATFORM = "darwin"
+        # A launch opens a new session even when one waits for work, and the item's history says what it was told.
+        x = core.item_add(self.c, "shop", "work")["id"]
+        core.register(self.c, "w1")
+        self.c.execute("UPDATE agents SET role='waiting', waiting_in='shop', waiting_since=? WHERE name='w1'",
+                       (core.iso(core.now()),))
+        self.assertEqual(core.waiting_agent_for(self.c, "shop", x), "w1")
+        sent, long = [], "Take over from w9: " + "step " * 60
+        t = server.dispatch_item(self.c, x, runner=sent.append, actor="boss", prompt=long)
+        self.assertNotIn("pushed_to", t)
+        self.assertIn(shlex.quote("go\n\n" + long.strip()).replace('"', '\\"'), sent[-1])
+        ev = [e["change"] for e in core.item_show(self.c, x)["events"] if "custom prompt" in e["change"]]
+        self.assertEqual(ev, [f"{t['session_name']} launched with a custom prompt: " + long.strip()[:200] + "..."])
+        y = core.item_add(self.c, "shop", "more")["id"]
+        self.assertEqual(server.launch_agent(self.c, "shop", runner=sent.append)["pushed_to"], "w1")  # no prompt: as before
+        z = core.item_add(self.c, "shop", "third")["id"]
+        server.TERMINAL_RUNNER = sent.append
+        self.addCleanup(setattr, server, "TERMINAL_RUNNER", None)
+        t = server.OPS["launch_agent"](self.c, {"project": "shop", "prompt": "short one", "launch_in": "window"}, "boss")
+        self.assertEqual(t["item"]["id"], z)
+        self.assertIn(f"{t['session_name']} launched with a custom prompt: short one",
+                      [e["change"] for e in core.item_show(self.c, z)["events"]])
+        self.assertNotIn("custom prompt", str(core.item_show(self.c, y)["events"]))
+
     def test_the_command_line_takes_options(self):
         import contextlib
         import io
@@ -1942,6 +2002,10 @@ class LaunchProfiles(unittest.TestCase):
             self.assertEqual(cli.run(["-q", "launch", "--dry-run", "--option", "remote_control=off",
                                       "--option", "permission_mode=plan"]), 0)
         self.assertRegex(out.getvalue(), r"command: claude --name '#\d+ work' --permission-mode plan go   \(in a new tab\)")
+        # --dry-run prints the whole command with the custom prompt; ';' is allowed in it.
+        with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(cli.run(["-q", "launch", "--dry-run", "--prompt", "fix a; then b\nand c"]), 0)
+        self.assertRegex(out.getvalue(), r"command: claude --name '#\d+ work' 'go\n\nfix a; then b\nand c' --remote-control")
 
     def migrate(self, value, scope="global"):
         self.c.execute("INSERT INTO settings(scope,key,value) VALUES (?,?,?) "
