@@ -3,8 +3,8 @@
 Mermaid's own limits (50,000 characters, 500 edges) stopped the Graph tab on a queue of this size.
 Run on an empty database, then open the Graph tab, choose All projects and tick "include done":
 
-    RIVER_DB=/tmp/large.db python3 seed/large.py
-    RIVER_DB=/tmp/large.db bin/river serve --open
+    MAXPM_DB=/tmp/large.db python3 seed/large.py
+    MAXPM_DB=/tmp/large.db bin/maxpm serve --open
 
 Other sizes: python3 seed/large.py <items> <open items>   (above 1,500 items the graph leaves out finished items)
 """
@@ -50,6 +50,6 @@ if __name__ == "__main__":
     left = int(sys.argv[2]) if len(sys.argv) > 2 else n // 10
     conn = core.connect()
     if core.state(conn)["items"]:
-        sys.exit("this database has items already: set RIVER_DB to a new file")
+        sys.exit("this database has items already: set MAXPM_DB to a new file")
     made, links = load(conn, n, left)
     print(f"Loaded {made} items ({made - left} finished) and {links} links into {core.db_path()}.")

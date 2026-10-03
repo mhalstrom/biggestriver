@@ -165,7 +165,7 @@ function agentHolds(a) {
       ${queueHtml((S.queues || {})[a.name], a.name)}${agentButtons(a, S)}`;
 }
 function agentSession(a) {
-  return `${a.model ? `<span class="chip c-p" title="the model this session runs (RIVER_MODEL)">${esc(a.model)}</span> ` : ""}${a.session ? `<span title="Claude Code session">${esc(a.session)}${a.session_ref ? " [" + esc(a.session_ref) + "]" : ""}</span>` : ""}${a.session_url ? ` <a class="link" href="${esc(a.session_url)}" target="_blank" rel="noopener">open</a>` : ""}`;
+  return `${a.model ? `<span class="chip c-p" title="the model this session runs (MAXPM_MODEL)">${esc(a.model)}</span> ` : ""}${a.session ? `<span title="Claude Code session">${esc(a.session)}${a.session_ref ? " [" + esc(a.session_ref) + "]" : ""}</span>` : ""}${a.session_url ? ` <a class="link" href="${esc(a.session_url)}" target="_blank" rel="noopener">open</a>` : ""}`;
 }
 
 // The monitor sessions that followed a deploy (maxpm target monitor).
@@ -251,7 +251,7 @@ function renderSelects() {
   const names = S.projects.map(p => p.name);
   { const el = $("#area"), cur = el.value; el.innerHTML = `<option value="">All projects</option><option value="__mine">Near my earlier work</option>` + names.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join(""); if ([...el.options].some(o => o.value === cur)) el.value = cur; } fillSelect("#logProject", names, true); fillSelect("#addProject", names, false);
   const a = $("#actor"), cur = a.value || store("river.actor") || "";
-  // Only people act from this page; agents act through the river command.
+  // Only people act from this page; agents act through the maxpm command.
   const people = S.agents.filter(x => x.kind === "human");
   a.innerHTML = `<option value="">(choose your name)</option>` + people.map(x => `<option value="${esc(x.name)}">${esc(x.name)}</option>`).join("");
   if (people.some(x => x.name === cur)) a.value = cur;
@@ -625,7 +625,7 @@ function notifyNew() {
   const fresh = NY.filter(e => !known.has(e.id));
   if (!first && "Notification" in window && Notification.permission === "granted") {
     for (const e of fresh.slice(0, 5)) {
-      const n = new Notification("MaximizePM: needs you", { body: e.summary, tag: "river-" + e.id });
+      const n = new Notification("MaximizePM: needs you", { body: e.summary, tag: "maxpm-" + e.id });
       n.onclick = () => { window.focus(); if (promptAlert(e)) openTerminal(e.from_agent); else if (e.item_id) openDrawer(e.item_id); n.close(); };
     }
   }
@@ -973,14 +973,14 @@ function renderSetup(st) {
     st.people.length ? "You're here as " + st.people.map(esc).join(", ") + ". Pick your name at the top right if it isn't chosen."
       : "So MaximizePM can show you what needs you, and let you know.",
     `<input id="suName" placeholder="your name" style="width:160px"><button class="btn primary" data-su="register">Save</button>`));
-  // Agents run `maxpm go`: a new terminal must find the river command (the app writes a small launcher).
-  const rc = st.river_cmd || {};
+  // Agents run `maxpm go`: a new terminal must find the maxpm command (the app writes a small launcher).
+  const rc = st.maxpm_cmd || {};
   if (!rc.unsupported) out.push(step(rc.ok, "Let agents use MaximizePM",
-    rc.ok ? `Agents can run the river command${rc.shell_path ? ` (${esc(rc.shell_path)})` : ""}.`
+    rc.ok ? `Agents can run the maxpm command${rc.shell_path ? ` (${esc(rc.shell_path)})` : ""}.`
       : rc.in_app_image ? "First drag MaximizePM to your Applications folder, then open it from there."
-      : rc.launcher === "old" ? "The river command still points at an older copy of MaximizePM. Update it to this one."
-      : "The agents you start talk to MaximizePM with a small command, river. One click adds it to this Mac.",
-    rc.in_app_image ? "" : `<button class="btn primary" data-su="rivercmd">${rc.launcher === "old" ? "Update" : "Add"} the river command</button>`));
+      : rc.launcher === "old" ? "The maxpm command still points at an older copy of MaximizePM. Update it to this one."
+      : "The agents you start talk to MaximizePM with a small command, maxpm. One click adds it to this Mac.",
+    rc.in_app_image ? "" : `<button class="btn primary" data-su="maxpmcmd">${rc.launcher === "old" ? "Update" : "Add"} the maxpm command</button>`));
   // One instructions file for every agent: AGENTS.md holds the rules, CLAUDE.md imports it (@AGENTS.md).
   const blocks = st.folders.filter(f => f.exists && (f.claude_md !== "current" || f.agents_md !== "current"));
   const layouts = { claude_only: "its CLAUDE.md has rules that Codex and other agents don't read",
@@ -1041,7 +1041,7 @@ function renderSetup(st) {
   const more = howStart ? [howStart] : [];
   const missing = Object.entries(st.skills).filter(([, v]) => v !== "installed").map(([k]) => k);
   if (st.claude_home) more.push(extra(missing.length === 0, "Claude Code skills",
-    missing.length ? "Teach Claude Code MaximizePM's full workflow (missing: " + missing.join(", ") + ")." : "river and river-planner are installed.",
+    missing.length ? "Teach Claude Code MaximizePM's full workflow (missing: " + missing.join(", ") + ")." : "maxpm and maxpm-planner are installed.",
     `<button class="btn" data-su="skills">Install skills</button>`));
   more.push(extra(st.ntfy_ready && st.notify_channels.includes("ntfy"), "Phone notifications",
     st.ntfy_ready ? "Channels: " + (st.notify_channels.map(esc).join(", ") || "none") : "Get a push on your phone when something needs you (ntfy).",
@@ -1076,7 +1076,7 @@ $("#setupSteps").addEventListener("click", async (e) => {
       await act("item_add", { project: $("#suTaskProject").value, title, doer: "ai" });
     }
     else if (k === "recheck") { /* openSetup below checks again */ }
-    else if (k === "rivercmd") { const r = await act("setup_river_cmd", {}); toast(r.note || "Installed the river command. Agents in new terminals can use it now."); }
+    else if (k === "maxpmcmd") { const r = await act("setup_maxpm_cmd", {}); toast(r.note || "Added the maxpm command. Agents in new terminals can use it now."); }
     else if (k === "agent") await act("setup_agent_add", { label: b.dataset.label });
     else if (k === "ntfy") {
       const r = await act("setup_ntfy", {});

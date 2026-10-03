@@ -17,9 +17,9 @@ from .core import RiverError
 STATIC = Path(__file__).resolve().parent / "static"
 PKG = Path(__file__).resolve().parent
 DEV = {"on": False}
-# The desktop app (desktop/) starts the server with RIVER_DESKTOP=1: the app updates itself, so the
+# The desktop app (desktop/) starts the server with MAXPM_DESKTOP=1: the app updates itself, so the
 # page's git Update button does not apply there.
-DESKTOP = os.environ.get("RIVER_DESKTOP") == "1"
+DESKTOP = os.environ.get("MAXPM_DESKTOP") == "1"
 BOOT = str(time.time())  # changes when the server restarts; the page waits for a new one after an update
 
 
@@ -113,26 +113,26 @@ def dispatch_item(conn, item_id, runner=None, agent=None, actor=None, model=None
                   options=None):
     """Start work on one ready item: a session that waits for work in its project gets it (push);
     else river names a new session, reserves the item for it (push), and opens the chosen agent in the
-    project folder with RIVER_AGENT set to that name and RIVER_FOCUS=item:<id>, so its first maxpm go takes it."""
+    project folder with MAXPM_AGENT set to that name and MAXPM_FOCUS=item:<id>, so its first maxpm go takes it."""
     t = core.launch_target(conn, agent=agent, item=item_id, model=model, effort=effort, launch_in=launch_in,
                            options=options, actor=actor)
     waiting = core.waiting_agent_for(conn, t["project"], t["item"]["id"])
     if waiting:
         core.push(conn, t["item"]["id"], waiting, "from the page: Dispatch; you were waiting for work", actor)
         return {**t, "pushed_to": waiting}
-    _can_open_terminal(runner, f"cd <project folder> && RIVER_FOCUS=item:{t['item']['id']} claude go", t["launch_in"])
+    _can_open_terminal(runner, f"cd <project folder> && MAXPM_FOCUS=item:{t['item']['id']} claude go", t["launch_in"])
     return _start_for_item(conn, t, runner, actor, "Dispatch started this session for it")
 
 
 def _start_for_item(conn, t, runner, actor, why, by="the page"):
-    """Name a new session, reserve the item for it (push), and open the agent with RIVER_AGENT and
-    RIVER_FOCUS=item:<id>: its first maxpm go claims that item, or says why not. A session that never runs
+    """Name a new session, reserve the item for it (push), and open the agent with MAXPM_AGENT and
+    MAXPM_FOCUS=item:<id>: its first maxpm go claims that item, or says why not. A session that never runs
     a river command is a manager finding (not connected) and does not count as the project's agent."""
     import secrets
     name = f"{t['project']}-{secrets.token_hex(2)}"
     core.register(conn, name, note=f"{core.STARTED_NOTE} #{t['item']['id']}")
     core.push(conn, t["item"]["id"], name, f"from {by}: {why}", actor)
-    _open_terminal(t, {"RIVER_AGENT": name, "RIVER_FOCUS": f"item:{t['item']['id']}", **t["env"]}, runner)
+    _open_terminal(t, {"MAXPM_AGENT": name, "MAXPM_FOCUS": f"item:{t['item']['id']}", **t["env"]}, runner)
     return {**t, "session_name": name}
 
 
@@ -140,7 +140,7 @@ def open_agent_on(conn, item_id, runner=None, agent=None, person=None, actor=Non
                   launch_in=None, options=None):
     """Open an agent session for one item from its drawer. A ready item: Dispatch. A person's item: a
     session that does it together with the person. An item that waits: a session that first takes what
-    blocks it. The session learns which from RIVER_FOCUS, which its maxpm go reads."""
+    blocks it. The session learns which from MAXPM_FOCUS, which its maxpm go reads."""
     it = core.item_show(conn, item_id)
     if it["status"] not in core.OPEN_STATES:
         raise RiverError(f"#{item_id} is {it['status']}; there is nothing to open an agent on")
@@ -216,7 +216,7 @@ def _agent_for(conn, model):
 
 def open_monitors(conn, runner=None, db=None):
     """Open a session for each monitor item nobody holds yet (a deploy just started): in a folder of the
-    target's projects, with RIVER_FOCUS=monitor:<id>, the item's model and effort (a monitor defaults to
+    target's projects, with MAXPM_FOCUS=monitor:<id>, the item's model and effort (a monitor defaults to
     sonnet, low). The command asks the running server for this after it claims a deploy item; db must name
     this server's queue (_same_queue)."""
     _same_queue(db)
@@ -235,20 +235,20 @@ def open_monitors(conn, runner=None, db=None):
             out.append({"id": m["id"], "error": str(e)})
             continue
         with core.tx(conn):
-            core._event(conn, m["id"], "river", f"monitor session opened ({t['agent']} in {p['name']})")
+            core._event(conn, m["id"], "maxpm", f"monitor session opened ({t['agent']} in {p['name']})")
         out.append({"id": m["id"], "agent": t["agent"], "project": p["name"], "model": model})
     return out
 
 
 def _open_focused(conn, p, focus, runner, agent, model=None, effort=None, launch_in=None, options=None):
-    """Open the chosen agent in a project folder with RIVER_FOCUS set; its maxpm go reads it."""
+    """Open the chosen agent in a project folder with MAXPM_FOCUS set; its maxpm go reads it."""
     launch_in = core._launch_in(conn, p["id"], launch_in)
-    _can_open_terminal(runner, f"cd {p['path']}, set RIVER_FOCUS={focus}, then claude go", launch_in)
+    _can_open_terminal(runner, f"cd {p['path']}, set MAXPM_FOCUS={focus}, then claude go", launch_in)
     name = core.focus_title(conn, focus)
     t = {"project": p["name"], "path": p["path"], "focus": focus, "session_title": name,
          **core._launch_agent_cmd(conn, p["id"], agent, model, effort, options, name),
          "launch_in": launch_in}
-    _open_terminal(t, {"RIVER_FOCUS": focus, **t["env"]}, runner)
+    _open_terminal(t, {"MAXPM_FOCUS": focus, **t["env"]}, runner)
     return t
 
 
@@ -256,9 +256,8 @@ def manage_command(cmd):
     """A launch_agents command that starts a manager instead of a worker: 'maxpm go' (a first prompt) or the
     word go (Claude Code's `claude go`) becomes manage."""
     import re
-    for c in core.COMMANDS:  # maxpm go, or river go in a command from before the name maxpm
-        if f"{c} go" in cmd:
-            return cmd.replace(f"{c} go", f"{c} manage")
+    if "maxpm go" in cmd:
+        return cmd.replace("maxpm go", "maxpm manage")
     out, n = re.subn(r"(?<=\s)go(?=\s|$)", "manage", cmd, count=1)
     if not n:
         raise RiverError(f"cannot make a manager from the command {cmd!r}: it has no 'go' or 'maxpm go' to replace")
@@ -277,14 +276,14 @@ def start_manager(conn, runner=None, agent=None, actor=None, model=None, effort=
         raise RiverError("no project has a folder, so MaximizePM cannot start a session: maxpm project path <name> <folder>")
     launch_in = core._launch_in(conn, p["id"], launch_in)
     _can_open_terminal(runner, f"cd {p['path']} && claude manage", launch_in)
-    t = {"project": p["name"], "path": p["path"], "session_title": "river manager",
-         **core._launch_agent_cmd(conn, p["id"], agent, model, effort, options, "river manager"),
+    t = {"project": p["name"], "path": p["path"], "session_title": "maxpm manager",
+         **core._launch_agent_cmd(conn, p["id"], agent, model, effort, options, "maxpm manager"),
          "launch_in": launch_in}
     t["command"] = manage_command(t["command"])
     name = f"manager-{secrets.token_hex(2)}"
     core.register(conn, name, note="started from the page as the manager")
     core._set_role_note(conn, name, "manager", None)  # the next Start manager sees it at once
-    _open_terminal(t, {"RIVER_AGENT": name, **t["env"]}, runner)
+    _open_terminal(t, {"MAXPM_AGENT": name, **t["env"]}, runner)
     return {**t, "session_name": name}
 
 
@@ -338,15 +337,15 @@ def open_chat(conn, agent, runner=None):
 def _open_terminal(t, env, runner=None):
     """Run the agent command (t["command"]) in the project folder (t["path"]) with env set: in a new
     Terminal tab or window on macOS (launch_in), in a new console window on Windows, or with launch_in
-    tmux in a pane of the river tmux session on any system. runner (tests) gets the AppleScript on macOS,
+    tmux in a pane of the maxpm tmux session on any system. runner (tests) gets the AppleScript on macOS,
     and {"args", "cwd", "env"} on Windows; TMUX_RUNNER gets the tmux commands."""
     import os
     import shlex
     import subprocess
     runner = runner or TERMINAL_RUNNER
-    # The agent uses the same queue as this page: a page on a RIVER_DB queue starts agents on it too.
-    if os.environ.get("RIVER_DB"):
-        env = {"RIVER_DB": str(core.db_path()), **env}
+    # The agent uses the same queue as this page: a page on a MAXPM_DB queue starts agents on it too.
+    if os.environ.get("MAXPM_DB"):
+        env = {"MAXPM_DB": str(core.db_path()), **env}
     if t["launch_in"] == "tmux":
         t["tmux_pane"] = _tmux_open(t, env, f"cd {shlex.quote(t['path'])} && "
                                     + "".join(f"{k}={shlex.quote(v)} " for k, v in env.items()) + t["command"])
@@ -412,11 +411,11 @@ def _open_terminal(t, env, runner=None):
 # server of its own; TMUX_RUNNER (tests) gets each argument list in its place and returns the output, or
 # None for a command that fails.
 TMUX_CMD = None
-TMUX_SESSION = "river"
+TMUX_SESSION = "maxpm"
 TMUX_RUNNER = None
 TMUX_SHELLS = {"sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "tcsh", "nu"}
 # One line per pane: the free text (the session's name) comes last.
-_TMUX_PANE = "#{pane_id}|#{window_id}|#{@river_tile}|#{window_panes}|#{pane_current_command}|#{pane_tty}|#{@river_agent}|#{@river_name}"
+_TMUX_PANE = "#{pane_id}|#{window_id}|#{@maxpm_tile}|#{window_panes}|#{pane_current_command}|#{pane_tty}|#{@maxpm_agent}|#{@maxpm_name}"
 
 
 def _tmux_cmd():
@@ -459,14 +458,14 @@ def _tmux(*args, check=True):
 def _tmux_env():
     """The environment for a tmux command. The first command starts the tmux server, and every pane gets
     the server's environment: when an agent session runs maxpm launch, its own name, focus, and session
-    ids (RIVER_*, CLAUDE*, CODEX_*) must stay out, or each new agent would start as a copy of that session."""
+    ids (MAXPM_*, CLAUDE*, CODEX_*) must stay out, or each new agent would start as a copy of that session."""
     import os
     keep = ("CLAUDE_CONFIG_DIR", "CODEX_HOME")
-    return {k: v for k, v in os.environ.items() if k in keep or not k.startswith(("RIVER_", "CLAUDE", "CODEX_"))}
+    return {k: v for k, v in os.environ.items() if k in keep or not k.startswith(("MAXPM_", "CLAUDE", "CODEX_"))}
 
 
 def _tmux_panes(everywhere=False):
-    """The panes of the river tmux session (everywhere: of every session); [] when there is none."""
+    """The panes of the maxpm tmux session (everywhere: of every session); [] when there is none."""
     out = _tmux("list-panes", *(["-a"] if everywhere else ["-s", "-t", "=" + TMUX_SESSION]), "-F", _TMUX_PANE,
                 check=False)
     rows = []
@@ -490,7 +489,7 @@ def _tmux_pane_of(tty):
 
 
 def _tmux_open(t, env, line):
-    """Start an agent in a new pane of the river tmux session and return the pane id: a window of its own,
+    """Start an agent in a new pane of the maxpm tmux session and return the pane id: a window of its own,
     or one more pane of the side-by-side window when maxpm view made one. tmux starts the pane's own login
     shell and river types the command line into it, as Terminal's do script does: the shell's PATH finds
     the agent CLI, and the pane stays (with what the agent printed) after the agent ends. Nothing takes
@@ -509,9 +508,9 @@ def _tmux_open(t, env, line):
             if pane:
                 _tmux("select-layout", "-t", tile, "tiled")
         pane = pane or _tmux("new-window", "-d", "-t", f"={TMUX_SESSION}:", "-n", name, *new)
-    _tmux("set-option", "-p", "-t", pane, "@river_name", name)
-    if env.get("RIVER_AGENT"):
-        _tmux("set-option", "-p", "-t", pane, "@river_agent", env["RIVER_AGENT"])
+    _tmux("set-option", "-p", "-t", pane, "@maxpm_name", name)
+    if env.get("MAXPM_AGENT"):
+        _tmux("set-option", "-p", "-t", pane, "@maxpm_agent", env["MAXPM_AGENT"])
     _tmux("send-keys", "-t", pane, "-l", line)
     _tmux("send-keys", "-t", pane, "Enter")
     return pane
@@ -522,7 +521,7 @@ def _pane_texts(panes):
     import secrets
     if not panes:
         return {}
-    mark, args = f"river-pane-{secrets.token_hex(8)}:", []
+    mark, args = f"maxpm-pane-{secrets.token_hex(8)}:", []
     for n, pane in enumerate(panes):  # a line of our own before each pane's text says where it starts
         args += [";", "display-message", "-p", f"{mark}{n}", ";", "capture-pane", "-p", "-t", pane]
     out, texts, at = _tmux(*args[1:], check=False), {}, None
@@ -625,11 +624,11 @@ def tmux_view(layout=None, tidy=False, conn=None):
     if layout == "tile" and panes:
         if tile is None:
             tile = panes[0]["window"]
-            _tmux("set-option", "-w", "-t", tile, "@river_tile", "1")
+            _tmux("set-option", "-w", "-t", tile, "@maxpm_tile", "1")
             _tmux("rename-window", "-t", tile, "agents")
             # Each pane shows its session's name on its top border.
             _tmux("set-option", "-w", "-t", tile, "pane-border-status", "top")
-            _tmux("set-option", "-w", "-t", tile, "pane-border-format", " #{@river_name} ")
+            _tmux("set-option", "-w", "-t", tile, "pane-border-format", " #{@maxpm_name} ")
         for p in panes:
             if p["window"] != tile:
                 if _tmux("join-pane", "-d", "-s", p["pane"], "-t", tile, check=False) is None:
@@ -641,7 +640,7 @@ def tmux_view(layout=None, tidy=False, conn=None):
         inside = [p for p in panes if p["window"] == tile]
         for p in inside[1:]:
             _tmux("break-pane", "-d", "-s", p["pane"], "-n", p["name"], "-t", f"{target}:")
-        _tmux("set-option", "-w", "-u", "-t", tile, "@river_tile")
+        _tmux("set-option", "-w", "-u", "-t", tile, "@maxpm_tile")
         _tmux("set-option", "-w", "-u", "-t", tile, "pane-border-status")
         _tmux("set-option", "-w", "-u", "-t", tile, "pane-border-format")
         if inside:
@@ -771,7 +770,7 @@ def terminal_screen(conn, agent):
 
 def _pane_screen(agent, pane):
     out = _tmux("display-message", "-p", "-t", pane,
-                "#{pane_width}|#{pane_height}|#{cursor_x}|#{cursor_y}|#{pane_current_command}|#{@river_name}",
+                "#{pane_width}|#{pane_height}|#{cursor_x}|#{cursor_y}|#{pane_current_command}|#{@maxpm_name}",
                 ";", "capture-pane", "-p", "-e", "-t", pane)
     head, _, text = out.partition("\n")
     f = head.split("|", 5)
@@ -943,8 +942,8 @@ def start_fresh(conn, item_id, why, runner=None):
     model = it["model"] if opt and any(x["name"] == it["model"] for x in opt["models"]) else None
     effort = it["effort"] if opt and it["effort"] in opt["efforts"] else None
     t = core.launch_target(conn, agent=label, item=item_id, model=model, effort=effort)
-    _can_open_terminal(runner, f"cd {t['path']} && RIVER_FOCUS=item:{item_id} claude go", t["launch_in"])
-    return _start_for_item(conn, t, runner, "river", why, by="maxpm serve")
+    _can_open_terminal(runner, f"cd {t['path']} && MAXPM_FOCUS=item:{item_id} claude go", t["launch_in"])
+    return _start_for_item(conn, t, runner, "maxpm", why, by="maxpm serve")
 
 
 def fresh_sessions(conn, runner=None):
@@ -970,7 +969,7 @@ def fresh_sessions(conn, runner=None):
             except (RiverError, StopIteration) as e:
                 out["failed"][i] = str(e)
                 with core.tx(conn):
-                    core._event(conn, i, "river", f"no fresh session: {e}; the item waits in the queue")
+                    core._event(conn, i, "maxpm", f"no fresh session: {e}; the item waits in the queue")
     if fresh:
         start(core.fresh_items(conn), "an answer came for it")
     if not after.total_seconds():
@@ -1196,10 +1195,10 @@ KNOWN_AGENTS = [
 
 
 def _agent_cmd(cmd):
-    """A KNOWN_AGENTS command with {river_dir} filled in for this computer."""
+    """A KNOWN_AGENTS command with {maxpm_dir} filled in for this computer."""
     import shlex
     d = core.river_dir()
-    return cmd.replace("{river_dir}", f'"{d}"' if core.PLATFORM == "win32" else shlex.quote(d))
+    return cmd.replace("{maxpm_dir}", f'"{d}"' if core.PLATFORM == "win32" else shlex.quote(d))
 
 
 def _shown_cmd(conn, cmd):
@@ -1242,7 +1241,7 @@ def setup_status(conn):
         "projects_without_folder": [p["name"] for p in core.project_list(conn) if not p["path"]],
         "people": [r["name"] for r in conn.execute("SELECT name FROM agents WHERE kind='human' ORDER BY name")],
         "claude_home": Path("~/.claude").expanduser().is_dir(),
-        "skills": {n: ("installed" if (skills / n / "SKILL.md").is_file() else "missing") for n in ("river", "river-planner")},
+        "skills": {n: ("installed" if (skills / n / "SKILL.md").is_file() else "missing") for n in ("maxpm", "maxpm-planner")},
         "launch_agents": [label for label, _ in agents],
         "launch_in": core._launch_in(conn, None),
         # Each Start button agent, and whether its program is on this computer (the first word of its command).
@@ -1253,7 +1252,7 @@ def setup_status(conn):
         "launch_profiles": core.launch_profiles(conn),
         "notify_channels": core._channels(core.setting(conn, "notify_channels")),
         "ntfy_ready": bool(core.setting(conn, "ntfy_topic")),
-        "river_cmd": river_command_status(),
+        "maxpm_cmd": command_status(),
     }
 
 
@@ -1296,14 +1295,13 @@ def folder_add(conn, path, name=None, description="", move=None, actor=None):
             "layout": instructions_layout(folder), "default_name": folder_project_name(folder)}
 
 
-# The river command for agents: a small launcher in ~/.local/bin that runs this river with this Python, so an
+# The maxpm command for agents: a small launcher in ~/.local/bin that runs this MaximizePM with this Python, so an
 # agent started from the app (or any terminal) can run `maxpm go` on a Mac that has only the app.
 LAUNCHER_MARK = "# MaximizePM launcher"
-OLD_LAUNCHER_MARKS = ("# Biggest River launcher",)  # the product's first name
 
 
 def _launcher_path():
-    return Path("~/.local/bin/river").expanduser()
+    return Path("~/.local/bin/maxpm").expanduser()
 
 
 def _login_shell_which(names):
@@ -1326,21 +1324,21 @@ def _login_shell_which(names):
     return {n: (found.get(n) or "").strip() if (found.get(n) or "").strip().startswith("/") else None for n in names}
 
 
-def _login_shell_river():
-    """What `river` is in a new terminal, or None."""
-    return _login_shell_which(["river"])["river"]
+def _login_shell_maxpm():
+    """What `maxpm` is in a new terminal, or None."""
+    return _login_shell_which(["maxpm"])["maxpm"]
 
 
-def river_command_status():
-    """ok: `river` works in a new terminal. ours: it is this launcher. launcher: the launcher's state
+def command_status():
+    """ok: `maxpm` works in a new terminal. ours: it is this launcher. launcher: the launcher's state
     (current / old / missing). shell_path: what a new terminal finds. where: where the launcher goes."""
     if core.PLATFORM == "win32":
         return {"ok": True, "unsupported": True}
     lp = _launcher_path()
     text = lp.read_text(errors="replace") if lp.is_file() else ""
-    launcher = "missing" if not text else "current" if text == _launcher_text() else "old" if any(m in text for m in (LAUNCHER_MARK, *OLD_LAUNCHER_MARKS)) else "other"
-    found = _login_shell_river()
-    # A river command that the setup guide did not write (a link to a clone, pip) is the person's own: fine.
+    launcher = "missing" if not text else "current" if text == _launcher_text() else "old" if LAUNCHER_MARK in text else "other"
+    found = _login_shell_maxpm()
+    # A maxpm command that the setup guide did not write (a link to a clone, pip) is the person's own: fine.
     ours = bool(found) and Path(found).expanduser() == lp and launcher in ("current", "old")
     return {"ok": bool(found) and (not ours or launcher == "current"), "shell_path": found, "ours": ours,
             "launcher": launcher, "where": str(lp), "in_app_image": "/Volumes/" in str(Path(__file__).resolve())}
@@ -1349,56 +1347,49 @@ def river_command_status():
 def _launcher_text():
     import shlex
     root = Path(__file__).resolve().parent.parent
-    py, script = shlex.quote(sys.executable), shlex.quote(str(root / "bin" / "river"))
-    lines = [f"#!/bin/sh", f"{LAUNCHER_MARK}: runs the river that the setup guide found ({root}).",
-             "# The setup guide rewrites it (Install the river command); delete it to remove it."]
+    py, script = shlex.quote(sys.executable), shlex.quote(str(root / "bin" / "maxpm"))
+    lines = [f"#!/bin/sh", f"{LAUNCHER_MARK}: runs the MaximizePM that the setup guide found ({root}).",
+             "# The setup guide rewrites it (Add the maxpm command); delete it to remove it."]
     if DESKTOP:
         # An app opened from Downloads and then moved to Applications: use the copy in Applications.
-        for name in ("MaximizePM", "Biggest River"):  # the app under its first name too
-            app = f"/Applications/{name}.app/Contents/Resources/river-app"
-            lines += [f"if [ ! -f {script} ] && [ -x '{app}/python/bin/python3' ]; then",
-                      f"  exec '{app}/python/bin/python3' '{app}/bin/river' \"$@\"", "fi"]
+        app = "/Applications/MaximizePM.app/Contents/Resources/river-app"
+        lines += [f"if [ ! -f {script} ] && [ -x '{app}/python/bin/python3' ]; then",
+                  f"  exec '{app}/python/bin/python3' '{app}/bin/maxpm' \"$@\"", "fi"]
     lines += [f"if [ ! -x {py} ] || [ ! -f {script} ]; then",
-              f"  echo \"river: {root} is gone (the app moved or was removed). Open MaximizePM, then Settings,\" >&2",
-              "  echo \"the setup guide, and Install the river command again.\" >&2", "  exit 1", "fi",
+              f"  echo \"maxpm: {root} is gone (the app moved or was removed). Open MaximizePM, then Settings,\" >&2",
+              "  echo \"the setup guide, and Add the maxpm command again.\" >&2", "  exit 1", "fi",
               f"exec {py} {script} \"$@\""]
     return "\n".join(lines) + "\n"
 
 
-def install_river_command():
+def install_command():
     """Write the launcher, and put ~/.local/bin on PATH in the login profile when a new terminal would not
-    find it. A river command that is not ours (a clone or pip) is left alone. Returns what changed."""
+    find it. A maxpm command that is not ours (a clone or pip) is left alone. Returns what changed."""
     if core.PLATFORM == "win32":
-        raise RiverError("the river command installer works on macOS for now; on Windows, add the river "
-                         "folder's bin to PATH")
-    st = river_command_status()
+        raise RiverError("the maxpm command installer works on macOS for now; on Windows, add the bin folder of "
+                         "MaximizePM to PATH")
+    st = command_status()
     if st["in_app_image"]:
         raise RiverError("the app runs from its download image: drag MaximizePM to Applications, open it "
-                         "from there, then install the river command")
+                         "from there, then add the maxpm command")
     if st["shell_path"] and not st["ours"]:
-        return {"changed": [], "note": f"river is already installed at {st['shell_path']}; left as it is"}
+        return {"changed": [], "note": f"maxpm is already installed at {st['shell_path']}; left as it is"}
     lp, changed = _launcher_path(), []
     if lp.exists() and st["launcher"] == "other":
-        raise RiverError(f"{lp} exists and is not river's launcher; move it away first")
+        raise RiverError(f"{lp} exists and is not the launcher of MaximizePM; move it away first")
     lp.parent.mkdir(parents=True, exist_ok=True)
     lp.write_text(_launcher_text())
     lp.chmod(0o755)
-    changed.append(f"{lp}: runs river from {Path(__file__).resolve().parent.parent}")
-    mp = lp.with_name("maxpm")  # the same command under the product's name; a maxpm of the person's own stays
-    old = mp.read_text(errors="replace") if mp.is_file() else ""
-    if not mp.exists() or any(m in old for m in (LAUNCHER_MARK, *OLD_LAUNCHER_MARKS)):
-        mp.write_text(_launcher_text())
-        mp.chmod(0o755)
-        changed.append(f"{mp}: the same command as river")
-    if not _login_shell_river():
+    changed.append(f"{lp}: runs MaximizePM from {Path(__file__).resolve().parent.parent}")
+    if not _login_shell_maxpm():
         shell = Path(os.environ.get("SHELL") or "/bin/zsh").name
         prof = Path("~/.zprofile" if shell == "zsh" else "~/.bash_profile" if shell == "bash" else "~/.profile").expanduser()
         old = prof.read_text() if prof.exists() else ""
-        line = 'export PATH="$HOME/.local/bin:$PATH"  # MaximizePM: the river command'
+        line = 'export PATH="$HOME/.local/bin:$PATH"  # MaximizePM: the maxpm command'
         if line not in old:
             prof.write_text(old + ("\n" if old and not old.endswith("\n") else "") + line + "\n")
             changed.append(f"{prof}: adds ~/.local/bin to PATH for new terminals")
-    return {"changed": changed, "status": river_command_status()}
+    return {"changed": changed, "status": command_status()}
 
 
 def setup_skills():
@@ -1494,7 +1485,7 @@ OPS = {
     "give": lambda c, a, who: core.give(c, int(a["id"]), a["to"], who),
     "split": lambda c, a, who: core.split(c, int(a["id"]), [t for t in a["titles"] if t.strip()], who),
     "setup_block": lambda c, a, who: setup_block(c, a["path"], a.get("move")),
-    "setup_river_cmd": lambda c, a, who: install_river_command(),
+    "setup_maxpm_cmd": lambda c, a, who: install_command(),
     "folder_add": lambda c, a, who: folder_add(c, a.get("path"), a.get("name"), a.get("description") or "", a.get("move"), who),
     "setup_skills": lambda c, a, who: setup_skills(),
     "setup_agent_add": lambda c, a, who: setup_agent_add(c, a["label"], who),
@@ -1788,7 +1779,7 @@ def serve(port: int, open_browser=False, dev=False):
     from . import notify
     notify.SERVE_PORT["port"] = port
     stop = threading.Event()
-    threading.Thread(target=notify.loop, args=(stop,), daemon=True, name="river-notify").start()
+    threading.Thread(target=notify.loop, args=(stop,), daemon=True, name="maxpm-notify").start()
     if open_browser:
         webbrowser.open(url)
     try:

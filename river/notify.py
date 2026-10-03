@@ -74,15 +74,15 @@ def _ntfy_channel(conn):
 register_channel("ntfy", _ntfy_channel)
 
 
-PASSWORD_FILE = Path("~/.config/river/smtp-password")
+PASSWORD_FILE = Path("~/.config/maxpm/smtp-password")
 
 
 def smtp_password():
-    """RIVER_SMTP_PASSWORD, or a file only its owner can read. Never the settings table."""
+    """MAXPM_SMTP_PASSWORD, or a file only its owner can read. Never the settings table."""
     import os
     import stat
-    if os.environ.get("RIVER_SMTP_PASSWORD"):
-        return os.environ["RIVER_SMTP_PASSWORD"]
+    if os.environ.get("MAXPM_SMTP_PASSWORD"):
+        return os.environ["MAXPM_SMTP_PASSWORD"]
     f = PASSWORD_FILE.expanduser()
     if not f.exists():
         return None
@@ -105,7 +105,7 @@ def _email_channel(conn):
         raise RiverError(f"email needs {', '.join(missing)}: maxpm config set <key> <value>")
     password = smtp_password()
     if user and not password:
-        raise RiverError(f"email: smtp_user is set but there is no password; set RIVER_SMTP_PASSWORD "
+        raise RiverError(f"email: smtp_user is set but there is no password; set MAXPM_SMTP_PASSWORD "
                          f"or write it to {PASSWORD_FILE} (chmod 600)")
 
     def send(title, body, url):
@@ -137,7 +137,7 @@ def _mac_channel(conn):
 
     def send(title, body, url):
         if notifier:
-            cmd = [notifier, "-title", title, "-message", body, "-group", "river"]
+            cmd = [notifier, "-title", title, "-message", body, "-group", "maxpm"]
             if url:
                 cmd += ["-open", url]
         else:
@@ -157,7 +157,7 @@ register_channel("mac", _mac_channel)
 def setup_ntfy(conn, url=None, token=None, actor=None):
     """Make a random topic, store it, add ntfy to notify_channels, and say how to subscribe on the phone."""
     import secrets
-    topic = "river-" + secrets.token_urlsafe(18).replace("_", "").replace("-", "")[:22]
+    topic = "maxpm-" + secrets.token_urlsafe(18).replace("_", "").replace("-", "")[:22]
     if url:
         core.config_set(conn, "ntfy_url", url, actor=actor)
     if token:

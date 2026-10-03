@@ -1,7 +1,7 @@
 // The launch dialog: every button that starts an agent opens it first, to pick the agent, the model, the
 // effort, the agent's launch options (a profile: Remote Control, permission or sandbox mode), the work
 // (Start only), and a new tab, a new window, or tmux. The server builds the command (a profile) or fills {model} and
-// {effort} in a custom one, and sets RIVER_MODEL. The last choices stay in this browser; options that
+// {effort} in a custom one, and sets MAXPM_MODEL. The last choices stay in this browser; options that
 // the person does not change are left to the server, so a project's own setting still applies.
 import { $, esc, store } from "../lib.js";
 import { makeDialog } from "./dialog.js";
@@ -161,11 +161,11 @@ function draw(prev) {
       </div>
       ${optionFields(opt)}
       <div class="muted" style="font-size:12px">${esc([other, rec, limits].filter(Boolean).join(" "))}
-        ${!opt.takes_model || !opt.takes_effort ? ` The ${esc(agent)} command has no ${[!opt.takes_model && "{model}", !opt.takes_effort && "{effort}"].filter(Boolean).join(" or ")} placeholder, so the agent starts with its own ${!opt.takes_model ? "model" : "effort"} (river still records the model you pick). Add it in Settings: launch_agents, or use a profile (@claude-code, @codex).` : ""}</div>
+        ${!opt.takes_model || !opt.takes_effort ? ` The ${esc(agent)} command has no ${[!opt.takes_model && "{model}", !opt.takes_effort && "{effort}"].filter(Boolean).join(" or ")} placeholder, so the agent starts with its own ${!opt.takes_model ? "model" : "effort"} (MaximizePM still records the model you pick). Add it in Settings: launch_agents, or use a profile (@claude-code, @codex).` : ""}</div>
       <div class="actions" style="align-items:center"><span class="muted" style="font-size:12px">Open in:</span>
         <label style="display:flex;gap:4px;align-items:center"><input type="radio" name="lIn" value="tab" ${where === "tab" ? "checked" : ""}>a new tab</label>
         <label style="display:flex;gap:4px;align-items:center"><input type="radio" name="lIn" value="window" ${where === "window" ? "checked" : ""}>a new window</label>
-        ${S.tmux || where === "tmux" ? `<label style="display:flex;gap:4px;align-items:center" title="A pane of the tmux session river. Run maxpm view in a terminal to see every agent side by side."><input type="radio" name="lIn" value="tmux" ${where === "tmux" ? "checked" : ""}>tmux</label>` : ""}</div>
+        ${S.tmux || where === "tmux" ? `<label style="display:flex;gap:4px;align-items:center" title="A pane of the tmux session maxpm. Run maxpm view in a terminal to see every agent side by side."><input type="radio" name="lIn" value="tmux" ${where === "tmux" ? "checked" : ""}>tmux</label>` : ""}</div>
     </div>
     <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px">
       <button class="btn" data-launch-cancel="1">Cancel</button>
