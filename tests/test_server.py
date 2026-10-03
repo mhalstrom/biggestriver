@@ -1642,11 +1642,11 @@ class SetupGuide(unittest.TestCase):
         self.assertEqual((r["project"], r["layout"]), ("my-blog", "claude_only"))
         self.assertEqual(core._project(self.c, "my-blog")["path"], os.path.realpath(blog))
         self.assertEqual(core._project(self.c, "my-blog")["notes"], "my writing")
-        self.assertIn("MaximizePM", open(os.path.join(blog, "AGENTS.md")).read())
+        self.assertIn("MaximizePM", Path(os.path.join(blog, "AGENTS.md")).read_text())
         # the rules choice, then the same folder again: nothing new, still one project
         r = server.folder_add(self.c, blog, move=True)
         self.assertEqual((r["project"], r["layout"]), ("my-blog", "shared"))
-        self.assertEqual(open(os.path.join(blog, "CLAUDE.md")).read().strip(), "@AGENTS.md")
+        self.assertEqual(Path(os.path.join(blog, "CLAUDE.md")).read_text().strip(), "@AGENTS.md")
         self.assertEqual(sum(p["name"] == "my-blog" for p in core.project_list(self.c)), 1)
 
     def test_add_a_project_folder_refuses_bad_paths_and_a_name_in_use_elsewhere(self):
@@ -1672,16 +1672,16 @@ class SetupGuide(unittest.TestCase):
             r = server.install_command()
             launcher = os.path.join(home, ".local", "bin", "maxpm")
             self.assertTrue(os.access(launcher, os.X_OK))
-            self.assertIn(server.LAUNCHER_MARK, open(launcher).read())
-            prof = open(os.path.join(home, ".zprofile")).read()
+            self.assertIn(server.LAUNCHER_MARK, Path(launcher).read_text())
+            prof = Path(os.path.join(home, ".zprofile")).read_text()
             self.assertIn('$HOME/.local/bin', prof)
             self.assertEqual(len(r["changed"]), 2)
             self.assertEqual(os.listdir(os.path.join(home, ".local", "bin")), ["maxpm"])  # one command, no other name
-            self.assertNotRegex(open(launcher).read().replace("river-app", ""), r"(?<![/\w])river(?![/\w])")
+            self.assertNotRegex(Path(launcher).read_text().replace("river-app", ""), r"(?<![/\w])river(?![/\w])")
             found["path"] = launcher  # a new terminal now finds it
             self.assertTrue(server.command_status()["ok"])
             server.install_command()  # again: the profile line is not added twice
-            self.assertEqual(open(os.path.join(home, ".zprofile")).read(), prof)
+            self.assertEqual(Path(os.path.join(home, ".zprofile")).read_text(), prof)
             # a maxpm command the person installed (a clone, pip) is left alone
             found["path"] = "/opt/elsewhere/maxpm"
             self.assertTrue(server.command_status()["ok"])
@@ -2357,6 +2357,10 @@ try {
 
             os.environ["MAXPM_DB"] = os.path.join(d, "q.db")
             self.addCleanup(os.environ.pop, "MAXPM_DB", None)
+            # The Start button shows only when an agent program is installed, and a CI runner has none.
+            found = mock.patch.object(server, "_login_shell_which", lambda names: {n: "/bin/" + n for n in names})
+            found.start()
+            self.addCleanup(found.stop)
             try:
                 httpd = server._Server(("127.0.0.1", 0), H)
             except PermissionError:

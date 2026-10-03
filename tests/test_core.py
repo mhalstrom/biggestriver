@@ -15,12 +15,14 @@ from river.core import RiverError
 class Base(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
+        # The folder goes last, after the cleanups a test adds (a second connection): Windows cannot
+        # delete a file that is open.
+        self.addCleanup(self.dir.cleanup)
         self.path = os.path.join(self.dir.name, "t.db")
         self.c = core.connect(self.path)
 
     def tearDown(self):
         self.c.close()
-        self.dir.cleanup()
 
     def add(self, project, title, p=2, after=(), doer="any"):
         return core.item_add(self.c, project, title, p, "", doer, after, "t")["id"]
@@ -1258,7 +1260,7 @@ class DbLocation(unittest.TestCase):
         from pathlib import Path
         old = os.environ.pop("MAXPM_DB", None)
         try:
-            self.assertEqual(str(core.HOME_DB), "~/.maximizepm/maxpm.db")
+            self.assertEqual(core.HOME_DB, Path("~/.maximizepm/maxpm.db"))
             self.assertEqual(core.db_path(), core.HOME_DB.expanduser())
             os.environ["MAXPM_DB"] = "/tmp/other.db"
             self.assertEqual(core.db_path(), Path("/tmp/other.db"))
