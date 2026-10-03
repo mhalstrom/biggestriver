@@ -1,5 +1,5 @@
 ---
-name: maxpm-manager
+name: river-manager
 description: Run the MaximizePM manager session (the `maxpm manage` command): plan with the user, launch agents, fill agent queues, stop stuck agents and agents that wait too long, change launch settings, and give release targets to another agent. Use when the user says "manage" in a project that uses MaximizePM, or asks you to keep the other agents working together.
 ---
 
@@ -78,7 +78,7 @@ Stop when the user tells you to, and tell the user what you did.
 ## Your tools
 
 - `maxpm launch [--project P | --item N] [--agent A] [--model M] [--effort E] [--tab|--window|--tmux] [--dry-run]`
-  `--tmux` (or the setting `launch_in tmux`) starts the session as a pane of the tmux session `maxpm`. It needs
+  `--tmux` (or the setting `launch_in tmux`) starts the session as a pane of the tmux session `river`. It needs
   no Terminal app, so it works over SSH and on Linux. The user sees every such agent side by side with
   `maxpm view` in a terminal (`--windows`: one window each; `--tidy`: close the panes of sessions that are done);
   `maxpm view --list` prints the panes for you. `maxpm serve` closes the panes of finished sessions by itself

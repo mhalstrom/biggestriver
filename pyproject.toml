@@ -22,6 +22,7 @@ Source = "https://github.com/mhalstrom/maximizepm"
 
 [project.scripts]
 maxpm = "river.cli:main"
+river = "river.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["river"]

@@ -3,7 +3,7 @@
 Run it with `maxpm mcp`. Every tool runs the same code as the `maxpm` command
 and returns the same text, so an agent reads the same briefings either way.
 The server remembers the agent name that `go`, `plan`, or `manage` gives, and
-passes it as --as on later calls that do not name one. With MAXPM_CHAT=1 (the
+passes it as --as on later calls that do not name one. With RIVER_CHAT=1 (the
 Claude desktop entry that `maxpm setup-agent --claude-desktop` writes) the
 session is a chat with no folder: go, plan, and manage brief it for that.
 Standard library only.
@@ -26,7 +26,7 @@ PROTOCOL = "2025-06-18"
 
 _AS = {"type": "string", "description": "your MaximizePM agent name (default: the one go or plan gave you)"}
 TOOLS = [
-    {"name": "maxpm",
+    {"name": "river",
      "description": "Run any maxpm command and get its text output, for example [\"go\"], "
                     "[\"done\", \"12\", \"--output\", \"what changed, commit id\"], or [\"guide\"].",
      "inputSchema": {"type": "object", "required": ["args"], "properties": {
@@ -74,9 +74,9 @@ TOOLS = [
 INSTRUCTIONS = "Call go to take work from the MaximizePM queue, and follow its briefing."
 CHAT_INSTRUCTIONS = ("MaximizePM is the user's work queue for AI agents. In this chat (no folder, no shell) you can: "
                      "plan work with the user (plan), run the coding agents (manage), go through what waits on the user "
-                     "(maxpm tool: [\"needs-you\"], then [\"prompt\", \"--all\"]), and do items that need no code, "
+                     "(river tool: [\"needs-you\"], then [\"prompt\", \"--all\"]), and do items that need no code, "
                      "such as writing or research (go; the result goes in done). Call the tool, then follow its briefing; "
-                     "for other maxpm commands use the maxpm tool with the words after `maxpm`.")
+                     "for other maxpm commands use the river tool with the words after `maxpm`.")
 
 
 # One river command at a time: a call changes the process's folder and captures its stdout, and maxpm serve
@@ -85,17 +85,17 @@ _CALL_LOCK = threading.Lock()
 
 
 class Server:
-    """chat: a session with no folder (default: MAXPM_CHAT=1); go, plan, and manage get --chat. folders: whether a
+    """chat: a session with no folder (default: RIVER_CHAT=1); go, plan, and manage get --chat. folders: whether a
     tool call may name a cwd (not over HTTP: a web chat has no folder on this computer)."""
 
     def __init__(self, chat=None, folders=True):
         # Over HTTP the session is a new chat: not the agent whose environment started maxpm serve.
-        self.agent = os.environ.get("MAXPM_AGENT") if folders else None
-        self.chat = os.environ.get("MAXPM_CHAT") == "1" if chat is None else chat
+        self.agent = os.environ.get("RIVER_AGENT") if folders else None
+        self.chat = os.environ.get("RIVER_CHAT") == "1" if chat is None else chat
         self.folders = folders
 
     def argv(self, name, a):
-        if name == "maxpm":
+        if name == "river":
             words = [str(x) for x in a.get("args") or []]
         elif name == "go":
             words = ["go"] + (["--project", a["project"]] if a.get("project") else [])
@@ -142,8 +142,8 @@ class Server:
     def _call(self, words, a):
         out, err = io.StringIO(), io.StringIO()
         old = os.getcwd()
-        # Over HTTP, river's own default name ($MAXPM_AGENT of maxpm serve) is not this chat's.
-        env_agent = os.environ.pop("MAXPM_AGENT", None) if not self.folders else None
+        # Over HTTP, river's own default name ($RIVER_AGENT of maxpm serve) is not this chat's.
+        env_agent = os.environ.pop("RIVER_AGENT", None) if not self.folders else None
         code = 0
         try:
             if a.get("cwd"):
@@ -164,7 +164,7 @@ class Server:
         finally:
             os.chdir(old)
             if env_agent is not None:
-                os.environ["MAXPM_AGENT"] = env_agent
+                os.environ["RIVER_AGENT"] = env_agent
         text = out.getvalue() + err.getvalue()
         m = re.search(r"^You are (?:MaximizePM agent|the MaximizePM MANAGER) (\S+?)(?: \(|\.)", text, re.M)
         if m:

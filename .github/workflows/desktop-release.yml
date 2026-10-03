@@ -32,7 +32,7 @@ jobs:
       - name: Install
         working-directory: desktop
         run: npm ci
-      - name: Smoke test (maxpm serve starts and stops)
+      - name: Smoke test (river serve starts and stops)
         working-directory: desktop
         run: npm test
       - name: Version from the tag
@@ -47,13 +47,13 @@ jobs:
         working-directory: desktop
         run: |
           for a in out/mac*/"MaximizePM.app"; do codesign --verify --deep --strict "$a" && echo "signature OK: $a"; done
-      - name: The app starts MaximizePM from its own bundle, with its own Python
+      - name: The app starts river from its own bundle, with its own Python
         working-directory: desktop
         run: |
-          MAXPM_DB="$RUNNER_TEMP/q.db" node -e '
+          RIVER_DB="$RUNNER_TEMP/q.db" node -e '
             const { startRiver } = require("./server");
             // find: () => null proves the app does not fall back to a Python on the runner.
-            startRiver({ riverRoot: process.argv[1], find: () => null }).then(async (r) => { console.log("MaximizePM answers on", r.url, "with", r.child.spawnargs[0]); await r.stop(); })
+            startRiver({ riverRoot: process.argv[1], find: () => null }).then(async (r) => { console.log("river answers on", r.url, "with", r.child.spawnargs[0]); await r.stop(); })
               .catch((e) => { console.error(e.message); process.exit(1); });' "$PWD/out/mac-arm64/MaximizePM.app/Contents/Resources/river-app"
       - uses: actions/upload-artifact@v4
         with:
@@ -78,7 +78,7 @@ jobs:
         with:
           name: mac
           path: dmg
-      - name: The Intel app from the .dmg is signed and starts MaximizePM with its own Python
+      - name: The Intel app from the .dmg is signed and starts river with its own Python
         working-directory: desktop
         run: |
           [ "$(uname -m)" = x86_64 ] || { echo "not an Intel runner: $(uname -m)"; exit 1; }
@@ -86,9 +86,9 @@ jobs:
           app="$RUNNER_TEMP/app/MaximizePM.app"
           codesign --verify --deep --strict "$app" && echo "signature OK"
           file "$app/Contents/MacOS/MaximizePM" "$app/Contents/Resources/river-app/python/bin/python3"
-          MAXPM_DB="$RUNNER_TEMP/q.db" node -e '
+          RIVER_DB="$RUNNER_TEMP/q.db" node -e '
             const { startRiver } = require("./server");
-            startRiver({ riverRoot: process.argv[1], find: () => null }).then(async (r) => { console.log("MaximizePM answers on", r.url, "with", r.child.spawnargs[0]); await r.stop(); })
+            startRiver({ riverRoot: process.argv[1], find: () => null }).then(async (r) => { console.log("river answers on", r.url, "with", r.child.spawnargs[0]); await r.stop(); })
               .catch((e) => { console.error(e.message); process.exit(1); });' "$app/Contents/Resources/river-app"
           hdiutil detach "$RUNNER_TEMP/app"
   windows:
@@ -109,7 +109,7 @@ jobs:
       - name: Install
         working-directory: desktop
         run: npm ci
-      - name: Smoke test (maxpm serve starts and stops)
+      - name: Smoke test (river serve starts and stops)
         working-directory: desktop
         run: npm test
       - name: Version from the tag
@@ -120,12 +120,12 @@ jobs:
       - name: Build the installer (unsigned)
         working-directory: desktop
         run: npm run dist:win
-      - name: The app starts MaximizePM from its own bundle, with its own Python
+      - name: The app starts river from its own bundle, with its own Python
         working-directory: desktop
         run: |
-          MAXPM_DB="$RUNNER_TEMP/q.db" node -e '
+          RIVER_DB="$RUNNER_TEMP/q.db" node -e '
             const { startRiver } = require("./server");
-            startRiver({ riverRoot: process.argv[1], find: () => null }).then(async (r) => { console.log("MaximizePM answers on", r.url, "with", r.child.spawnargs[0]); await r.stop(); })
+            startRiver({ riverRoot: process.argv[1], find: () => null }).then(async (r) => { console.log("river answers on", r.url, "with", r.child.spawnargs[0]); await r.stop(); })
               .catch((e) => { console.error(e.message); process.exit(1); });' "$PWD/out/win-unpacked/resources/river-app"
       - uses: actions/upload-artifact@v4
         with:

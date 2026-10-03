@@ -1,4 +1,4 @@
-// Starts `maxpm serve` for the desktop app and stops it again. Plain Node, no Electron,
+// Starts `river serve` for the desktop app and stops it again. Plain Node, no Electron,
 // so `npm test` can check it without downloading Electron.
 const { spawn, execFileSync } = require("node:child_process");
 const fs = require("node:fs");
@@ -59,11 +59,11 @@ async function startRiver({ riverRoot, python, env = process.env, timeoutMs = 20
   if (!py) throw new Error("MaximizePM needs Python 3.10 or newer. Install it (" + (process.platform === "win32"
     ? "from python.org, or: winget install Python.Python.3.13" : "for example: brew install python") + "), then open the app again.");
   const [pyCmd, ...pyArgs] = Array.isArray(py) ? py : [py];
-  const bin = path.join(riverRoot, "bin", "maxpm");
+  const bin = path.join(riverRoot, "bin", "river");
   if (!fs.existsSync(bin)) throw new Error(`MaximizePM is missing from ${riverRoot}`);
   const port = await freePort();
   const child = spawn(pyCmd, [...pyArgs, bin, "serve", "--port", String(port)],
-    { cwd: riverRoot, env: { ...env, MAXPM_DESKTOP: "1", PYTHONFAULTHANDLER: "1",
+    { cwd: riverRoot, env: { ...env, RIVER_DESKTOP: "1", PYTHONFAULTHANDLER: "1",
       // The app's own Python writes no .pyc files into the app bundle (they would break its signature).
       ...(own ? { PYTHONDONTWRITEBYTECODE: "1", PYTHONNOUSERSITE: "1" } : {}) }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   let log = "";

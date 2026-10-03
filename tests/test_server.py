@@ -21,7 +21,7 @@ class PageMessages(unittest.TestCase):
 
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
-        os.environ["MAXPM_DB"] = os.path.join(self.dir.name, "t.db")
+        os.environ["RIVER_DB"] = os.path.join(self.dir.name, "t.db")
         self.c = core.connect()
         core.project_add(self.c, "a")
         for n in ("ag", "bo"):
@@ -32,7 +32,7 @@ class PageMessages(unittest.TestCase):
 
     def tearDown(self):
         self.c.close()
-        os.environ.pop("MAXPM_DB", None)
+        os.environ.pop("RIVER_DB", None)
         self.dir.cleanup()
 
     def op(self, name, who, **args):
@@ -112,14 +112,14 @@ class PageGoals(unittest.TestCase):
 
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
-        os.environ["MAXPM_DB"] = os.path.join(self.dir.name, "t.db")
+        os.environ["RIVER_DB"] = os.path.join(self.dir.name, "t.db")
         self.c = core.connect()
         core.project_add(self.c, "a")
         core.register(self.c, "ag")
 
     def tearDown(self):
         self.c.close()
-        os.environ.pop("MAXPM_DB", None)
+        os.environ.pop("RIVER_DB", None)
         self.dir.cleanup()
 
     def op(self, _op, who, **args):
@@ -173,28 +173,28 @@ class LaunchAgent(unittest.TestCase):
     def setUp(self):
         self.platform, core.PLATFORM = core.PLATFORM, "darwin"  # the Terminal tests; Windows has its own
         self.dir = tempfile.TemporaryDirectory()
-        os.environ["MAXPM_DB"] = os.path.join(self.dir.name, "t.db")
+        os.environ["RIVER_DB"] = os.path.join(self.dir.name, "t.db")
         self.c = core.connect()
 
     def tearDown(self):
         core.PLATFORM = self.platform
         self.c.close()
-        os.environ.pop("MAXPM_DB", None)
+        os.environ.pop("RIVER_DB", None)
         self.dir.cleanup()
 
     def test_a_page_on_a_riverdb_queue_starts_agents_on_it(self):
         core.project_add(self.c, "shop", path=self.dir.name)
         core.item_add(self.c, "shop", "first")
-        sent, old = [], os.environ.get("MAXPM_DB")
-        os.environ["MAXPM_DB"] = os.path.join(self.dir.name, "q.db")
+        sent, old = [], os.environ.get("RIVER_DB")
+        os.environ["RIVER_DB"] = os.path.join(self.dir.name, "q.db")
         try:
             server.launch_agent(self.c, runner=sent.append)
         finally:
             if old is None:
-                del os.environ["MAXPM_DB"]
+                del os.environ["RIVER_DB"]
             else:
-                os.environ["MAXPM_DB"] = old
-        self.assertRegex(sent[0], r"MAXPM_DB=\S*q\.db'? MAXPM_AGENT=\S+ MAXPM_FOCUS=item:\d+ claude --name \S+ \S+ go")  # the path is quoted when it needs it
+                os.environ["RIVER_DB"] = old
+        self.assertRegex(sent[0], r"RIVER_DB=\S*q\.db'? RIVER_AGENT=\S+ RIVER_FOCUS=item:\d+ claude --name \S+ \S+ go")  # the path is quoted when it needs it
 
     def test_dispatch_starts_a_named_session_for_one_item(self):
         core.project_add(self.c, "shop", path=self.dir.name)
@@ -206,7 +206,7 @@ class LaunchAgent(unittest.TestCase):
         self.assertEqual((t["item"]["id"], core._item(self.c, x)["reserved_for"]), (x, name))
         # The session and its tab get the item's name (#558): claude --name, the Remote Control name, the title.
         self.assertEqual(t["session_title"], f"#{x} second")
-        self.assertIn(f"MAXPM_AGENT={name} MAXPM_FOCUS=item:{x} claude --name '#{x} second' go --remote-control "
+        self.assertIn(f"RIVER_AGENT={name} RIVER_FOCUS=item:{x} claude --name '#{x} second' go --remote-control "
                       f"'#{x} second'", sent[0])
         self.assertIn(f"printf '\\\\033]0;%s\\\\007' '#{x} second'; cd ", sent[0])
         b = core.go(self.c, self.dir.name, name, focus=f"item:{x}")  # its first go takes that item, not the top one
@@ -320,7 +320,7 @@ class LaunchAgent(unittest.TestCase):
         sent = []
         core.register(self.c, "mark", human=True)
         t = server.open_agent_on(self.c, h, runner=sent.append, person="mark")
-        self.assertIn(f"MAXPM_FOCUS=help:{h}@mark claude --name 'help #{h} sign the contract' go", sent[-1])
+        self.assertIn(f"RIVER_FOCUS=help:{h}@mark claude --name 'help #{h} sign the contract' go", sent[-1])
         self.assertEqual(t["session_title"], f"help #{h} sign the contract")  # the tab title too (#562)
         b = core.go(self.c, self.dir.name, None, focus=t["focus"])
         self.assertEqual((b["role"], b["item"]), ("helper", None))
@@ -330,11 +330,11 @@ class LaunchAgent(unittest.TestCase):
             cli.render_go(b)
         self.assertIn(f"Item #{h}: sign the contract", out.getvalue())
         t = server.open_needs_you(self.c, runner=sent.append, person="mark")
-        self.assertIn("MAXPM_FOCUS=needs:@mark claude --name 'needs you' go", sent[-1])
+        self.assertIn("RIVER_FOCUS=needs:@mark claude --name 'needs you' go", sent[-1])
         b = core.go(self.c, self.dir.name, None, focus=t["focus"])
         self.assertEqual(b["help_prompt"], core.prompt_for_all(self.c, "mark"))
         t = server.open_agent_on(self.c, waits, runner=sent.append)
-        self.assertIn(f"MAXPM_FOCUS=unblock:{waits}", sent[-1])
+        self.assertIn(f"RIVER_FOCUS=unblock:{waits}", sent[-1])
         b = core.go(self.c, self.dir.name, None, focus=t["focus"])
         self.assertEqual((b["role"], b["item"]["id"]), ("unblocker", blocker))
         with self.assertRaises(RiverError):
@@ -349,7 +349,7 @@ class LaunchAgent(unittest.TestCase):
         core.done(self.c, x, "commit", "dev", ship_it=True)
         sent = []
         r = server.deploy_now(self.c, "web", runner=sent.append)
-        self.assertIn("MAXPM_FOCUS=deploy:web claude --name 'deploy web' go --remote-control 'deploy web'", sent[-1])
+        self.assertIn("RIVER_FOCUS=deploy:web claude --name 'deploy web' go --remote-control 'deploy web'", sent[-1])
         b = core.go(self.c, self.dir.name, None, focus=r["focus"])
         self.assertEqual((b["role"], b["item"]["id"]), ("deployer", r["deploy"]["id"]))
 
@@ -360,7 +360,7 @@ class LaunchAgent(unittest.TestCase):
         core.claim(self.c, x, "mark")
         sent = []
         t = server.open_agent_on(self.c, x, runner=sent.append, person="mark")
-        self.assertIn(f"MAXPM_FOCUS=help:{x}@mark claude --name 'help #{x} write the copy' go", sent[-1])
+        self.assertIn(f"RIVER_FOCUS=help:{x}@mark claude --name 'help #{x} write the copy' go", sent[-1])
         b = core.go(self.c, self.dir.name, None, focus=t["focus"])
         self.assertEqual(b["role"], "helper")
         self.assertIn("mark took it to do themselves", b["help_prompt"])
@@ -373,12 +373,12 @@ class LaunchAgent(unittest.TestCase):
         sent = []
         t = server.launch_agent(self.c, runner=sent.append, model="opus", effort="high", launch_in="window")
         self.assertEqual(t["command"], f"claude --name '#{x} work' --model opus --effort high go --remote-control '#{x} work'")
-        self.assertIn(f"MAXPM_MODEL=opus claude --name '#{x} work' --model opus --effort high go", sent[-1])
+        self.assertIn(f"RIVER_MODEL=opus claude --name '#{x} work' --model opus --effort high go", sent[-1])
         self.assertNotIn("keystroke", sent[-1])  # launch_in window, although the setting says tab
         x = core.item_add(self.c, "shop", "more work", models={"min_model": "opus"})["id"]  # Start reserved the first
         t = server.launch_agent(self.c, runner=sent.append)
         self.assertEqual(t["command"], f"claude --name '#{x} more work' go --remote-control '#{x} more work'")  # no choice: the flags drop out
-        self.assertNotIn("MAXPM_MODEL", sent[-1])
+        self.assertNotIn("RIVER_MODEL", sent[-1])
         x = core.item_add(self.c, "shop", "third", models={"min_model": "opus"})["id"]
         with self.assertRaisesRegex(RiverError, "needs at least opus"):
             server.dispatch_item(self.c, x, runner=sent.append, model="sonnet")
@@ -394,8 +394,8 @@ class LaunchAgent(unittest.TestCase):
         core.unregister(self.c, "w")
         core.PLATFORM = "win32"  # tearDown restores it
         t = server.dispatch_item(self.c, x, runner=sent.append, model="fable")
-        self.assertEqual(sent[-1]["env"]["MAXPM_MODEL"], "fable")
-        b = core.go(self.c, self.dir.name, t["session_name"], model=sent[-1]["env"]["MAXPM_MODEL"])
+        self.assertEqual(sent[-1]["env"]["RIVER_MODEL"], "fable")
+        b = core.go(self.c, self.dir.name, t["session_name"], model=sent[-1]["env"]["RIVER_MODEL"])
         self.assertEqual((b["item"]["id"], core.agent_model(self.c, t["session_name"])), (x, "fable"))
 
     def test_a_deploy_opens_a_monitor_session(self):
@@ -415,7 +415,7 @@ class LaunchAgent(unittest.TestCase):
         sent = []
         (r,) = server.open_monitors(self.c, runner=sent.append, db=str(core.db_path()))
         self.assertEqual((r["id"], r["project"], r["model"]), (m["id"], "site", "sonnet"))
-        self.assertRegex(sent[-1], rf"MAXPM_FOCUS=monitor:{m['id']} MAXPM_MODEL=sonnet claude --name 'monitor #{m['id']} [^']+' "
+        self.assertRegex(sent[-1], rf"RIVER_FOCUS=monitor:{m['id']} RIVER_MODEL=sonnet claude --name 'monitor #{m['id']} [^']+' "
                                    rf"--model sonnet --effort low go")
         self.assertEqual(server.open_monitors(self.c, runner=sent.append), [])  # opened once
         self.assertEqual(len(sent), 1)
@@ -430,7 +430,7 @@ class LaunchAgent(unittest.TestCase):
                                side_effect=urllib.error.URLError(ConnectionRefusedError(61, "Connection refused"))):
             got = cli.ask_server_for_monitors(self.c, timeout=1)
         self.assertIn("no maxpm serve answers on port 1", got["error"])
-        self.assertIn(f"MAXPM_FOCUS=monitor:{m['id']} claude go", cli._monitor_lines(got)[0])
+        self.assertIn(f"RIVER_FOCUS=monitor:{m['id']} claude go", cli._monitor_lines(got)[0])
 
     def test_start_spreads_sessions_across_projects(self):
         os.makedirs(os.path.join(self.dir.name, "b"))
@@ -478,14 +478,14 @@ class LaunchAgent(unittest.TestCase):
             return out.getvalue()
         out = river("launch", "--dry-run", "--model", "opus", "--effort", "high", "--window")
         self.assertRegex(out, rf"would start Claude Code in shop \(\S+\) for #{x} work")
-        self.assertIn(f"MAXPM_MODEL=opus claude --name '#{x} work' --model opus --effort high go --remote-control "
+        self.assertIn(f"RIVER_MODEL=opus claude --name '#{x} work' --model opus --effort high go --remote-control "
                       f"'#{x} work'   (in a new window)", out)
         self.assertEqual(sent, [])
         with self.assertRaisesRegex(RiverError, "needs at least opus"):
             cli.dispatch(self.c, cli.build_parser().parse_args(["launch", "--model", "sonnet"]), "mark")
         out = river("launch", "--item", str(y), "--model", "sonnet")
         self.assertRegex(out, rf"started Claude Code as shop-\w+ in shop for #{y} more")
-        self.assertIn(f"MAXPM_MODEL=sonnet claude --name '#{y} more' --model sonnet go", sent[-1])
+        self.assertIn(f"RIVER_MODEL=sonnet claude --name '#{y} more' --model sonnet go", sent[-1])
         out = river("launch", "--project", "shop", "--tab")
         self.assertIn(f"for #{x} work", out)
         self.assertIn('keystroke "t"', sent[-1])
@@ -540,7 +540,7 @@ class LaunchAgent(unittest.TestCase):
         out = river("launch", "--item", str(y), "--model", "sonnet", "--window")
         self.assertRegex(out, rf"started Claude Code as shop-\w+ in shop for #{y} more")
         self.assertIn("maxpm serve opened it: this session runs in a sandbox", out)
-        self.assertIn(f"MAXPM_MODEL=sonnet claude --name '#{y} more' --model sonnet go", sent[-1])
+        self.assertIn(f"RIVER_MODEL=sonnet claude --name '#{y} more' --model sonnet go", sent[-1])
         self.assertNotIn("keystroke", sent[-1])  # --window went to the server
         self.assertEqual(asked, [("127.0.0.1:8765", None),
                                  ("localhost:50401", "Basic " + base64.b64encode(b"us@er:pw").decode())])
@@ -575,8 +575,8 @@ class LaunchAgent(unittest.TestCase):
         self.assertIsNone(core.state(self.c)["manager"])
         sent = []
         t = server.start_manager(self.c, runner=sent.append, model="opus")
-        self.assertEqual(t["command"], "claude --name 'maxpm manager' --model opus manage --remote-control 'maxpm manager'")
-        self.assertIn(f"MAXPM_AGENT={t['session_name']} MAXPM_MODEL=opus claude --name 'maxpm manager' --model opus manage", sent[-1])
+        self.assertEqual(t["command"], "claude --name 'river manager' --model opus manage --remote-control 'river manager'")
+        self.assertIn(f"RIVER_AGENT={t['session_name']} RIVER_MODEL=opus claude --name 'river manager' --model opus manage", sent[-1])
         with self.assertRaisesRegex(RiverError, "is the active manager"):
             server.start_manager(self.c, runner=sent.append)
         self.assertEqual(server.manage_command('codex "run maxpm go in this folder"'), 'codex "run maxpm manage in this folder"')
@@ -638,8 +638,8 @@ class LaunchAgent(unittest.TestCase):
         # cmd reads double quotes, not the single quotes of a POSIX shell.
         self.assertEqual(t["command"], f'claude --name "#{x} work" go --remote-control "#{x} work"')
         self.assertEqual(sent[0], {"args": f"cmd /k title #{x} work & {t['command']}", "cwd": t["path"],
-                                   "env": {"MAXPM_DB": str(core.db_path()), "MAXPM_AGENT": t["session_name"],
-                                           "MAXPM_FOCUS": f"item:{x}"}})
+                                   "env": {"RIVER_DB": str(core.db_path()), "RIVER_AGENT": t["session_name"],
+                                           "RIVER_FOCUS": f"item:{x}"}})
         core.PLATFORM = "linux"
         core.item_add(self.c, "shop", "more work")
         with self.assertRaisesRegex(RiverError, "macOS and Windows"):
@@ -740,8 +740,8 @@ class FakeTmux:
         if cmd == "split-window":
             return None if self.full else self._pane(window=opt("-t"))
         if cmd == "set-option" and "-p" in a:
-            pane[{"@maxpm_name": "name", "@maxpm_agent": "agent"}[a[-2]]] = a[-1]
-        elif cmd == "set-option" and "-w" in a and "@maxpm_tile" in a:
+            pane[{"@river_name": "name", "@river_agent": "agent"}[a[-2]]] = a[-1]
+        elif cmd == "set-option" and "-w" in a and "@river_tile" in a:
             self.windows[opt("-t")]["tile"] = "" if "-u" in a else "1"
         elif cmd == "send-keys":
             pane["keys"].append(a[-1])
@@ -773,12 +773,12 @@ class FakeTmux:
 
 
 class LaunchInTmux(unittest.TestCase):
-    """launch_in tmux: each agent is a pane of the tmux session maxpm, and maxpm view shows them side by side."""
+    """launch_in tmux: each agent is a pane of the tmux session river, and maxpm view shows them side by side."""
 
     def setUp(self):
         self.platform, core.PLATFORM = core.PLATFORM, "linux"  # no Terminal app: tmux needs none
         self.dir = tempfile.TemporaryDirectory()
-        os.environ["MAXPM_DB"] = os.path.join(self.dir.name, "t.db")
+        os.environ["RIVER_DB"] = os.path.join(self.dir.name, "t.db")
         self.c = core.connect()
         core.project_add(self.c, "shop", path=self.dir.name)
         self.tmux = server.TMUX_RUNNER = FakeTmux()
@@ -791,10 +791,10 @@ class LaunchInTmux(unittest.TestCase):
         server.TIDY.update(at=None, screens={})
         server.BUSY.clear()
         self.c.close()
-        os.environ.pop("MAXPM_DB", None)
+        os.environ.pop("RIVER_DB", None)
         self.dir.cleanup()
 
-    def test_each_agent_starts_in_a_pane_of_the_maxpm_session(self):
+    def test_each_agent_starts_in_a_pane_of_the_river_session(self):
         x = core.item_add(self.c, "shop", "first: the work")["id"]
         y = core.item_add(self.c, "shop", "second")["id"]
         with self.assertRaisesRegex(RiverError, "works on macOS and Windows only"):
@@ -806,16 +806,16 @@ class LaunchInTmux(unittest.TestCase):
         first = self.tmux.panes[0]
         self.assertEqual((t["launch_in"], t["tmux_pane"]), ("tmux", "%0"))
         # The first agent makes the session; its window and its pane carry the session's name and the agent's.
-        self.assertEqual(self.tmux.calls[1][:6], ["new-session", "-d", "-s", "maxpm", "-n", f"#{x} first: the work"])
+        self.assertEqual(self.tmux.calls[1][:6], ["new-session", "-d", "-s", "river", "-n", f"#{x} first: the work"])
         self.assertEqual((first["name"], first["agent"]), (f"#{x} first: the work", t["session_name"]))
         # river types the command line into the pane's shell: the folder, the session's variables, the command.
         self.assertEqual(first["keys"][1], "Enter")
-        self.assertIn(f"MAXPM_AGENT={t['session_name']} MAXPM_FOCUS=item:{x} {t['command']}", first["keys"][0])
+        self.assertIn(f"RIVER_AGENT={t['session_name']} RIVER_FOCUS=item:{x} {t['command']}", first["keys"][0])
         self.assertTrue(first["keys"][0].startswith("cd "))
         # The next agent is a window of the same session, opened in the background (-d): no window takes the keyboard.
         t = server.dispatch_item(self.c, y, launch_in="tmux")
         self.assertEqual([c for c in self.tmux.calls if c[0] == "new-window"][0][:6],
-                         ["new-window", "-d", "-t", "=maxpm:", "-n", f"#{y} second"])
+                         ["new-window", "-d", "-t", "=river:", "-n", f"#{y} second"])
         self.assertEqual(self.tmux.panes[1]["window"], "@1")
         # A session for another purpose has no river name yet: its pane has the purpose only.
         core.register(self.c, "mark", human=True)
@@ -827,7 +827,7 @@ class LaunchInTmux(unittest.TestCase):
         with self.assertRaisesRegex(RiverError, "works on macOS and Windows only"):
             server.launch_agent(self.c, launch_in="tab")
 
-    def test_maxpm_view_puts_the_agents_side_by_side_and_back(self):
+    def test_river_view_puts_the_agents_side_by_side_and_back(self):
         core.config_set(self.c, "launch_in", "tmux")
         with self.assertRaisesRegex(RiverError, "no agent runs in tmux"):
             server.tmux_view("tile")
@@ -841,12 +841,12 @@ class LaunchInTmux(unittest.TestCase):
         v = server.tmux_view("tile")
         self.assertEqual({p["window"] for p in v["panes"]}, {"@0"})
         self.assertEqual((self.tmux.windows["@0"], v["left"]), ({"name": "agents", "tile": "1"}, []))
-        self.assertIn(["set-option", "-w", "-t", "@0", "pane-border-format", " #{@maxpm_name} "], self.tmux.calls)
+        self.assertIn(["set-option", "-w", "-t", "@0", "pane-border-format", " #{@river_name} "], self.tmux.calls)
         self.assertIn(["select-window", "-t", "@0"], self.tmux.calls[-3:])
-        self.assertEqual(v["show"][1:4], ["attach-session", "-t", "=maxpm"])
+        self.assertEqual(v["show"][1:4], ["attach-session", "-t", "=river"])
         self.assertIn("Ctrl-b then: an arrow", v["show"][-1])
         with mock.patch.dict(os.environ, {"TMUX": "/tmp/tmux-501/default,1,0"}):  # run from a tmux pane: no attach inside tmux
-            self.assertEqual(server.tmux_view(None)["show"][1:4], ["switch-client", "-t", "=maxpm"])
+            self.assertEqual(server.tmux_view(None)["show"][1:4], ["switch-client", "-t", "=river"])
         # While the agents are side by side, a new agent joins them; with no space left it gets its own window.
         core.item_add(self.c, "shop", "work 3")
         server.launch_agent(self.c)
@@ -1131,10 +1131,10 @@ class LaunchInTmux(unittest.TestCase):
     def test_an_agent_session_keeps_its_own_variables_out_of_the_panes(self):
         old = dict(os.environ)
         self.addCleanup(lambda: (os.environ.clear(), os.environ.update(old)))
-        os.environ.update({"MAXPM_AGENT": "manager-1", "MAXPM_FOCUS": "item:1", "CLAUDECODE": "1",
+        os.environ.update({"RIVER_AGENT": "manager-1", "RIVER_FOCUS": "item:1", "CLAUDECODE": "1",
                            "CLAUDE_CODE_SESSION_ID": "s", "CODEX_THREAD_ID": "t", "CLAUDE_CONFIG_DIR": "/c", "CODEX_HOME": "/h"})
         env = server._tmux_env()
-        self.assertEqual({k for k in env if k.startswith(("MAXPM_", "CLAUDE", "CODEX_"))}, {"CLAUDE_CONFIG_DIR", "CODEX_HOME"})
+        self.assertEqual({k for k in env if k.startswith(("RIVER_", "CLAUDE", "CODEX_"))}, {"CLAUDE_CONFIG_DIR", "CODEX_HOME"})
         self.assertEqual(env["PATH"], os.environ["PATH"])
 
     def test_the_page_shows_an_agents_terminal_and_types_into_it(self):
@@ -1356,7 +1356,7 @@ class LaunchInTmux(unittest.TestCase):
         self.assertEqual((list(r["started"]), r["ended"]), ([second], {name: "idle at its prompt; fresh sessions took its work"}))
         self.assertEqual((sent(pane), pane in self.tmux.panes, name in agents()), ([], False, False))
         new = self.tmux.panes[-1]
-        self.assertIn(f"MAXPM_AGENT={fresh} MAXPM_FOCUS=item:{second} ", new["keys"][0])
+        self.assertIn(f"RIVER_AGENT={fresh} RIVER_FOCUS=item:{second} ", new["keys"][0])
         self.assertIn("--model opus --effort high", new["keys"][0])  # the item's model and effort
         self.assertEqual(core.item_show(self.c, second)["reserved_for"], fresh)
         # A working screen, and a prompt that a person answers, are not idle; a shell is not the agent CLI.
@@ -1465,13 +1465,13 @@ class LaunchInTmux(unittest.TestCase):
         self.addCleanup(setattr, server, "TMUX_CMD", cmd)
         try:
             server._open_terminal({"project": "shop", "path": self.dir.name, "session_title": "#1 first: a | b",
-                                   "command": "sleep 60", "launch_in": "tmux"}, {"MAXPM_AGENT": "shop-aaaa"})
+                                   "command": "sleep 60", "launch_in": "tmux"}, {"RIVER_AGENT": "shop-aaaa"})
         except RiverError as e:
             self.skipTest(f"tmux cannot run here: {e}")  # a sandbox blocks its socket
         self.addCleanup(server._tmux, "kill-server", check=False)
         for name, command in (("#2 second", "sleep 60"), ("needs you", "true")):
             server._open_terminal({"project": "shop", "path": self.dir.name, "session_title": name, "command": command,
-                                   "launch_in": "tmux"}, {"MAXPM_FOCUS": "needs:"})
+                                   "launch_in": "tmux"}, {"RIVER_FOCUS": "needs:"})
 
         def panes(want):
             for _ in range(100):
@@ -1497,7 +1497,7 @@ class LaunchInTmux(unittest.TestCase):
         self.assertEqual(([c["name"] for c in v["closed"]], len(v["panes"]), len({p["window"] for p in v["panes"]})),
                          (["needs you"], 3, 3))
         self.assertEqual({p["tile"] for p in v["panes"]}, {False})
-        names = server._tmux("list-windows", "-t", "=maxpm", "-F", "#{window_name}").splitlines()
+        names = server._tmux("list-windows", "-t", "=river", "-F", "#{window_name}").splitlines()
         self.assertEqual(sorted(names), ["#1 first: a | b", "#2 second", "#4 fourth"])
         # The page's terminal: read a pane and type into it (a shell here, never an agent).
         core.register(self.c, "shop-aaaa")
@@ -1515,12 +1515,12 @@ class LaunchInTmux(unittest.TestCase):
         # a fresh session for the work (a script stands for the agent CLI).
         from unittest import mock
         fake = Path(self.dir.name, "fake-agent")
-        fake.write_text('#!/bin/sh\necho "fake agent: $MAXPM_AGENT $MAXPM_FOCUS"\nexec sleep 60\n')
+        fake.write_text('#!/bin/sh\necho "fake agent: $RIVER_AGENT $RIVER_FOCUS"\nexec sleep 60\n')
         fake.chmod(0o755)
         core.config_set(self.c, "launch_agents", f"Fake={fake}")
         core.config_set(self.c, "launch_in", "tmux")
         server._open_terminal({"project": "shop", "path": self.dir.name, "session_title": "#6 sixth", "command": str(fake),
-                               "launch_in": "tmux"}, {"MAXPM_AGENT": "shop-cccc"})
+                               "launch_in": "tmux"}, {"RIVER_AGENT": "shop-cccc"})
         sixth = panes(lambda p: p["name"] != "#6 sixth" or p["running"] == "sleep")["#6 sixth"]["pane"]
         core.register(self.c, "shop-cccc")
         core.register(self.c, "mark", human=True)
@@ -1545,12 +1545,12 @@ class LaunchInTmux(unittest.TestCase):
         # A session that left the queue while its command still runs is done; not while its pane shows a prompt.
         # One tmux command reads the panes that may be done, and gives nothing when one of them closed meanwhile.
         server._open_terminal({"project": "shop", "path": self.dir.name, "session_title": "#5 fifth", "command": "sleep 60",
-                               "launch_in": "tmux"}, {"MAXPM_AGENT": "shop-bbbb"})
+                               "launch_in": "tmux"}, {"RIVER_AGENT": "shop-bbbb"})
         fifth = panes(lambda p: p["name"] != "#5 fifth" or p["running"] == "sleep")["#5 fifth"]["pane"]
         other = got["#2 second"]["pane"]
         texts = server._pane_texts([fifth, other])
         flat = {pane: text.replace("\n", "") for pane, text in texts.items()}  # a long command line wraps
-        self.assertEqual((set(flat), "MAXPM_AGENT=shop-bbbb sleep 60" in flat[fifth], "MAXPM_FOCUS=needs: sleep 60" in flat[other]),
+        self.assertEqual((set(flat), "RIVER_AGENT=shop-bbbb sleep 60" in flat[fifth], "RIVER_FOCUS=needs: sleep 60" in flat[other]),
                          ({fifth, other}, True, True))
         self.assertEqual(server._pane_texts([fifth, "%999"]), {})
         self.assertEqual([(p["name"], p["why"]) for p in server.tmux_done(self.c)],
@@ -1565,7 +1565,7 @@ class LaunchInTmux(unittest.TestCase):
         self.assertEqual(sorted(p["name"] for p in server.tmux_view(None, conn=self.c)["panes"]), ["#2 second", "#4 fourth", "#5 fifth"])
         # maxpm serve tidies by itself: a shell closes at once, an open CLI after the same screen for idle_after, a prompt never.
         server._open_terminal({"project": "shop", "path": self.dir.name, "session_title": "#8 eighth", "command": "sleep 60",
-                               "launch_in": "tmux"}, {"MAXPM_AGENT": "shop-dddd"})
+                               "launch_in": "tmux"}, {"RIVER_AGENT": "shop-dddd"})
         panes(lambda p: p["name"] != "#8 eighth" or p["running"] == "sleep")
         server._tmux("send-keys", "-t", other, "C-c")
         panes(lambda p: p["name"] != "#2 second" or p["ended"])
@@ -1606,7 +1606,7 @@ if __name__ == "__main__":
 class SetupGuide(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
-        os.environ["MAXPM_DB"] = os.path.join(self.dir.name, "t.db")
+        os.environ["RIVER_DB"] = os.path.join(self.dir.name, "t.db")
         self.c = core.connect()
         self.folder = os.path.join(self.dir.name, "shop")
         os.mkdir(self.folder)
@@ -1614,7 +1614,7 @@ class SetupGuide(unittest.TestCase):
 
     def tearDown(self):
         self.c.close()
-        os.environ.pop("MAXPM_DB", None)
+        os.environ.pop("RIVER_DB", None)
         self.dir.cleanup()
 
     def test_block_fix_writes_both_files_and_status_follows(self):
@@ -1659,44 +1659,44 @@ class SetupGuide(unittest.TestCase):
             server.folder_add(self.c, other, name="shop")
         self.assertEqual(core._project(self.c, "shop")["path"], os.path.realpath(self.folder))
 
-    @unittest.skipIf(os.name == "nt", "the maxpm command installer is for macOS and Linux shells")
-    def test_install_the_maxpm_command_writes_the_launcher_and_the_path_once(self):
+    @unittest.skipIf(os.name == "nt", "the river command installer is for macOS and Linux shells")
+    def test_install_the_river_command_writes_the_launcher_and_the_path_once(self):
         home = os.path.join(self.dir.name, "home")
         os.mkdir(home)
         found = {"path": None}
-        old = (os.environ.get("HOME"), os.environ.get("SHELL"), server._login_shell_maxpm, core.PLATFORM)
+        old = (os.environ.get("HOME"), os.environ.get("SHELL"), server._login_shell_river, core.PLATFORM)
         os.environ["HOME"], os.environ["SHELL"], core.PLATFORM = home, "/bin/zsh", "darwin"
-        server._login_shell_maxpm = lambda: found["path"]
+        server._login_shell_river = lambda: found["path"]
         try:
-            self.assertFalse(server.command_status()["ok"])
-            r = server.install_command()
-            launcher = os.path.join(home, ".local", "bin", "maxpm")
+            self.assertFalse(server.river_command_status()["ok"])
+            r = server.install_river_command()
+            launcher = os.path.join(home, ".local", "bin", "river")
             self.assertTrue(os.access(launcher, os.X_OK))
             self.assertIn(server.LAUNCHER_MARK, open(launcher).read())
             prof = open(os.path.join(home, ".zprofile")).read()
             self.assertIn('$HOME/.local/bin', prof)
-            self.assertEqual(len(r["changed"]), 2)
-            self.assertEqual(os.listdir(os.path.join(home, ".local", "bin")), ["maxpm"])  # one command, no other name
-            self.assertNotRegex(open(launcher).read().replace("river-app", ""), r"(?<![/\w])river(?![/\w])")
+            self.assertEqual(len(r["changed"]), 3)
+            # maxpm is the same command under the product's name
+            self.assertEqual(open(os.path.join(home, ".local", "bin", "maxpm")).read(), open(launcher).read())
             found["path"] = launcher  # a new terminal now finds it
-            self.assertTrue(server.command_status()["ok"])
-            server.install_command()  # again: the profile line is not added twice
+            self.assertTrue(server.river_command_status()["ok"])
+            server.install_river_command()  # again: the profile line is not added twice
             self.assertEqual(open(os.path.join(home, ".zprofile")).read(), prof)
-            # a maxpm command the person installed (a clone, pip) is left alone
-            found["path"] = "/opt/elsewhere/maxpm"
-            self.assertTrue(server.command_status()["ok"])
-            self.assertIn("already installed", server.install_command()["note"])
-            # a launcher of an older copy is the guide's own, and the guide rewrites it
+            # a river command the person installed (a clone, pip) is left alone
+            found["path"] = "/opt/elsewhere/river"
+            self.assertTrue(server.river_command_status()["ok"])
+            self.assertIn("already installed", server.install_river_command()["note"])
+            # a launcher written under the product's first name is river's own, and the guide rewrites it
             with open(launcher, "w") as f:
-                f.write("#!/bin/sh\n# MaximizePM launcher: runs an older copy ...\n")
-            self.assertEqual(server.command_status()["launcher"], "old")
+                f.write("#!/bin/sh\n# Biggest River launcher: runs the river ...\n")
+            self.assertEqual(server.river_command_status()["launcher"], "old")
         finally:
             for k, v in (("HOME", old[0]), ("SHELL", old[1])):
                 if v is None:
                     os.environ.pop(k, None)
                 else:
                     os.environ[k] = v
-            server._login_shell_maxpm, core.PLATFORM = old[2], old[3]
+            server._login_shell_river, core.PLATFORM = old[2], old[3]
 
     def test_block_fix_refuses_a_folder_that_is_not_a_project(self):
         with self.assertRaises(RiverError):
@@ -1740,7 +1740,7 @@ class LaunchProfiles(unittest.TestCase):
 
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
-        os.environ["MAXPM_DB"] = os.path.join(self.dir.name, "t.db")
+        os.environ["RIVER_DB"] = os.path.join(self.dir.name, "t.db")
         self.c = core.connect()
         self.platform = core.PLATFORM
         core.PLATFORM = "darwin"
@@ -1749,7 +1749,7 @@ class LaunchProfiles(unittest.TestCase):
     def tearDown(self):
         core.PLATFORM = self.platform
         self.c.close()
-        os.environ.pop("MAXPM_DB", None)
+        os.environ.pop("RIVER_DB", None)
         self.dir.cleanup()
 
     def test_each_option_set_builds_the_real_flags(self):
@@ -1843,7 +1843,7 @@ class LaunchProfiles(unittest.TestCase):
         self.assertEqual(core.annotate(c)[plain]["agent"], "claude-code")
         # A session's type comes from its environment, else its model's family.
         self.assertEqual([core.agent_type_from_env(e) for e in (
-            {"CODEX_THREAD_ID": "x", "CLAUDECODE": "1"}, {"CLAUDECODE": "1"}, {"MAXPM_AGENT_TYPE": "codex", "CLAUDECODE": "1"}, {})],
+            {"CODEX_THREAD_ID": "x", "CLAUDECODE": "1"}, {"CLAUDECODE": "1"}, {"RIVER_AGENT_TYPE": "codex", "CLAUDECODE": "1"}, {})],
             ["codex", "claude-code", "codex", None])
         core.register(c, "cl")
         core.set_agent_type(c, "cl", "claude-code")
@@ -1884,7 +1884,7 @@ class LaunchProfiles(unittest.TestCase):
         t = core._launch_agent_cmd(self.c, pid, "Codex", "astra", "high")
         self.assertEqual(t["command"], f"codex -m gpt-6-astra -c model_reasoning_effort=high --add-dir {rd} "
                                        "'run maxpm go in this folder and follow the briefing'")
-        self.assertEqual((t["model"], t["model_id"], t["env"]), ("astra", "gpt-6-astra", {"MAXPM_MODEL": "astra"}))
+        self.assertEqual((t["model"], t["model_id"], t["env"]), ("astra", "gpt-6-astra", {"RIVER_MODEL": "astra"}))
         self.assertEqual(core._launch_agent_cmd(self.c, pid, "Mine", "terra")["command"], "codex -m gpt-5.6-terra go")
         # Claude Code takes the ladder names as they are.
         self.assertEqual(core._launch_agent_cmd(self.c, pid, "Claude Code", "fable", "max")["command"],
@@ -1921,13 +1921,13 @@ class LaunchProfiles(unittest.TestCase):
         self.addCleanup(setattr, server, "TERMINAL_RUNNER", None)
         t = server.OPS["dispatch_item"](self.c, {"id": x, "model": "opus", "options": {"remote_control": "off"}}, "mark")
         self.assertEqual(t["command"], f"claude --name '#{x} work' --model opus go")
-        self.assertIn(f"MAXPM_AGENT={t['session_name']} MAXPM_FOCUS=item:{x} MAXPM_MODEL=opus {t['command']}\"", sent[-1])
+        self.assertIn(f"RIVER_AGENT={t['session_name']} RIVER_FOCUS=item:{x} RIVER_MODEL=opus {t['command']}\"", sent[-1])
         y = core.item_add(self.c, "shop", "more")["id"]
         t = server.dispatch_item(self.c, y, runner=sent.append, options={"permission_mode": "acceptEdits"})
         self.assertIn(f"claude --name '#{y} more' --permission-mode acceptEdits go --remote-control '#{y} more'", sent[-1])
         # A manager: manage in place of go, the options still apply.
         t = server.start_manager(self.c, runner=sent.append, options={"remote_control": "off"})
-        self.assertEqual(t["command"], "claude --name 'maxpm manager' manage")
+        self.assertEqual(t["command"], "claude --name 'river manager' manage")
         # Open chat says why a session has no web link.
         core.register(self.c, "w1")
         core.config_set(self.c, "claude_remote_control", "off")
@@ -1997,7 +1997,7 @@ class LaunchProfiles(unittest.TestCase):
 class StartPushesToWaiting(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
-        os.environ["MAXPM_DB"] = os.path.join(self.dir.name, "t.db")
+        os.environ["RIVER_DB"] = os.path.join(self.dir.name, "t.db")
         self.c = core.connect()
         core.project_add(self.c, "shop", path=self.dir.name)
         core.project_add(self.c, "other", path=self.dir.name + "/x")
@@ -2005,7 +2005,7 @@ class StartPushesToWaiting(unittest.TestCase):
 
     def tearDown(self):
         self.c.close()
-        os.environ.pop("MAXPM_DB", None)
+        os.environ.pop("RIVER_DB", None)
         self.dir.cleanup()
 
     def test_waiting_session_gets_the_item_and_no_terminal_opens(self):
@@ -2027,13 +2027,13 @@ class ServeReload(unittest.TestCase):
 
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
-        os.environ["MAXPM_DB"] = os.path.join(self.dir.name, "t.db")
+        os.environ["RIVER_DB"] = os.path.join(self.dir.name, "t.db")
         self.c = core.connect()
         self.addCleanup(server.RELOAD.update, {"seen": None, "bad": None})
 
     def tearDown(self):
         self.c.close()
-        os.environ.pop("MAXPM_DB", None)
+        os.environ.pop("RIVER_DB", None)
         self.dir.cleanup()
 
     def test_serve_starts_again_for_code_that_stayed_is_committed_and_loads(self):
@@ -2275,9 +2275,9 @@ class StaticFiles(unittest.TestCase):
 
 
 def _chrome():
-    """A Chrome (or Chromium, or Edge) on this computer, or None. MAXPM_CHROME names one."""
+    """A Chrome (or Chromium, or Edge) on this computer, or None. RIVER_CHROME names one."""
     import shutil
-    for c in (os.environ.get("MAXPM_CHROME"), "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    for c in (os.environ.get("RIVER_CHROME"), "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
               "/Applications/Chromium.app/Contents/MacOS/Chromium",
               "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
               *(shutil.which(n) for n in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"))):
@@ -2329,7 +2329,7 @@ try {
             self.assertIn(field, app)
         self.assertRegex(form, r'document\.addEventListener\("keydown"')
 
-    @unittest.skipUnless(_chrome(), "no Chrome on this computer (MAXPM_CHROME names one)")
+    @unittest.skipUnless(_chrome(), "no Chrome on this computer (RIVER_CHROME names one)")
     def test_each_step_works_with_the_enter_key_in_a_browser(self):
         import threading
         got, result = threading.Event(), {}
@@ -2355,8 +2355,8 @@ try {
                         return self._send(204, b"")
                     return super().do_POST()
 
-            os.environ["MAXPM_DB"] = os.path.join(d, "q.db")
-            self.addCleanup(os.environ.pop, "MAXPM_DB", None)
+            os.environ["RIVER_DB"] = os.path.join(d, "q.db")
+            self.addCleanup(os.environ.pop, "RIVER_DB", None)
             try:
                 httpd = server._Server(("127.0.0.1", 0), H)
             except PermissionError:
@@ -2434,7 +2434,7 @@ try {
         js = (server.STATIC / "components" / "terminalDialog.js").read_text()
         self.assertNotRegex(js, r"style\.(width|height|fontSize)|resize-pane|resize-window")
 
-    @unittest.skipUnless(_chrome(), "no Chrome on this computer (MAXPM_CHROME names one)")
+    @unittest.skipUnless(_chrome(), "no Chrome on this computer (RIVER_CHROME names one)")
     def test_the_dialog_keeps_its_size_for_each_pane_size(self):
         import subprocess
         import threading

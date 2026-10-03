@@ -1,6 +1,6 @@
 ---
-name: maxpm
-description: Take, do, and hand back work items from the MaximizePM queue (the `maxpm` command). Use when the user says "go" in a project that uses MaximizePM, tells you to work from the queue, or when you finish, release, or find new work.
+name: river
+description: Take, do, and hand back work items from the MaximizePM queue (the `maxpm` command; `river` is the same command). Use when the user says "go" in a project that uses MaximizePM, tells you to work from the queue, or when you finish, release, or find new work.
 ---
 
 # MaximizePM: working from the queue
@@ -36,13 +36,13 @@ Register once, then name yourself on every command:
 
 ```
 maxpm register <session-name> --note "what you are working on"
-export MAXPM_AGENT=<session-name>        # or pass --as <session-name>
+export RIVER_AGENT=<session-name>        # or pass --as <session-name>
 ```
 
 A person registers with `--human`.
 
 Declare the model your session runs, once: `maxpm --as <you> go --model <model>`
-(or `MAXPM_MODEL=<model>`). MaximizePM then gives you only items whose
+(or `RIVER_MODEL=<model>`). MaximizePM then gives you only items whose
 `--min-model`/`--max-model` limits allow your model, and says what it skipped.
 An item's recommended model and effort (`model:` in the briefing) are advice:
 work at that effort; a different model may still take it. An item for another
@@ -276,8 +276,8 @@ A person or a manager can give you your own queue (`maxpm queue add <you> <id>`,
 - `maxpm --as <you> queue list` shows it. `maxpm wait` wakes you at once when
   it gets an entry.
 - When your session is gone or stops, your queued items go back to the main queue.
-- A message that starts with `[maxpm instruction from ...]`, `[maxpm stop
-  request from ...]`, or `[maxpm alert from ...]` came from MaximizePM through your
+- A message that starts with `[river instruction from ...]`, `[river stop
+  request from ...]`, or `[river alert from ...]` came from MaximizePM through your
   platform's own messaging. Treat it like the same entry in `maxpm go` or
   `maxpm inbox`: run `maxpm --as <you> go` or `inbox` to read it in full.
 

@@ -1,9 +1,9 @@
 #!/bin/sh
 # Data for the README and site pictures: seed/example.sh plus some activity.
-# Run on an empty database:  MAXPM_DB=/tmp/shots.db seed/screenshots.sh
+# Run on an empty database:  RIVER_DB=/tmp/shots.db seed/screenshots.sh
 set -e
 D="$(dirname "$0")"
-R="$D/../bin/maxpm -q"
+R="$D/../bin/river -q"
 "$D/example.sh" >/dev/null
 
 $R register api-agent --note "backend work" >/dev/null
@@ -46,4 +46,4 @@ $R project target backend storefront >/dev/null
 $R --as api-agent target own storefront >/dev/null
 $R config set review on >/dev/null
 $R --as alex ship 1 >/dev/null
-echo "Loaded. Try: maxpm serve --open, maxpm status, maxpm go --project website"
+echo "Loaded. Try: river serve --open, river status, river go --project website"

@@ -11,15 +11,15 @@ from river import core, mcp
 class Mcp(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
-        os.environ["MAXPM_DB"] = os.path.join(self.dir.name, "t.db")
-        os.environ.pop("MAXPM_AGENT", None)
+        os.environ["RIVER_DB"] = os.path.join(self.dir.name, "t.db")
+        os.environ.pop("RIVER_AGENT", None)
         c = core.connect()
         core.project_add(c, "demo", path=self.dir.name)
         core.item_add(c, "demo", "first job", context="start here")
         c.close()
 
     def tearDown(self):
-        os.environ.pop("MAXPM_DB", None)
+        os.environ.pop("RIVER_DB", None)
         self.dir.cleanup()
 
     def talk(self, *msgs):
@@ -35,9 +35,9 @@ class Mcp(unittest.TestCase):
                       {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
                       call(3, "go", {"cwd": self.dir.name}),
                       call(4, "done", {"id": 1, "output": "did it"}),
-                      call(5, "maxpm", {"args": ["show", "1"]}),
-                      call(6, "maxpm", {"args": ["claim", "99"]}),
-                      call(7, "maxpm", {"args": ["--nonsense"]}))
+                      call(5, "river", {"args": ["show", "1"]}),
+                      call(6, "river", {"args": ["claim", "99"]}),
+                      call(7, "river", {"args": ["--nonsense"]}))
         self.assertEqual([x["id"] for x in r], [1, 2, 3, 4, 5, 6, 7])  # no reply to the notification
         self.assertEqual(r[0]["result"]["capabilities"], {"tools": {}})
         self.assertIn("go", [t["name"] for t in r[1]["result"]["tools"]])
@@ -79,9 +79,9 @@ class ChatApp(unittest.TestCase):
 
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
-        os.environ["MAXPM_DB"] = os.path.join(self.dir.name, "t.db")
-        os.environ.pop("MAXPM_AGENT", None)
-        os.environ["MAXPM_CHAT"] = "1"
+        os.environ["RIVER_DB"] = os.path.join(self.dir.name, "t.db")
+        os.environ.pop("RIVER_AGENT", None)
+        os.environ["RIVER_CHAT"] = "1"
         c = core.connect()
         core.project_add(c, "site", path=os.path.join(self.dir.name, "site"))
         core.project_add(c, "book")
@@ -94,7 +94,7 @@ class ChatApp(unittest.TestCase):
 
     def tearDown(self):
         os.chdir(self.old)
-        for k in ("MAXPM_DB", "MAXPM_CHAT"):
+        for k in ("RIVER_DB", "RIVER_CHAT"):
             os.environ.pop(k, None)
         self.dir.cleanup()
 
@@ -135,7 +135,7 @@ class ChatApp(unittest.TestCase):
         m = self.call(srv, "manage")
         self.assertRegex(srv.agent, r"^manager-")
         self.assertIn("manage --watch is for a terminal", m)
-        self.call(srv, "maxpm", {"args": ["needs-you"]})  # runs as the manager go named
+        self.call(srv, "river", {"args": ["needs-you"]})  # runs as the manager go named
 
     def test_setup_merges_into_the_claude_desktop_config(self):
         from river import cli
@@ -147,10 +147,10 @@ class ChatApp(unittest.TestCase):
         data = load(f)
         self.assertEqual(data["mcpServers"]["other"], {"command": "x"})
         self.assertEqual(data["theme"], "dark")
-        river = data["mcpServers"]["maxpm"]
+        river = data["mcpServers"]["river"]
         self.assertEqual(river["args"][-1], "mcp")
         self.assertTrue(os.path.isabs(river["command"]))
-        self.assertEqual(river["env"], {"MAXPM_DB": str(core.db_path().resolve()), "MAXPM_CHAT": "1"})
+        self.assertEqual(river["env"], {"RIVER_DB": str(core.db_path().resolve()), "RIVER_CHAT": "1"})
         self.assertTrue(os.path.exists(f + ".bak"))
         self.assertIn("nothing changed", cli.setup_claude_desktop(f))
         self.assertIn("took MaximizePM out", cli.setup_claude_desktop(f, remove=True))
@@ -161,7 +161,7 @@ class ChatApp(unittest.TestCase):
             cli.setup_claude_desktop(f)
         new = os.path.join(self.dir.name, "fresh", "claude_desktop_config.json")
         cli.setup_claude_desktop(new)
-        self.assertEqual(list(load(new)["mcpServers"]), ["maxpm"])
+        self.assertEqual(list(load(new)["mcpServers"]), ["river"])
 
     @unittest.skipUnless(sys.version_info >= (3, 11), "tomllib is new in Python 3.11")
     def test_setup_merges_into_the_codex_config_that_chatgpt_shares(self):
@@ -179,17 +179,17 @@ class ChatApp(unittest.TestCase):
         import tomllib
         data = tomllib.loads(text)
         self.assertEqual(data["mcp_servers"]["node_repl"]["env"], {"A": "1"})
-        self.assertEqual(data["mcp_servers"]["maxpm"]["env"], {"MAXPM_DB": str(core.db_path().resolve()), "MAXPM_CHAT": "1"})
-        self.assertEqual(data["mcp_servers"]["maxpm"]["args"][-1], "mcp")
+        self.assertEqual(data["mcp_servers"]["river"]["env"], {"RIVER_DB": str(core.db_path().resolve()), "RIVER_CHAT": "1"})
+        self.assertEqual(data["mcp_servers"]["river"]["args"][-1], "mcp")
         self.assertIn("nothing changed", cli.setup_codex_config(f))
         # A changed river entry is replaced, not doubled.
         with open(f, "w") as fh:
-            fh.write(text.replace('"MAXPM_CHAT" = "1"', "").replace("MAXPM_CHAT = \"1\"", 'MAXPM_CHAT = "0"'))
+            fh.write(text.replace('"RIVER_CHAT" = "1"', "").replace("RIVER_CHAT = \"1\"", 'RIVER_CHAT = "0"'))
         cli.setup_codex_config(f)
         with open(f) as fh:
             text = fh.read()
-        self.assertEqual(text.count("[mcp_servers.maxpm]"), 1)
-        self.assertIn('MAXPM_CHAT = "1"', text)
+        self.assertEqual(text.count("[mcp_servers.river]"), 1)
+        self.assertIn('RIVER_CHAT = "1"', text)
         self.assertIn("took MaximizePM out", cli.setup_codex_config(f, remove=True))
         with open(f) as fh:
             self.assertEqual(fh.read().rstrip("\n"), old.rstrip("\n"))
@@ -200,7 +200,7 @@ class ChatApp(unittest.TestCase):
             cli.setup_codex_config(f)
 
     def test_a_session_in_a_project_folder_is_not_a_chat(self):
-        # The Codex CLI reads the same config: its maxpm mcp runs with MAXPM_CHAT=1 in the project folder.
+        # The Codex CLI reads the same config: its maxpm mcp runs with RIVER_CHAT=1 in the project folder.
         os.makedirs(os.path.join(self.dir.name, "site"))
         srv = mcp.Server()
         go = self.call(srv, "go", {"cwd": os.path.join(self.dir.name, "site")})
@@ -213,11 +213,11 @@ class HttpEndpoint(unittest.TestCase):
 
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
-        os.environ["MAXPM_DB"] = os.path.join(self.dir.name, "t.db")
-        os.environ.pop("MAXPM_AGENT", None)
-        os.environ.pop("MAXPM_CHAT", None)
-        os.environ["MAXPM_AGENT"] = "whoever-started-serve"
-        self.addCleanup(os.environ.pop, "MAXPM_AGENT", None)
+        os.environ["RIVER_DB"] = os.path.join(self.dir.name, "t.db")
+        os.environ.pop("RIVER_AGENT", None)
+        os.environ.pop("RIVER_CHAT", None)
+        os.environ["RIVER_AGENT"] = "whoever-started-serve"
+        self.addCleanup(os.environ.pop, "RIVER_AGENT", None)
         c = core.connect()
         core.project_add(c, "site", path=self.dir.name)
         self.code = core.item_add(c, "site", "fix the header", priority=0, touches="src/header.js")["id"]
@@ -228,7 +228,7 @@ class HttpEndpoint(unittest.TestCase):
 
     def tearDown(self):
         os.chdir(self.old)
-        os.environ.pop("MAXPM_DB", None)
+        os.environ.pop("RIVER_DB", None)
         mcp.HTTP_SESSIONS.clear()
         self.dir.cleanup()
 

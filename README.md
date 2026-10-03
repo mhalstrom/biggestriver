@@ -76,7 +76,8 @@ projects at the same time.
 
 One SQLite file, one command (`maxpm`), one page. Python 3.10 or later, standard
 library only. The page ships one vendored JavaScript library,
-[Tabulator](https://tabulator.info) 6.5.3 (MIT license), so its tables work offline; the graph loads
+[Tabulator](https://tabulator.info) 6.5.3 (MIT license, in
+`river/static/vendor/tabulator`), so its tables work offline; the graph loads
 Mermaid from a CDN. Inspired by [Beads](https://github.com/steveyegge/beads).
 
 ## Install
@@ -84,7 +85,7 @@ Mermaid from a CDN. Inspired by [Beads](https://github.com/steveyegge/beads).
 ```sh
 git clone https://github.com/mhalstrom/maximizepm
 cd maximizepm
-./install.sh          # links `maxpm` into ~/.local/bin and the Claude Code skills into ~/.claude/skills
+./install.sh          # links `maxpm` and `river` into ~/.local/bin and the Claude Code skills into ~/.claude/skills
 ```
 
 The command is `maxpm`. `maxpm init --refresh` brings the `## Work queue` block
@@ -103,7 +104,7 @@ pipx install git+https://github.com/mhalstrom/maximizepm
 The package carries the agent guides (`maxpm guide`, `maxpm guide planner`);
 `maxpm skills install` links them into `~/.claude/skills` (`--copy` copies
 them instead). The queue database is one file per user, `~/.biggestriver/river.db`; set
-`MAXPM_DB` to use another file. A clone that already has `data/river.db`
+`RIVER_DB` to use another file. A clone that already has `data/river.db`
 keeps using it until you run `maxpm db move`, which copies it to the home
 folder (stop agent sessions and `maxpm serve` first). `maxpm db path` shows
 the file in use. If your agents run in a sandbox, allow them to write to
@@ -161,7 +162,7 @@ The pictures in `site/img/` come from `seed/shoot.js` (demo data from `seed/scre
 
 ```sh
 maxpm register alex --human --note "owner"       # once per person or agent session
-export MAXPM_AGENT=alex                          # or pass --as alex
+export RIVER_AGENT=alex                          # or pass --as alex
 
 maxpm target add prod-web --description "rsync to the VPS, then restart nginx"
 maxpm project add website --path ~/code/shop --target prod-web --description "Storefront pages in web/; React"
@@ -226,11 +227,11 @@ maxpm add "Rewrite the scheduler" --model fable --effort high --min-model opus
 maxpm edit 12 --max-model sonnet                 # a monitor: no strong model needed
 maxpm config set default_model sonnet --project monitors
 maxpm config set default_effort low --kind deploy
-MAXPM_MODEL=sonnet maxpm go                      # or: maxpm go --model sonnet
+RIVER_MODEL=sonnet maxpm go                      # or: maxpm go --model sonnet
 ```
 
 The recommendation never blocks. A session that declares its model
-(`MAXPM_MODEL` or `--model`) gets only items whose `--min-model` and
+(`RIVER_MODEL` or `--model`) gets only items whose `--min-model` and
 `--max-model` allow it; `go` and `next` say what they skipped and why.
 `model_ladder` orders the models, weakest first, one list per family
 (`claude: haiku, sonnet, opus, fable; openai: luna, terra, sol, astra`).
@@ -241,7 +242,7 @@ own family, so give one model per family to limit both (`--min-model opus,sol`).
 An item can need one agent type: `maxpm add "Draw the logo" --agent codex`
 (or `claude-code`). A session of another type skips it; MaximizePM reads a
 session's type from its CLI's environment (`CODEX_THREAD_ID`, `CLAUDECODE`,
-or `MAXPM_AGENT_TYPE` by hand), else from its model's family. Start,
+or `RIVER_AGENT_TYPE` by hand), else from its model's family. Start,
 Dispatch, and `maxpm launch` start the item's type unless you pick an agent.
 `agent_rules` sets the type from the item (`codex: *.css, *.svg, image, logo`:
 a pattern with `*`, `?`, `/` or `.` matches a touched file, any other a word in
@@ -254,9 +255,9 @@ Claim next with an agent, Deploy now) opens one dialog: the agent, the model
 (only the agent's family, inside the item's limits, the recommendation
 preselected), the effort, the agent's launch options, the work, and where it
 opens: a new tab, a new window, or tmux (offered when tmux is installed). The
-session gets `MAXPM_MODEL`. Start and Dispatch (and
-`maxpm launch`) name the new session (`MAXPM_AGENT`), reserve the item for it,
-and set `MAXPM_FOCUS=item:<id>`: the session's first `maxpm go` claims that
+session gets `RIVER_MODEL`. Start and Dispatch (and
+`maxpm launch`) name the new session (`RIVER_AGENT`), reserve the item for it,
+and set `RIVER_FOCUS=item:<id>`: the session's first `maxpm go` claims that
 item, or says in capitals why it cannot and gives other work. A session that
 runs no MaximizePM command within `connect_within` (5m) shows to the manager as
 NOT CONNECTED (its agent did not start, or waits on a prompt in its
@@ -281,7 +282,7 @@ A Claude Code session that MaximizePM starts for an item gets a name (`claude
 --name`, also the Remote Control session name): the goal the item serves,
 else `#<id> <title>`, at most 48 characters. The new terminal tab or console
 window gets the same title. A session for another purpose gets that purpose
-as its name: `maxpm manager`, `help #7 <title>`, `unblock #7 <title>`,
+as its name: `river manager`, `help #7 <title>`, `unblock #7 <title>`,
 `monitor #7 <title>`, `deploy web`, `review web`, `needs you`.
 
 The model and effort go in as `--model`/`--effort` (Claude Code) and
@@ -290,7 +291,7 @@ the queue folder. The CLI gets the model's id from `<prefix>model_ids`
 (`codex -m gpt-6-astra` for `astra`); a name with no entry goes as it is,
 which suits Claude Code (`claude --model fable`). Codex ids change with each
 OpenAI release: then change `codex_model_ids`. MaximizePM keeps the ladder name
-everywhere else (limits, `MAXPM_MODEL`, the page). A Codex effort that the
+everywhere else (limits, `RIVER_MODEL`, the page). A Codex effort that the
 model does not take (from Codex's model cache, `~/.codex/models_cache.json`)
 is refused before the launch. Codex has no Remote Control flag for one session. An entry
 can set an option for itself (`Plan=@claude-code permission_mode=plan`), the
@@ -315,7 +316,7 @@ all: the setting `launch_in` is `auto` by default, which is tmux when tmux is
 installed and a Terminal tab when it is not (`maxpm config set launch_in
 tab`, `window`, or `tmux` to choose; `--tab`, `--window`, or `--tmux` for
 one launch, or the choice in the dialog). Each session then starts as a pane
-of one tmux session named `maxpm`, in place of a Terminal tab. `maxpm view` shows the panes side by
+of one tmux session named `river`, in place of a Terminal tab. `maxpm view` shows the panes side by
 side in the terminal where you run it, each with its session's name on its
 border, and a new agent joins them. `maxpm view --windows` gives each agent a
 tmux window of its own again, and `maxpm view --list` prints the panes.
@@ -361,14 +362,14 @@ prints the instructions block alone.
 
 After each command, MaximizePM prints one hint line with the likely next command
 (for example, how to finish or release the item just claimed). Hints go to
-stderr, never into `--json` output; `-q` or `MAXPM_QUIET=1` turns them off.
+stderr, never into `--json` output; `-q` or `RIVER_QUIET=1` turns them off.
 
 An agent that cannot run shell commands can use MaximizePM through MCP:
 `maxpm mcp` is a stdio MCP server with the tools `go`, `done`, `show`,
-`goal`, `inbox`, `plan`, `manage`, and `maxpm` (any command, as a list of
+`goal`, `inbox`, `plan`, `manage`, and `river` (any command, as a list of
 words). Each tool returns the same text as the command, and the server keeps
 the agent name that `go`, `plan`, or `manage` gives.
-For Claude Code: `claude mcp add maxpm -- maxpm mcp`.
+For Claude Code: `claude mcp add river -- maxpm mcp`.
 
 ### Claude desktop app
 
@@ -378,7 +379,7 @@ old file is kept as `.bak`). Quit and reopen the app. `--remove` takes MaximizeP
 out again.
 
 A chat has no folder and no shell, so MaximizePM runs it as a chat session
-(`MAXPM_CHAT=1`, or `--chat` on `go`, `plan`, and `manage`):
+(`RIVER_CHAT=1`, or `--chat` on `go`, `plan`, and `manage`):
 
 - Plan: "plan my next work with MaximizePM" runs `plan` over every project.
 - Manage: `manage` shows what needs attention; `launch` still opens a coding
@@ -390,7 +391,7 @@ A chat has no folder and no shell, so MaximizePM runs it as a chat session
   `done --output`, a long one in the item's notes first.
 
 A session whose folder belongs to a project is never a chat, even with
-`MAXPM_CHAT=1`: it works as usual.
+`RIVER_CHAT=1`: it works as usual.
 
 ### Over HTTP
 
@@ -405,12 +406,12 @@ the phone apps come later.
 ### ChatGPT desktop app
 
 `maxpm setup-agent --chatgpt-desktop` adds MaximizePM to `~/.codex/config.toml`
-(`[mcp_servers.maxpm]`; the other tables stay, and the old file is kept as
+(`[mcp_servers.river]`; the other tables stay, and the old file is kept as
 `.bak`). The ChatGPT desktop app shares that file with the Codex CLI.
 Restart the app. Its Work and Codex modes run on this computer and reach
 MaximizePM; plain Chat mode reaches only remote servers, so it does not. In a
 chat, MaximizePM works as it does for the Claude desktop app (above). Codex CLI
-sessions see the MaximizePM server too, and in a project folder they work as
+sessions see the river server too, and in a project folder they work as
 usual. `--remove` takes MaximizePM out again.
 
 ## Outside trackers
@@ -434,7 +435,7 @@ with their own tools; MaximizePM keeps the links and reminds them.
    open issue that MaximizePM does not have yet, with a link:
    `maxpm add "Fix login" --ref github:acme/shop#12` (GitHub links get a URL
    by themselves), or `--ref jira:API-7 --ref-url https://acme.atlassian.net/browse/API-7`.
-   `maxpm list --ref <ref>` finds the items of an issue. MaximizePM refuses a
+   `maxpm list --ref <ref>` finds the items of an issue. River refuses a
    second open item with the same link in a project.
 4. Write back: `maxpm go` asks the agent to mark linked issues in progress.
    `maxpm done` prints each link with the output to post as a comment, and
@@ -525,7 +526,7 @@ blocker trees, the agent registry, capacity, settings, and the web page.
   messages as soon as one comes (any agent can use it), and the manager starts
   it again. A session that MaximizePM reaches through `native_message` needs no
   poller. Its actions show in the history as "(by manager <name>)". Rules:
-  `maxpm guide manager` (skills/maxpm-manager).
+  `maxpm guide manager` (skills/river-manager).
 - Emergency kill: `maxpm go`, `register`, and `heartbeat` record the agent
   CLI's process (the first ancestor of the MaximizePM command that is not a shell)
   and the host; `maxpm who` shows them, and a session whose process on this
@@ -549,7 +550,7 @@ blocker trees, the agent registry, capacity, settings, and the web page.
   long>"`. When a deploy item is claimed, MaximizePM adds a monitor item for that
   release (sonnet, low effort, at most sonnet, unless settings for
   `--kind monitor` say otherwise), and the running `maxpm serve` opens a
-  session for it (`MAXPM_FOCUS=monitor:<id>`). The session watches, then
+  session for it (`RIVER_FOCUS=monitor:<id>`). The session watches, then
   finishes the item, or alerts the deployer and adds a person's item with the
   evidence and a proposed rollback. The Targets tab shows the monitor of each deploy.
 - Review before release (`maxpm config set review on`): each release gets one
