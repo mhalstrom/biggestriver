@@ -784,6 +784,7 @@ class LaunchInTmux(unittest.TestCase):
             os.environ["TMUX"] = self.in_tmux
         core.PLATFORM, server.TMUX_RUNNER = self.platform, None
         server.TIDY.update(at=None, screens={})
+        server.BUSY.clear()
         self.c.close()
         os.environ.pop("RIVER_DB", None)
         self.dir.cleanup()
@@ -1030,6 +1031,85 @@ class LaunchInTmux(unittest.TestCase):
         with mock.patch.object(server, "watch_prompts", lambda c: None), \
                 mock.patch.object(server, "fresh_sessions", lambda c: None), \
                 mock.patch.object(server, "auto_tidy", lambda c: (looks.append(1), stop.set())):
+            notify.loop(stop, interval_s=1)
+        self.assertEqual(looks, [1])
+
+    def test_a_busy_agent_keeps_its_lease_and_its_item(self):
+        from unittest import mock
+        core.config_set(self.c, "launch_in", "tmux")
+        core.register(self.c, "mark", human=True)
+        core.register(self.c, "other")
+        x = core.item_add(self.c, "shop", "run every check")["id"]
+        name = server.launch_agent(self.c)["session_name"]
+        pane, clock = self.tmux.panes[0], [core.now()]
+        self.addCleanup(server.IDLE.clear)
+        fake_now = mock.patch.object(core, "now", lambda: clock[0])
+        fake_now.start()
+        self.addCleanup(fake_now.stop)
+        procs = {1000: (1, "9:00:00")}  # the agent CLI
+        core.PROC_RUNNER = lambda: "".join(f"{pid} {ppid} {age}\n" for pid, (ppid, age) in procs.items())
+        self.addCleanup(setattr, core, "PROC_RUNNER", None)
+        self.c.execute("UPDATE agents SET pid=1000, host=? WHERE name=?", (core.this_host(), name))
+
+        def tick(seconds=30):
+            clock[0] += core.timedelta(seconds=seconds)
+            return server.watch_busy(self.c)
+        held = lambda: (core.activity(self.c, "other"), core.item_show(self.c, x))[1]["assignee"]
+        # With no agent at work the pass runs no tmux command.
+        calls = len(self.tmux.calls)
+        self.assertEqual((tick(), self.tmux.calls[calls:]), ([], []))
+        clock[0] += core.timedelta(seconds=1)
+        core.activity(self.c, name)
+        core.claim(self.c, x, name)
+        # 35 minutes of work with no river command: the screen changes, so each pass renews the lease (30m).
+        pane["screen"] = "✻ Working… (0s)"
+        self.assertEqual(tick(), [])  # the first look: nothing to compare with
+        for n in range(1, 70):
+            pane["screen"] = f"✻ Working… ({n * 30}s)"
+            self.assertEqual(tick(), [name])
+        self.assertEqual(held(), name)
+        # It waits on a prompt for a person: its work is in the folder, and it keeps the item.
+        pane["screen"] = "Bash command\n  git push\nDo you want to proceed?\n❯ 1. Yes\n  2. No"
+        self.assertEqual(([tick(600) for _ in range(4)], held()), ([[name]] * 4, name))
+        # A long test run: the screen stays the same for 40 minutes, and a process runs below the agent CLI. The
+        # lease holds; and a note for the agent starts no fresh session, although its screen looks idle.
+        pane["screen"] = "⏺ Bash(make check-all)\n  ⎿  Running…"
+        procs[3000] = (1000, "00:05")
+        note = core.send(self.c, "note", "one more thing", to=name, item=x, actor="mark")["id"]
+        nothing = {"started": {}, "ended": {}, "failed": {}}
+        for _ in range(40):
+            self.assertEqual((tick(60), server.fresh_sessions(self.c)), ([name], nothing))
+        self.assertEqual(held(), name)
+        # The test run ended and the agent stopped at its prompt: now the note goes to a fresh session, and the
+        # idle agent ends before the new session starts.
+        del procs[3000]
+        order = []
+        end_idle, start_fresh = core.end_idle, server.start_fresh
+        with mock.patch.object(core, "end_idle", lambda *a, **k: (order.append("end"), end_idle(*a, **k))[1]), \
+                mock.patch.object(server, "start_fresh", lambda *a, **k: (order.append("start"), start_fresh(*a, **k))[1]):
+            runs = [(tick(), server.fresh_sessions(self.c))[1] for _ in range(6)]
+        (r,) = [r for r in runs if r["started"]]
+        self.assertEqual((list(r["started"]), list(r["ended"]), order), ([x], [name], ["end", "start"]))
+        self.assertIn(f"[note #{note} from mark to {name}] one more thing", core.item_show(self.c, x)["notes"])
+        # A quiet screen and no command: the lease runs out as before. busy_max 0s: river looks at nothing.
+        fresh = r["started"][x]
+        clock[0] += core.timedelta(seconds=1)
+        core.activity(self.c, fresh)
+        core.claim(self.c, x, fresh)
+        self.tmux.panes[-1]["screen"] = "⏺ Done.\n\n│ >  │"
+        self.assertEqual(([tick(600) for _ in range(4)], held()), ([[]] * 4, None))
+        core.claim(self.c, x, fresh)
+        core.config_set(self.c, "busy_max", "0s")
+        calls = len(self.tmux.calls)
+        self.assertEqual((tick(), self.tmux.calls[calls:]), ([], []))
+        # The loop of river serve runs the pass every time.
+        import threading
+        from river import notify
+        stop, looks = threading.Event(), []
+        with mock.patch.object(server, "watch_prompts", lambda c: None), \
+                mock.patch.object(server, "fresh_sessions", lambda c: None), \
+                mock.patch.object(server, "auto_tidy", lambda c: None), \
+                mock.patch.object(server, "watch_busy", lambda c: (looks.append(1), stop.set())):
             notify.loop(stop, interval_s=1)
         self.assertEqual(looks, [1])
 

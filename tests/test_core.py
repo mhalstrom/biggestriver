@@ -3314,3 +3314,109 @@ class Manager(Base):
         core.stop_agent(self.c, "boss", "done for today", actor="mark")
         self.assertEqual(core.inbox_wait(self.c, "boss", "1h")["result"], "stop")
         self.assertFalse(core.manage(self.c, self.dir.name, "boss2", takeover="x")["native"])
+
+
+class BusyLease(Base):
+    """A lease does not run out while a command runs in the agent's session, and no second agent takes an item
+    whose first agent still works on it."""
+
+    def setUp(self):
+        super().setUp()
+        core.project_add(self.c, "shop")
+        for n, name in enumerate(("w1", "w2")):
+            core.register(self.c, name)
+            self.c.execute("UPDATE agents SET pid=?, host=? WHERE name=?", (1000 + n, core.this_host(), name))
+        core.register(self.c, "mark", human=True)
+        self.clock = [core.now()]
+        fake_now = mock.patch.object(core, "now", lambda: self.clock[0])
+        fake_now.start()
+        self.addCleanup(fake_now.stop)
+        # ps: each agent CLI (two hours old) with a server it started at its start; then what a test adds.
+        self.procs = {1000: (1, "2:00:00"), 1001: (1, "2:00:00"), 2000: (1000, "1:59:58")}
+        core.PROC_RUNNER = lambda: "".join(f"{pid:>6} {ppid:>6} {age:>12}\n" for pid, (ppid, age) in self.procs.items())
+        self.addCleanup(setattr, core, "PROC_RUNNER", None)
+
+    def later(self, **kw):
+        self.clock[0] += timedelta(**kw)
+
+    def status(self, x):
+        it = core.item_show(self.c, x)
+        return it["status"], it["assignee"]
+
+    def test_a_long_command_keeps_the_lease(self):
+        self.assertEqual([core._elapsed(x) for x in ("05", "01:05", "1:01:05", "2-01:01:05")], [5, 65, 3665, 176465])
+        x = self.add("shop", "run every check")
+        core.activity(self.c, "w1")
+        core.claim(self.c, x, "w1")
+        self.assertEqual(core.busy_now(self.c), set())  # only the server it started with: older than its last command
+        # The agent starts a test run that takes 40 minutes, and runs no river command. Another agent's command
+        # finds the lease past its time (30m): the test run is a process below the agent CLI, so river renews it.
+        self.later(minutes=31)
+        self.procs.update({3000: (1000, "30:50"), 3001: (3000, "30:49")})  # a shell and the test run below it
+        self.assertEqual(core.busy_now(self.c), {"w1"})
+        core.activity(self.c, "w2")
+        self.assertEqual(self.status(x), ("in_progress", "w1"))
+        self.assertIn("lease renewed: a command runs in the session of w1", [e["change"] for e in core.item_show(self.c, x)["events"]])
+        self.assertEqual(core.next_item(self.c, "shop", claim=True, actor="w2"), [])
+        # The test run ends and the agent stays silent: the lease runs out as before.
+        del self.procs[3000], self.procs[3001]
+        self.later(minutes=31)
+        core.activity(self.c, "w2")
+        self.assertEqual((self.status(x), core.item_show(self.c, x)["needs_check"]), (("open", None), 1))
+        # Its session works again (it never ran a river command, so it does not know): no second agent takes the
+        # item, by go or by claim; the first agent claims it again.
+        self.procs[3002] = (1000, "00:20")
+        skipped = []
+        self.assertEqual(core.next_item(self.c, "shop", claim=True, actor="w2", skipped=skipped), [])
+        self.assertEqual(skipped, [{"id": x, "title": "run every check", "why": "w1 still works on it in its session"}])
+        with self.assertRaisesRegex(RiverError, f"the lease on #{x} ran out, but w1 still works on it .* river stop w1"):
+            core.claim(self.c, x, "w2")
+        # A person or a manager stops the first session: then the item is free.
+        core.stop_agent(self.c, "w1", "w2 takes it", actor="mark")
+        self.assertEqual(core.claim(self.c, x, "w2")["assignee"], "w2")
+
+    def test_the_first_agent_claims_again_and_the_signs_have_a_limit(self):
+        x = self.add("shop", "merge the branch")
+        core.activity(self.c, "w1")
+        core.claim(self.c, x, "w1")
+        self.later(minutes=31)
+        core.activity(self.c, "w2")
+        self.assertEqual(self.status(x), ("open", None))
+        # river serve saw the first session busy after the lease ran out (its tmux pane changed): the item waits
+        # for it, for lease_ttl after the last such sign.
+        self.later(minutes=1)
+        self.assertEqual(core.keep_busy(self.c, {"w1", "nobody"}), ["w1"])
+        self.assertEqual(core.still_worked(self.c), {x: "w1"})
+        self.assertEqual(core.next_item(self.c, "shop", claim=True, actor="w2"), [])
+        self.assertEqual(core.next_item(self.c, "shop", claim=True, actor="w1")[0]["assignee"], "w1")
+        self.assertEqual(core.still_worked(self.c), {})
+        # keep_busy renews what the agent holds, and leaves the time of its last river command.
+        seen = self.c.execute("SELECT last_seen FROM agents WHERE name='w1'").fetchone()[0]
+        self.later(minutes=20)
+        core.keep_busy(self.c, {"w1"})
+        self.later(minutes=20)
+        core.activity(self.c, "w2")
+        self.assertEqual((self.status(x), self.c.execute("SELECT last_seen FROM agents WHERE name='w1'").fetchone()[0]),
+                         (("in_progress", "w1"), seen))
+        # busy_max (4h) after its last river command, a command that still runs (a server it left) counts no more.
+        self.procs[3000] = (1000, "10:00")
+        self.assertEqual(core.busy_now(self.c), {"w1"})
+        self.later(hours=4)
+        self.assertEqual((core.busy_now(self.c), core.keep_busy(self.c, {"w1"})), (set(), []))
+        core.activity(self.c, "w2")
+        self.assertEqual(self.status(x), ("open", None))
+        self.assertEqual(core.next_item(self.c, "shop", claim=True, actor="w2")[0]["assignee"], "w2")
+        with self.assertRaisesRegex(RiverError, "bad duration"):
+            core.config_set(self.c, "busy_max", "long")
+        # An agent on another computer, or with no known process, or whose CLI ended: no sign.
+        core.activity(self.c, "w1")
+        self.procs[3001] = (1000, "00:00")
+        self.later(seconds=30)
+        self.assertEqual(core.busy_now(self.c), {"w1"})
+        self.c.execute("UPDATE agents SET host='elsewhere' WHERE name='w1'")
+        self.assertEqual(core.busy_now(self.c), set())
+        self.c.execute("UPDATE agents SET host=? WHERE name='w1'", (core.this_host(),))
+        del self.procs[1000]
+        self.assertEqual(core.busy_now(self.c), set())
+        core.PROC_RUNNER = lambda: (_ for _ in ()).throw(OSError("no ps"))
+        self.assertEqual(core.busy_now(self.c), set())

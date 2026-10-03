@@ -63,7 +63,11 @@ your type from your CLI's environment.
    Leave out `--claim` to look first. Add `-n 5` to see five.
 2. `river show <id>` for the notes, what it waits on, and what it unblocks.
 3. Do the work. Every `river` command renews your lease. If you work a long
-   time without one, run `river heartbeat` (default lease 30 minutes).
+   time without one, run `river heartbeat` (default lease 30 minutes). River
+   also renews it while a command runs in your session (a long test run) or
+   your tmux pane changes, but do not count on that: it needs `river serve`
+   or a process it can see, and it stops `busy_max` (4h) after your last
+   river command.
 4. Finish: `river done <id> --output "<one line: what changed, commit id>"`.
    The reply lists items that became ready.
    Cannot finish: `river release <id> --note "<why>"`.

@@ -289,6 +289,7 @@ def loop(stop, interval_s=None):
             wait = interval_s or core.parse_duration(core.setting(conn, "notify_interval")).total_seconds()
             from . import server
             server.watch_prompts(conn)  # an agent that waits on a prompt in its tmux pane: tell the person
+            server.watch_busy(conn)  # an agent that is busy with no river command keeps its leases
             server.fresh_sessions(conn)  # work for an agent idle at its prompt goes to a fresh session
             server.auto_tidy(conn)  # every tidy_every: close the tmux panes of sessions that are done
             if core._channels(core.setting(conn, "notify_channels")):

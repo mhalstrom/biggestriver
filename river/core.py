@@ -152,6 +152,13 @@ DEFAULT_SETTINGS = {
     # river serve closes the tmux panes of sessions that are done every tidy_every, as river view --tidy does; a pane
     # it closes by the queue's word (the CLI is still open) must show the same screen for idle_after first. 0s: never.
     "tidy_every": "20m",
+    # A lease does not run out while its agent is busy. An agent is busy when a command runs in its session (a
+    # process below the agent CLI that started after the agent's last river command: a test run, a build), when its
+    # tmux pane changes, or when its pane shows a prompt for a person. river serve looks every notify_interval and
+    # renews the leases of a busy agent; a river command that finds a lease past its time renews it when a command
+    # runs in the holder's session. busy_max: how long after an agent's last river command these signs still
+    # count (a server that an agent left running would hold an item for ever). 0s: only river commands renew.
+    "busy_max": "4h",
     "manage_every": "30m",
     # river cleanup lists a ready item that nobody claimed for this long.
     "stale_after": "14d",
@@ -372,6 +379,7 @@ CREATE TABLE IF NOT EXISTS agents (
   model          TEXT,                       -- the model the session runs (RIVER_MODEL, river go --model)
   agent_type     TEXT,                       -- the agent CLI it runs in (codex, claude-code), from its environment
   manage_seen    TEXT,                       -- the manager's findings it has seen (river manage --watch)
+  busy_at        TEXT,                       -- when river last saw the session busy without a river command (keep_busy)
   pid            INTEGER,                    -- the agent CLI process that runs river, its host, and its command line
   host           TEXT,
   pid_cmd        TEXT,
@@ -701,7 +709,7 @@ def _migrate(conn):
         conn.execute("ALTER TABLE agents ADD COLUMN model TEXT")
     if "agent_type" not in acols:
         conn.execute("ALTER TABLE agents ADD COLUMN agent_type TEXT")
-    for col in ("stop_at", "stop_by", "stop_reason", "platform", "native_address", "host", "pid_cmd", "manage_seen"):
+    for col in ("stop_at", "stop_by", "stop_reason", "platform", "native_address", "host", "pid_cmd", "manage_seen", "busy_at"):
         if col not in acols:
             conn.execute(f"ALTER TABLE agents ADD COLUMN {col} TEXT")
     if "pid" not in acols:
@@ -839,7 +847,7 @@ def config_set(conn, key, value, project=None, item=None, agent=None, actor=None
         raise RiverError(f"unknown setting {key!r}; known: {', '.join(sorted(DEFAULT_SETTINGS))}")
     if key.endswith(("_ttl", "_after", "_before", "_interval", "_window")) or key in (
             "wait_max", "wait_step", "human_wait_max", "goal_lease", "wait_too_long", "manage_every", "connect_within",
-            "prompt_wait", "idle_end", "tidy_every"):
+            "prompt_wait", "idle_end", "tidy_every", "busy_max"):
         parse_duration(value)
     elif key == "prompt_pattern":
         try:
@@ -3654,6 +3662,11 @@ def _touch_agent(conn, actor):
         return
     t = now()
     conn.execute("UPDATE agents SET last_seen=? WHERE name=?", (iso(t), actor))
+    _renew(conn, actor, t)
+
+
+def _renew(conn, actor, t):
+    """Every lease, hold, goal and target the actor has runs from t."""
     for r in conn.execute("SELECT id FROM items WHERE assignee=? AND status='held'", (actor,)).fetchall():
         conn.execute("UPDATE items SET hold_expires_at=? WHERE id=?", (iso(_hold_until(conn, r["id"], actor, t)), r["id"]))
     owner_ttl = parse_duration(setting(conn, "owner_ttl", agent=actor))
@@ -3669,7 +3682,14 @@ def _sweep(conn):
     t = iso(now())
     expired = conn.execute(
         "SELECT id, assignee FROM items WHERE status='in_progress' AND lease_expires_at < ?", (t,)).fetchall()
+    busy = busy_now(conn, {r["assignee"] for r in expired}) if expired else set()
     for r in expired:
+        if r["assignee"] in busy:  # a long command (a test run, a build): the agent works, and keeps its item
+            conn.execute("UPDATE items SET lease_expires_at=? WHERE id=?",
+                         (iso(now() + _lease_for(conn, r["id"], r["assignee"])), r["id"]))
+            conn.execute("UPDATE agents SET busy_at=? WHERE name=?", (t, r["assignee"]))
+            _event(conn, r["id"], "river", f"lease renewed: a command runs in the session of {r['assignee']}")
+            continue
         # The session may have done part or all of the work: the next taker checks first (river check).
         conn.execute("UPDATE items SET status='open', assignee=NULL, claimed_at=NULL, lease_expires_at=NULL, "
                      "needs_check=1 WHERE id=?", (r["id"],))
@@ -3810,6 +3830,105 @@ def _question_nudges(conn):
         _send(conn, "notice", "river", f"{r['to_agent']} is gone (last seen {r['last_seen'][:16].replace('T', ' ')} UTC) "
               f"and never read your {r['kind']} #{r['id']}. Send it to someone else if it still matters (river who)",
               to=r["from_agent"], item_id=r["item_id"], reply_to=r["id"])
+
+
+PROC_RUNNER = None  # tests: returns the lines "pid ppid elapsed" of every process, as ps prints them
+
+
+def _elapsed(text):
+    """The seconds of a ps elapsed time: [[dd-]hh:]mm:ss."""
+    days, _, rest = text.rpartition("-")
+    parts = [int(x) for x in rest.split(":")]
+    return int(days or 0) * 86400 + sum(x * 60 ** n for n, x in enumerate(reversed(parts)))
+
+
+def busy_now(conn, names=None):
+    """The agents (among names; else every AI agent) in whose session a command runs now: the agent CLI process
+    runs on this computer, and a process below it started after the agent's last river command (a test run, a
+    build, a merge). The servers the CLI started with are older, and so is a river wait, which renews last_seen
+    itself. Only within busy_max of the last river command. One ps call; an empty set with no ps (Windows, a
+    sandbox that blocks it)."""
+    import subprocess
+    limit = parse_duration(setting(conn, "busy_max"))
+    t, host = now(), this_host()
+    rows = [r for r in conn.execute("SELECT name, pid, last_seen FROM agents WHERE kind='ai' AND pid IS NOT NULL AND host=?",
+                                    (host,)).fetchall()
+            if (names is None or r["name"] in names) and t - parse_iso(r["last_seen"]) < limit]
+    if not rows or (PROC_RUNNER is None and os.name == "nt"):
+        return set()
+    try:
+        text = PROC_RUNNER() if PROC_RUNNER else subprocess.run(
+            ["ps", "-A", "-o", "pid=,ppid=,etime="], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    below, started = {}, {}
+    for line in text.splitlines():
+        f = line.split()
+        try:
+            pid, ppid, age = int(f[0]), int(f[1]), _elapsed(f[2])
+        except (IndexError, ValueError):
+            continue
+        below.setdefault(ppid, []).append(pid)
+        started[pid] = t - timedelta(seconds=age)
+    out = set()
+    for r in rows:
+        if r["pid"] not in started:
+            continue  # the agent CLI ended
+        after = parse_iso(r["last_seen"]) + timedelta(seconds=1)  # ps counts whole seconds
+        todo, seen = list(below.get(r["pid"], ())), set()
+        while todo:
+            pid = todo.pop()
+            if pid in seen:
+                continue
+            seen.add(pid)
+            if started[pid] > after:
+                out.add(r["name"])
+                break
+            todo += below.get(pid, ())
+    return out
+
+
+def keep_busy(conn, names):
+    """river serve saw these agents busy with no river command (busy_now, or their tmux pane): their leases, holds,
+    goals and targets run from now, as after a river command. last_seen stays the time of the last river command."""
+    limit = parse_duration(setting(conn, "busy_max"))
+    t, kept = now(), []
+    with tx(conn):
+        for r in conn.execute("SELECT name, last_seen FROM agents WHERE kind='ai'").fetchall():
+            if r["name"] in names and t - parse_iso(r["last_seen"]) < limit:
+                conn.execute("UPDATE agents SET busy_at=? WHERE name=?", (iso(t), r["name"]))
+                _renew(conn, r["name"], t)
+                kept.append(r["name"])
+    return kept
+
+
+def still_worked(conn):
+    """{item: agent} for the open items whose lease ran out while the agent's session still works on them: nobody
+    claimed the item since, the agent is registered on this computer and is not asked to stop, and a command runs
+    in its session now, or river serve saw it busy after the lease ran out and within the last lease_ttl. No
+    second agent takes such an item (two sessions in one folder); the first one claims it again, or a person or
+    a manager stops it."""
+    rows = conn.execute(
+        "SELECT i.id, e.at, e.change FROM items i JOIN events e ON e.id=(SELECT MAX(id) FROM events WHERE item_id=i.id "
+        "AND (change LIKE 'lease expired (was %' OR change LIKE 'claimed%')) "
+        "WHERE i.status='open' AND i.needs_check=1 AND e.change LIKE 'lease expired (was %'").fetchall()
+    was = {}
+    for r in rows:
+        m = re.match(r"lease expired \(was (.+)\); back to open$", r["change"])
+        a = m and conn.execute("SELECT name, busy_at FROM agents WHERE name=? AND kind='ai' AND stop_at IS NULL "
+                               "AND pid IS NOT NULL AND host=?", (m.group(1), this_host())).fetchone()
+        if a:
+            was[r["id"]] = (a, r["at"])
+    if not was:
+        return {}
+    busy, t = busy_now(conn, {a["name"] for a, _ in was.values()}), now()
+    out = {}
+    for i, (a, at) in was.items():
+        recent = a["busy_at"] and a["busy_at"] > at and t - parse_iso(a["busy_at"]) < parse_duration(
+            setting(conn, "lease_ttl", item_id=i, agent=a["name"]))
+        if a["name"] in busy or recent:
+            out[i] = a["name"]
+    return out
 
 
 def activity(conn, actor):
@@ -4274,6 +4393,12 @@ def next_item(conn, project=None, unblocks=None, claim=False, actor=None, limit=
                                                (iso(now() - FRESH_GRACE),))}
         pool = [a for a in pool if (a["kind"] != "deploy" or a["target"] in owned)
                 and a["reserved_for"] in (None, actor) and a["id"] not in fresh]
+        # An item whose lease ran out while its agent's session still works on it: no second agent takes it.
+        still = still_worked(conn)
+        for a in [a for a in pool if still.get(a["id"], actor) != actor]:
+            if skipped is not None and a["id"] not in {x["id"] for x in skipped}:
+                skipped.append({"id": a["id"], "title": a["title"], "why": f"{still[a['id']]} still works on it in its session"})
+        pool = [a for a in pool if still.get(a["id"], actor) == actor]
         # The agent's own queue comes first, in its order and from any project; then items pushed to it.
         # The sort is stable, so graph order holds inside each group.
         qpos = {r["item_id"]: n for n, r in enumerate(conn.execute(
@@ -4323,6 +4448,11 @@ def claim(conn, item_id, actor=None):
                         f"(both edit the same files)" if a["busy_conflicts"] and a["status"] == "open"
                    else f"status is {a['status']}" + (f" (held by {a['assignee']})" if a["assignee"] else ""))
             raise RiverError(f"item {item_id} is not ready: {why}. See: river blockers {item_id}")
+        first = still_worked(conn).get(a["id"], actor)
+        if first != actor:
+            raise RiverError(f"refused: the lease on #{item_id} ran out, but {first} still works on it in its session "
+                             f"(a command runs there). Take other work (river go). A person or a manager ends that "
+                             f"session first: river stop {first} --reason \"...\"")
         _claim_row(conn, a["id"], actor)
     return item_show(conn, item_id)
 
