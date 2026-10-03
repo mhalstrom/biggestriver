@@ -480,6 +480,12 @@ blocker trees, the agent registry, capacity, settings, and the web page.
   agent that needs a person files a person's item and releases its item;
   when the person answers, a fresh session takes the item
   (`fresh_sessions`, `idle_after`, `idle_end`).
+- `maxpm serve` runs new code by itself: after a commit or a pull that
+  changes the code, it starts again within a minute or two, on the same port.
+  It waits while git shows a change in the code that is not committed, and it
+  keeps the old code when the new code does not load. `maxpm serve --restart`
+  does it at once and waits until the page answers.
+  `maxpm config set serve_reload off` turns it off.
 - Per-item context fields (context, files it touches, check command), so a
   new agent can start without searching.
 - Keep or release a claimed item when a prerequisite appears, and a
