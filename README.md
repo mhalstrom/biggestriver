@@ -67,7 +67,10 @@ projects at the same time.
 - An agent picks the area where it already has context (a project, the items
   near one it just did, or the items that unblock it) and claims the next
   ready item there. Claims are leases that expire, so a stopped agent never
-  blocks the queue for long.
+  blocks the queue for long. A lease does not run out while its agent is
+  busy: a command runs in its session (a long test run), its tmux pane
+  changes, or it waits on a prompt (`busy_max`, 4h after its last command).
+  And no second agent takes an item while the first one still works on it.
 - A local web page shows the board, the graph, who is doing what, and how many
   more agent sessions the ready work could use right now.
 
