@@ -3122,7 +3122,7 @@ class Stop(Base):
         core.claim(self.c, x, "s1")
         r = core.stop_agent(self.c, "s1", "wrong approach", actor="mark")
         self.assertFalse(r["waiting"])
-        self.assertIn("after its next river command", r["ends"])
+        self.assertIn("after its next maxpm command", r["ends"])
         b = core.go(self.c, self.dir.name, "s1")
         self.assertEqual((b["role"], b["ended"], [h["id"] for h in b["stop_holds"]]), ("stopped", False, [x]))
         self.assertEqual(core.item_show(self.c, x)["status"], "in_progress")  # no new claim, the item stays

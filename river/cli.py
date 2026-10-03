@@ -40,7 +40,7 @@ Work loop:
 More:
   maxpm guide          how an agent works from the queue (the full loop)
   maxpm guide planner  how to split work into items and dependencies
-  maxpm guide setup    how to set up your agents to use river
+  maxpm guide setup    how to set up your agents to use MaximizePM
   maxpm --help         every command
 """
 
@@ -131,13 +131,13 @@ SETUP = """Setting up agents to use MaximizePM
      maxpm config set lease_ttl 7d --agent <person>
 
 5. Watch it:  maxpm serve --open
-   Sessions that river starts (maxpm launch, the page's Start, fresh sessions)
+   Sessions that MaximizePM starts (maxpm launch, the page's Start, fresh sessions)
    open in tmux when tmux is installed (maxpm view shows them all in one
    terminal), else in a Terminal tab. To choose: maxpm config set launch_in
    tmux|tab|window   (auto is the default).
 
 6. Optional, the Claude desktop app: plan, manage, and answer what waits on
-   you from a chat (river runs it with no folder):
+   you from a chat (MaximizePM runs it with no folder):
      maxpm setup-agent --claude-desktop    then quit and reopen the app
    The ChatGPT desktop app (Work and Codex modes) the same way:
      maxpm setup-agent --chatgpt-desktop   then restart the app
@@ -300,7 +300,7 @@ def _print_show(a):
     if a.get("holder_wait"):
         w = a["holder_wait"]
         left = core._short(core.parse_iso(w["until"]) - core.now())
-        print(f"  you wait for this person at most {w['max']} (human_wait_max; {left} left). Then river releases "
+        print(f"  you wait for this person at most {w['max']} (human_wait_max; {left} left). Then MaximizePM releases "
               f"#{w['item']}, which still waits on this item, and you take other work: maxpm go")
     if a.get("output"):
         print("  output:", a["output"])
@@ -462,7 +462,7 @@ def build_parser():
     for verb in ("own", "take"):
         x = gls.add_parser(verb, help="own a goal: you create and take the items that reach it; its agent items "
                            "are reserved for you"); x.add_argument("name")
-        x.add_argument("--lease", help="how long the claim lasts without a river command, and your leases on its "
+        x.add_argument("--lease", help="how long the claim lasts without a maxpm command, and your leases on its "
                        "items (default: the goal_lease setting, 4h)")
     x = gls.add_parser("give", help="hand a goal you own to another agent"); x.add_argument("name")
     x.add_argument("--to", required=True)
@@ -583,10 +583,10 @@ def build_parser():
 
     x = sub.add_parser("go", help="start or continue an agent session: name, role, item, briefing")
     x.add_argument("--project", help="project name(s) when this folder is not linked")
-    x.add_argument("--role", choices=core.ROLES, help="ask for a role instead of letting river pick")
+    x.add_argument("--role", choices=core.ROLES, help="ask for a role instead of letting MaximizePM pick")
     x.add_argument("--session", help="your Claude Code session name, so others can message this session")
     x.add_argument("--model", default=os.environ.get("RIVER_MODEL"),
-                   help="the model this session runs (default $RIVER_MODEL): river gives it only items its model is allowed for")
+                   help="the model this session runs (default $RIVER_MODEL): MaximizePM gives it only items its model is allowed for")
     x.add_argument("--chat", action="store_true", default=os.environ.get("RIVER_CHAT") == "1",
                    help="a chat app session with no folder or shell (default $RIVER_CHAT=1): every project, only "
                         "items that need no folder, the result in done --output")
@@ -715,7 +715,7 @@ def build_parser():
     x.add_argument("--message", action="store_true", help="the id is an alert: claim its item now, or keep it for after your current item")
     for kind, verb in (("alert", "tell an agent about work it probably needs to do"),
                        ("ask", "ask an agent a question")):
-        x = sub.add_parser(kind, help=f"{verb}: river {kind} [<agent>] \"...\" [--holder-of <id>] [--item <id>]"
+        x = sub.add_parser(kind, help=f"{verb}: maxpm {kind} [<agent>] \"...\" [--holder-of <id>] [--item <id>]"
                            + (" [--file <path>]" if kind == "ask" else ""))
         x.add_argument("words", nargs="+", metavar="[agent] text")
         x.add_argument("--holder-of", type=int, help="send it to whoever holds this item")
@@ -801,21 +801,21 @@ def build_parser():
     x.add_argument("--force", action="store_true", help="replace a folder that is not a link (your edits there are lost)")
     db = sub.add_parser("db", help="where the queue database is, and moving it to ~/.biggestriver")
     dbs = db.add_subparsers(dest="dcmd", required=True)
-    dbs.add_parser("path", help="print the database file river uses")
+    dbs.add_parser("path", help="print the database file MaximizePM uses")
     x = dbs.add_parser("move", help="copy a clone's data/river.db to ~/.biggestriver/river.db and use it from now on")
     x.add_argument("--force", action="store_true", help="even when agents were active in the last 10 minutes")
     sub.add_parser("mcp", help="an MCP server on stdin/stdout, for agents that cannot run shell commands")
-    x = sub.add_parser("guide", help="how to use river: worker loop, planner, or agent setup")
+    x = sub.add_parser("guide", help="how to use MaximizePM: worker loop, planner, or agent setup")
     x.add_argument("which", nargs="?", default="river",
                    choices=["river", "planner", "river-planner", "manager", "river-manager", "setup", "decisions"])
     x = sub.add_parser("setup-agent", help="print (or append) the instructions block for CLAUDE.md / AGENTS.md")
     x.add_argument("--append", metavar="FILE", help="append the block to this file if it is not there yet")
     x.add_argument("--claude-desktop", action="store_true",
-                   help="add river (maxpm mcp) to the Claude desktop app's MCP servers, leaving the others as they are")
+                   help="add MaximizePM (maxpm mcp) to the Claude desktop app's MCP servers, leaving the others as they are")
     x.add_argument("--chatgpt-desktop", "--codex", dest="codex", action="store_true",
-                   help="add river (maxpm mcp) to ~/.codex/config.toml, which the ChatGPT desktop app (Work and Codex "
+                   help="add MaximizePM (maxpm mcp) to ~/.codex/config.toml, which the ChatGPT desktop app (Work and Codex "
                         "modes) and the Codex CLI share, leaving the other servers as they are")
-    x.add_argument("--remove", action="store_true", help="with --claude-desktop or --chatgpt-desktop: take river out again")
+    x.add_argument("--remove", action="store_true", help="with --claude-desktop or --chatgpt-desktop: take MaximizePM out again")
     x.add_argument("--config", help="with --claude-desktop or --chatgpt-desktop: the config file (default: where the app keeps it)")
     return p
 
@@ -860,7 +860,7 @@ def _toml_load(text, f):
     try:
         return tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
-        raise RiverError(f"{f} is not valid TOML ({e}); fix it first, river does not overwrite it")
+        raise RiverError(f"{f} is not valid TOML ({e}); fix it first, MaximizePM does not overwrite it")
 
 
 def setup_codex_config(path=None, remove=False):
@@ -878,7 +878,7 @@ def setup_codex_config(path=None, remove=False):
     else:
         entry = claude_desktop_entry()
         if before is not None and (before.get("mcp_servers") or {}).get("river") == entry:
-            return f"river is already in {f}; nothing changed"
+            return f"MaximizePM is already in {f}; nothing changed"
         new = base.rstrip("\n") + ("\n\n" if base.strip() else "") + _toml_river_block(entry)
     after = _toml_load(new, f)
     if after is not None:
@@ -886,18 +886,18 @@ def setup_codex_config(path=None, remove=False):
         servers = lambda d: {k: v for k, v in ((d or {}).get("mcp_servers") or {}).items() if k != "river"}
         if others(after) != others(before) or servers(after) != servers(before) or (
                 not remove and after["mcp_servers"]["river"] != entry):
-            raise RiverError(f"river could not add its entry to {f} without changing other settings; add it by hand: "
+            raise RiverError(f"MaximizePM could not add its entry to {f} without changing other settings; add it by hand: "
                              f"codex mcp add river --env RIVER_CHAT=1 -- maxpm mcp")
     if old:
         f.with_name(f.name + ".bak").write_text(old)
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(new)
     if remove:
-        return f"took river out of {f} (the old file: {f.name}.bak). Restart the ChatGPT desktop app."
-    return (f"added river to {f}" + (f" (the old file: {f.name}.bak)" if old else "") + ".\n"
+        return f"took MaximizePM out of {f} (the old file: {f.name}.bak). Restart the ChatGPT desktop app."
+    return (f"added MaximizePM to {f}" + (f" (the old file: {f.name}.bak)" if old else "") + ".\n"
             "Restart the ChatGPT desktop app, then use Work or Codex mode (plain Chat mode does not reach servers "
-            "on this computer). Ask it, for example: \"plan my next work with river\" or \"what waits on me in river?\". "
-            "Codex CLI sessions see river too; in a project folder they work as usual.")
+            "on this computer). Ask it, for example: \"plan my next work with MaximizePM\" or \"what waits on me in MaximizePM?\". "
+            "Codex CLI sessions see MaximizePM too; in a project folder they work as usual.")
 
 
 def claude_desktop_entry():
@@ -910,7 +910,7 @@ def claude_desktop_entry():
     elif shutil.which("river"):
         cmd, args = str(Path(shutil.which("river")).resolve()), ["mcp"]
     else:
-        raise RiverError("cannot find the river program to give the Claude desktop app; install river first")
+        raise RiverError("cannot find the maxpm program to give the Claude desktop app; install MaximizePM first")
     return {"command": cmd, "args": args,
             "env": {"RIVER_DB": str(core.db_path().expanduser().resolve()), "RIVER_CHAT": "1"}}
 
@@ -923,7 +923,7 @@ def setup_claude_desktop(path=None, remove=False):
     try:
         data = json.loads(old) if old.strip() else {}
     except ValueError as e:
-        raise RiverError(f"{f} is not valid JSON ({e}); fix it first, river does not overwrite it")
+        raise RiverError(f"{f} is not valid JSON ({e}); fix it first, MaximizePM does not overwrite it")
     if not isinstance(data, dict) or not isinstance(data.get("mcpServers", {}), dict):
         raise RiverError(f"{f}: expected an object with an mcpServers object; fix it first")
     servers = data.setdefault("mcpServers", {})
@@ -934,7 +934,7 @@ def setup_claude_desktop(path=None, remove=False):
     else:
         entry = claude_desktop_entry()
         if servers.get("river") == entry:
-            return f"river is already in {f}; nothing changed"
+            return f"MaximizePM is already in {f}; nothing changed"
         servers["river"] = entry
     new = json.dumps(data, indent=2) + "\n"
     if old:
@@ -942,10 +942,10 @@ def setup_claude_desktop(path=None, remove=False):
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(new)
     if remove:
-        return f"took river out of {f} (the old file: {f.name}.bak). Quit and reopen the Claude desktop app."
-    return (f"added river to {f}" + (f" (the old file: {f.name}.bak)" if old else "") + ".\n"
-            "Quit and reopen the Claude desktop app. Then ask it, for example: \"plan my next work with river\", "
-            "\"what waits on me in river?\", or \"take a writing item from river\".")
+        return f"took MaximizePM out of {f} (the old file: {f.name}.bak). Quit and reopen the Claude desktop app."
+    return (f"added MaximizePM to {f}" + (f" (the old file: {f.name}.bak)" if old else "") + ".\n"
+            "Quit and reopen the Claude desktop app. Then ask it, for example: \"plan my next work with MaximizePM\", "
+            "\"what waits on me in MaximizePM?\", or \"take a writing item from MaximizePM\".")
 
 
 def install_skills(dest, copy=False, force=False):
@@ -956,7 +956,7 @@ def install_skills(dest, copy=False, force=False):
     for name in ("river", "river-planner", "river-manager"):
         src, dst = GUIDES / name, dest / name
         if not (src / "SKILL.md").is_file():
-            raise RiverError(f"no guide at {src}; reinstall river")
+            raise RiverError(f"no guide at {src}; reinstall MaximizePM")
         if dst.is_symlink():
             dst.unlink()
         elif dst.exists():
@@ -1724,7 +1724,7 @@ def dispatch(conn, a, actor):
         return core.accept(conn, a.id, actor)
     if c in ("alert", "ask") or (c == "note" and (len(a.words) > 1 or a.holder_of or a.item or a.goal)):
         if len(a.words) > 2:
-            raise RiverError("put the text in quotes: river " + c + " [<agent>] \"...\"")
+            raise RiverError("put the text in quotes: maxpm " + c + " [<agent>] \"...\"")
         to, text = (a.words[0], a.words[1]) if len(a.words) == 2 else (None, a.words[0])
         kind = {"ask": "question", "alert": "alert", "note": "note"}[c]
         return core.message(conn, kind, text, to, a.holder_of, a.item, getattr(a, "file", None), os.getcwd(), actor,
@@ -1905,7 +1905,7 @@ def render_manage(b):
         print((f"Act on what is new, then start {r} manage --watch again in the background." if b["new"] else
                f"Start {r} manage --watch again in the background."))
         return
-    out = [f"You are the river MANAGER {me}" + (f" (you took over from {b['took_over']})" if b.get("took_over") else "") + "."]
+    out = [f"You are the MaximizePM MANAGER {me}" + (f" (you took over from {b['took_over']})" if b.get("took_over") else "") + "."]
     if b["new_name"]:
         out.append(f"Pass --as {me} on every maxpm command.")
     st = b["status"]
@@ -1930,7 +1930,7 @@ def render_manage(b):
              f"with a time limit above {b['every']}; a foreground shell: add --step 9m). It exits on a new finding, "
              f"or after manage_every {b['every']} with one line; start it again each time."),
             *([] if b.get("chat") else [
-            "Messages: river delivers them into this session itself (native_message); you need no inbox poller."
+            "Messages: MaximizePM delivers them into this session itself (native_message); you need no inbox poller."
              if b.get("native") else f"Messages: keep {r} inbox --wait running as a background command (Claude Code: run_in_background; "
              f"Codex: its background shell). It exits with the new messages at once and wakes you; act on them, "
              f"then start it again."]),
@@ -1944,7 +1944,7 @@ def render_manage(b):
 def render_plan(b):
     me = b["agent"]
     r = f"maxpm --as {me}"
-    out = [f"You are river agent {me}. Role: PLANNER."
+    out = [f"You are MaximizePM agent {me}. Role: PLANNER."
            + (f" Focus: {', '.join(b['projects'])}." if b["projects"] else " Focus: every project.")]
     if core.queue_note():
         out.append(core.queue_note() + ". Tell the user if that is not what they meant.")
@@ -1964,7 +1964,7 @@ def render_plan(b):
             out += ["", f"TRACKER: project {n} uses {t}.",
                     "  Import its open issues with that tool before you plan new work:",
                     "  - Link form <tracker>:<key>: github:owner/repo#12, jira:PROJ-123, linear:ENG-42",
-                    "  - Skip an issue river has already: maxpm list --ref <tracker>:<key>",
+                    "  - Skip an issue MaximizePM has already: maxpm list --ref <tracker>:<key>",
                     f"  - Add the others: {r} add {n} \"<issue title>\" --ref <tracker>:<key> --ref-url <issue link> "
                     "--context \"<what the issue says>\"",
                     "  - Keep the tracker's priority (-p 0..4) and order, and link what must come first: "
@@ -2010,7 +2010,7 @@ def _chat_lines(r, has_item=True):
     """What a chat app session (no folder, no shell) does differently: river's words go to the river tool."""
     out = ["IN A CHAT (no folder, no shell): call the river tool with the words after `maxpm` "
            "(for example [\"--as\", \"<you>\", \"show\", \"12\"]). You cannot edit a repository, run a check, "
-           "commit, or deploy, so river gives this chat only items that need no folder."]
+           "commit, or deploy, so MaximizePM gives this chat only items that need no folder."]
     if has_item:
         out += ["  Do the item here: write, research, or decide with the user. The result goes into the queue,",
                 f"  not only the chat: a short result in {r} done <id> --output \"<the result>\"; a long one first in",
@@ -2031,7 +2031,7 @@ def render_go(b):
     me = b["agent"]
     r = f"maxpm --as {me}"
     out = []
-    out.append(f"You are river agent {me}. Role: {b['role'].upper()}. ({b['why']})")
+    out.append(f"You are MaximizePM agent {me}. Role: {b['role'].upper()}. ({b['why']})")
     if not maxpm_on_path():
         out.append("The command maxpm is not on PATH on this computer (an install from before that name): type river "
                    "in place of maxpm in every command below; it is the same command. To add maxpm, a person runs "
@@ -2097,7 +2097,7 @@ def render_go(b):
         st = b["stop"]
         out.append(f"STOP REQUESTED by {st['stop_by'] or 'someone'}: {st['stop_reason']}")
         if b["ended"]:
-            out += ["You hold nothing now. River released your goals and targets and gave your queued items back.",
+            out += ["You hold nothing now. MaximizePM released your goals and targets and gave your queued items back.",
                     "End this session now: stop, and tell the user it has ended and why (the reason above)."]
         else:
             out.append("You still hold: " + ", ".join(f"#{h['id']} {h['title']}" for h in b["stop_holds"]))
@@ -2129,7 +2129,7 @@ def render_go(b):
             w = b["human_wait"]
             left = core._short(core.parse_iso(w["until"]) - core.now())
             out.append("  WAITING ON A PERSON: " + ", ".join(f"#{h['id']} {h['title']}" for h in w["on"])
-                       + f". You wait {left} more (human_wait_max {b.get('human_wait_max')}); then river releases"
+                       + f". You wait {left} more (human_wait_max {b.get('human_wait_max')}); then MaximizePM releases"
                        + f" #{it['id']} and you take other work. Work on what does not need the answer meanwhile.")
         if it.get("refs"):
             out.append("  It comes from the tracker issue(s) above: mark them in progress there, if the tracker has that state.")
@@ -2202,7 +2202,7 @@ def render_go(b):
             conf = " --confirm all" if any(st["kind"] == "do" for g in groups for st in g["steps"]) else ""
             out += [f"  It is good:   {r} review pass {it['id']}{conf} --output \"<what you checked>\"",
                     f"  Problems:     {r} review fail {it['id']} \"<fix 1>\" \"<fix 2>\" --note \"<what you found>\" [--project <name>]",
-                    "                (river adds the fixes as items the review waits on; the review comes back after them)",
+                    "                (MaximizePM adds the fixes as items the review waits on; the review comes back after them)",
                     "                Add --ask to let the user approve the list first (one item in Needs you).",
                     f"  Findings that do not block the release: {r} add \"<title>\" --found-during {it['id']} --project <name>",
                     "",
@@ -2231,10 +2231,10 @@ def render_go(b):
                 f"  - You need the user (a decision, an approval, an account or payment step): put it in the queue, not only in chat:",
                 f"    {r} add \"<what to decide or do>\" --doer human --context \"<exactly what, where the material is>\" --blocks {it['id']} --release",
                 *([f"    Commit what is finished, and say in the item's --context what is left. Then run go again: take other work, or",
-                   f"    wait in maxpm wait. When the person answers, river starts a fresh session for #{it['id']} with the answer in its notes."]
+                   f"    wait in maxpm wait. When the person answers, MaximizePM starts a fresh session for #{it['id']} with the answer in its notes."]
                   if b.get("fresh_sessions") else []),
                 f"    With --keep you hold #{it['id']} and wait for the answer at most {b.get('human_wait_max', '30m')} (human_wait_max); "
-                f"then river releases it and you take other work.",
+                f"then MaximizePM releases it and you take other work.",
                 f"    When you ask the user in chat, one decision at a time in this form: maxpm guide decisions",
                 f"    That is what notifies them. A quick question instead: {r} send question --to "
                 + ("|".join(b.get("humans") or []) or "<person>") + " \"...\" --item " + str(it["id"]),
@@ -2290,7 +2290,7 @@ def render_go(b):
             "",
             f"Wait for work: {r} wait",
             "  Run it in the foreground, not as a background command, and never end your turn at your prompt: a",
-            "  blocking wait costs no tokens, and river ends an agent that sits idle at its prompt.",
+            "  blocking wait costs no tokens, and MaximizePM ends an agent that sits idle at its prompt.",
             "  It returns when work is pushed to you, an item gets ready here, or a message comes (give the shell",
             "  command a 10-minute time limit). Then do what it prints: WORK: run go. No work yet: run wait again.",
             "  END: no work came within wait_max; stop, tell the user this session has ended, and report",
@@ -2344,14 +2344,14 @@ def render_wait(res):
     if res["result"] == "stop":
         st = res["stop"]
         print(f"STOP: {st['stop_by'] or 'someone'} asked this session to stop: {st['stop_reason']}. "
-              + ("River released your goals and targets. End this session now, and tell the user it has ended and why."
+              + ("MaximizePM released your goals and targets. End this session now, and tell the user it has ended and why."
                  if res["ended"] else f"You still hold work: run {r} go, and follow it."))
     elif res["result"] == "work":
         print(f"WORK: {res['why']}. Run now: {r} go")
     elif res["result"] == "again":
         print(f"No work yet. Run again at once: {r} wait   (this session ends by itself in {res['left']} without work)")
     else:
-        print(f"END: no work came in {res['waited']}. River "
+        print(f"END: no work came in {res['waited']}. MaximizePM "
               + ("kept your registration: " + res["kept"] if res.get("kept") else "released your goals and unregistered you")
               + ". Stop now, and tell the user this session has ended and its tab can be closed.")
 
@@ -2649,7 +2649,7 @@ def render(a, res):
             elif res["result"] == "timeout":
                 print(f"(no new message in {res['waited']})")
             else:
-                print(f"NEW MESSAGES for {res['agent']}:" + (f" (and {res['still_open']} older, still open: river "
+                print(f"NEW MESSAGES for {res['agent']}:" + (f" (and {res['still_open']} older, still open: maxpm "
                                                              f"--as {res['agent']} inbox)" if res.get("still_open") else ""))
             res = res["messages"]
         elif not res:

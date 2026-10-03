@@ -211,7 +211,7 @@ LAUNCH_PLATFORMS = {
     }},
     "codex": {"label": "Codex", "exe": "codex", "family": "openai", "prefix": "codex_", "options": {
         "sandbox": {"kind": "choice", "default": "", "choices": ["read-only", "workspace-write", "danger-full-access"],
-                    "text": "sandbox (--sandbox); empty: Codex's own setting. river adds --add-dir for the queue folder"},
+                    "text": "sandbox (--sandbox); empty: Codex's own setting. MaximizePM adds --add-dir for the queue folder"},
         "approval": {"kind": "choice", "default": "", "choices": ["on-request", "never"],
                      "text": "when Codex asks before it runs a command (--ask-for-approval); empty: Codex's own setting"},
         # Codex takes full ids, and they change with each OpenAI release: update this list then.
@@ -651,12 +651,12 @@ def db_move(force=False):
     """Copy the clone's data/river.db to ~/.biggestriver/river.db (SQLite backup, safe while it is open),
     then rename the old file to river.db.moved so every later command uses the new one."""
     if os.environ.get("RIVER_DB"):
-        raise RiverError("RIVER_DB is set, so river does not use the default location; unset it first")
+        raise RiverError("RIVER_DB is set, so MaximizePM does not use the default location; unset it first")
     src, dst = LEGACY_DB, HOME_DB.expanduser()
     if dst.exists():
-        raise RiverError(f"{dst} exists already; river uses it (maxpm db path)")
+        raise RiverError(f"{dst} exists already; MaximizePM uses it (maxpm db path)")
     if not src.exists():
-        raise RiverError(f"no {src} to move; river already uses {dst}")
+        raise RiverError(f"no {src} to move; MaximizePM already uses {dst}")
     old = connect(src)
     try:
         if not force:
@@ -3808,7 +3808,7 @@ def stop_agent(conn, agent, reason, actor=None):
     native = None if waiting else _deliver_entry(conn, eid)
     return {"agent": agent, "reason": reason.strip(), "waiting": waiting, "holds": holds, "native": native,
             "ends": "now: maxpm wait returns STOP within seconds" if waiting
-            else "after its next river command, once it commits and releases its item"}
+            else "after its next maxpm command, once it commits and releases its item"}
 
 
 def stop_request(conn, name):
@@ -3885,7 +3885,7 @@ def _sweep(conn):
                           "WHERE i.reserved_until IS NOT NULL AND i.status='open' AND a.stop_at IS NULL AND "
                           "a.note LIKE ? AND a.last_seen=a.registered_at AND a.registered_at < ?",
                           (STARTED_NOTE + "%", late)).fetchall():
-        _free_pushes(conn, r["name"], f"{r['name']} never connected (no river command within connect_within)")
+        _free_pushes(conn, r["name"], f"{r['name']} never connected (no maxpm command within connect_within)")
     # A stopped session, or one that is gone, takes no work: nothing stays reserved for it, with or
     # without a time limit (an item it released after the stop, a prerequisite of an item it held).
     for r in conn.execute("SELECT DISTINCT a.* FROM agents a JOIN items i ON i.reserved_for=a.name "
@@ -3922,7 +3922,7 @@ def _sweep(conn):
                           (t,)).fetchall():
         conn.execute("UPDATE goals SET owner=NULL, owner_expires_at=NULL, owner_lease=NULL WHERE name=?", (r["name"],))
         _event(conn, None, "river", f"goal {r['name']} ownership expired (was {r['owner']})")
-        _send(conn, "notice", "river", f"your ownership of goal {r['name']} expired (goal_lease without a river "
+        _send(conn, "notice", "river", f"your ownership of goal {r['name']} expired (goal_lease without a maxpm "
               f"command); nobody owns it now, and its items are open to every agent. "
               f"Take it again if you still work on it: maxpm goal own {r['name']}", to=r["owner"])
     # An owner whose session is gone reserves nothing: the goal is free at once, not after goal_lease.
@@ -4658,7 +4658,7 @@ def _close(conn, item_id, status, actor, output=None, note=None, force=None):
         if it["doer"] == "human" and _is_ai(conn, actor):
             if not (note or "").strip():
                 raise RiverError(f"#{item_id} is for a person; to mark it {status} as an agent, say why the user "
-                                 f"no longer needs to do it: river {'done' if status == 'done' else 'drop'} {item_id} "
+                                 f"no longer needs to do it: maxpm {'done' if status == 'done' else 'drop'} {item_id} "
                                  f"--note \"<why>\"   (the user is told, and can undo it)")
             _record_takeover(conn, it, "done" if status == "done" else "dropped", note, actor)
         if it["assignee"] and actor and it["assignee"] != actor:
@@ -5028,7 +5028,7 @@ def review_fail(conn, item_id, fixes, note=None, project=None, actor=None, ask=F
                      priority=it["priority"], doer="human", actor=actor, notes=body,
                      context=(f"The review of release {it['target']} (#{it['id']}) found problems that block it"
                               + (f": {note}" if note else "") + ". The proposed fixes are the '- ' lines in the notes. "
-                              "Keep, edit, or delete lines, then mark this done: river adds each remaining line as a fix "
+                              "Keep, edit, or delete lines, then mark this done: MaximizePM adds each remaining line as a fix "
                               "item the release waits on. Drop it to add no fixes; the review then comes back."))
         conn.execute("UPDATE items SET kind='fixes' WHERE id=?", (h["id"],))
         dep_add(conn, it["id"], [h["id"]], actor, mode="release")
@@ -6195,7 +6195,7 @@ def launch_target(conn, project=None, agent=None, item=None, model=None, effort=
             why = "every project with ready work has an agent, so the most important ready item"
     p = _project(conn, top["project"])
     if not p["path"]:
-        raise RiverError(f"project {p['name']} has no folder, so river cannot start a session there: "
+        raise RiverError(f"project {p['name']} has no folder, so MaximizePM cannot start a session there: "
                          f"maxpm project path {p['name']} <folder>")
     if agent is None and top["agent"]:
         agent = agent_for_type(conn, top["agent"], p["id"])
@@ -6626,7 +6626,7 @@ def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None
             except RiverError as e:
                 brief["focus_note"] = f"The page opened this session to monitor #{f['id']}, but: {e}"
             else:
-                brief.update(role="monitor", item=item, why=f"river opened this session to follow deploy "
+                brief.update(role="monitor", item=item, why=f"MaximizePM opened this session to follow deploy "
                                                             f"#{f['found_during']} of {f['target']}")
                 return brief
         # Start or Dispatch opened this session for one item: claim it, or say why not.
@@ -6635,7 +6635,7 @@ def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None
                 item = claim(conn, f["id"], actor)
             except RiverError as e:
                 brief["focus_note"] = (f"THE PAGE STARTED THIS SESSION FOR #{f['id']} {f['title']}, BUT YOU CANNOT "
-                                       f"TAKE IT: {e}. River gives you other work instead; tell the user.")
+                                       f"TAKE IT: {e}. MaximizePM gives you other work instead; tell the user.")
             else:
                 brief.update(role="worker", item=item, why=f"the page started this session for #{f['id']}")
                 _set_role_note(conn, actor, "worker", item["id"])

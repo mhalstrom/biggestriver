@@ -1157,7 +1157,7 @@ class LaunchInTmux(unittest.TestCase):
         self.assertEqual(self.tmux.calls[-1], ["send-keys", "-t", "%0", "-l", "--", "-l; rm"])  # typed, never read as a key name
         # Nothing goes when one entry is not a key river sends; an agent may not type into another agent's terminal.
         for bad in ([{"key": "Enter"}, {"key": "kill-server"}], [{"text": ""}], [{"text": "x" * 4001}], "Enter", [{"key": "C-c"}] * 201):
-            with self.assertRaisesRegex(RiverError, "not a key river sends|a list of at most 200"):
+            with self.assertRaisesRegex(RiverError, "not a key MaximizePM sends|a list of at most 200"):
                 server.terminal_keys(self.c, name, bad, "mark")
         core.register(self.c, "other-agent")
         with self.assertRaisesRegex(RiverError, "only a person types into an agent's terminal"):

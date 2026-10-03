@@ -296,7 +296,7 @@ def loop(stop, interval_s=None):
                 run(conn)
             if SERVE_PORT.get("port") and server.reload_ready(conn):  # maxpm serve only: run the new code
                 conn.close()
-                server.restart_now("the river code changed")
+                server.restart_now("the MaximizePM code changed")
         except Exception as e:  # keep the loop alive; the next pass retries
             print(f"maxpm notify: {e}", flush=True)
         finally:

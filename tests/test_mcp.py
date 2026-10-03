@@ -143,7 +143,7 @@ class ChatApp(unittest.TestCase):
         os.makedirs(os.path.dirname(f))
         with open(f, "w") as fh:
             json.dump({"mcpServers": {"other": {"command": "x"}}, "theme": "dark"}, fh)
-        self.assertIn("added river", cli.setup_claude_desktop(f))
+        self.assertIn("added MaximizePM", cli.setup_claude_desktop(f))
         data = load(f)
         self.assertEqual(data["mcpServers"]["other"], {"command": "x"})
         self.assertEqual(data["theme"], "dark")
@@ -153,7 +153,7 @@ class ChatApp(unittest.TestCase):
         self.assertEqual(river["env"], {"RIVER_DB": str(core.db_path().resolve()), "RIVER_CHAT": "1"})
         self.assertTrue(os.path.exists(f + ".bak"))
         self.assertIn("nothing changed", cli.setup_claude_desktop(f))
-        self.assertIn("took river out", cli.setup_claude_desktop(f, remove=True))
+        self.assertIn("took MaximizePM out", cli.setup_claude_desktop(f, remove=True))
         self.assertEqual(load(f)["mcpServers"], {"other": {"command": "x"}})
         with open(f, "w") as fh:
             fh.write("{broken")
@@ -190,7 +190,7 @@ class ChatApp(unittest.TestCase):
             text = fh.read()
         self.assertEqual(text.count("[mcp_servers.river]"), 1)
         self.assertIn('RIVER_CHAT = "1"', text)
-        self.assertIn("took river out", cli.setup_codex_config(f, remove=True))
+        self.assertIn("took MaximizePM out", cli.setup_codex_config(f, remove=True))
         with open(f) as fh:
             self.assertEqual(fh.read().rstrip("\n"), old.rstrip("\n"))
         self.assertIn("nothing changed", cli.setup_codex_config(f, remove=True))
@@ -262,7 +262,7 @@ class HttpEndpoint(unittest.TestCase):
         text = r["result"]["content"][0]["text"]
         self.assertIn(f"YOUR ITEM #{self.text}: write the launch post", text)  # a chat: the code item waits
         self.assertIn("IN A CHAT", text)
-        self.assertRegex(text, r"You are river agent chat-")
+        self.assertRegex(text, r"You are MaximizePM agent chat-")
         code, r, _ = self.request("POST", {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
                                            "params": {"name": "done", "arguments": {"id": self.text, "output": "posted"}}}, sid)
         self.assertFalse(r["result"]["isError"])  # as the agent go named in this session

@@ -155,7 +155,7 @@ def open_agent_on(conn, item_id, runner=None, agent=None, person=None, actor=Non
         focus = f"unblock:{it['id']}"
     p = core._project(conn, it["project"])
     if not p["path"]:
-        raise RiverError(f"project {p['name']} has no folder, so river cannot start a session there: "
+        raise RiverError(f"project {p['name']} has no folder, so MaximizePM cannot start a session there: "
                          f"maxpm project path {p['name']} <folder>")
     return {**_open_focused(conn, p, focus, runner, agent, model, effort, launch_in, options),
             "item": {"id": it["id"], "title": it["title"]}}
@@ -171,7 +171,7 @@ def open_needs_you(conn, runner=None, agent=None, person=None, model=None, effor
         core._project(conn, p["name"]) for p in core.project_list(conn)]
     p = next((x for x in projects if x["path"]), None)
     if p is None:
-        raise RiverError("no project has a folder, so river cannot start a session: maxpm project path <name> <folder>")
+        raise RiverError("no project has a folder, so MaximizePM cannot start a session: maxpm project path <name> <folder>")
     return _open_focused(conn, p, "needs:" + (f"@{person}" if person else ""), runner, agent, model, effort, launch_in,
                          options)
 
@@ -193,7 +193,7 @@ def _target_folder(conn, target):
     p = next((core._project(conn, x["name"]) for x in core.target_show(conn, target)["projects"]
               if core._project(conn, x["name"])["path"]), None)
     if p is None:
-        raise RiverError(f"no project of target {target} has a folder, so river cannot start a session there: "
+        raise RiverError(f"no project of target {target} has a folder, so MaximizePM cannot start a session there: "
                          f"maxpm project path <name> <folder>")
     return p
 
@@ -274,7 +274,7 @@ def start_manager(conn, runner=None, agent=None, actor=None, model=None, effort=
         raise RiverError(f"{other} is the active manager; open its chat instead")
     p = next((core._project(conn, x["name"]) for x in core.project_list(conn) if x.get("path")), None)
     if p is None:
-        raise RiverError("no project has a folder, so river cannot start a session: maxpm project path <name> <folder>")
+        raise RiverError("no project has a folder, so MaximizePM cannot start a session: maxpm project path <name> <folder>")
     launch_in = core._launch_in(conn, p["id"], launch_in)
     _can_open_terminal(runner, f"cd {p['path']} && claude manage", launch_in)
     t = {"project": p["name"], "path": p["path"], "session_title": "river manager",
@@ -403,7 +403,7 @@ def _open_terminal(t, env, runner=None):
                                              text=True, timeout=20)))(script)
     except (OSError, subprocess.SubprocessError) as e:
         why = (getattr(e, "stderr", "") or str(e)).strip()
-        raise RiverError(f"could not open Terminal: {why}. macOS may ask once to let river control Terminal "
+        raise RiverError(f"could not open Terminal: {why}. macOS may ask once to let MaximizePM control Terminal "
                          f"(System Settings, Privacy & Security, Automation)")
 
 
@@ -449,7 +449,7 @@ def _tmux(*args, check=True):
         # A sandboxed session (Claude Code's sandbox, Codex's) cannot reach the tmux socket at all.
         if "Operation not permitted" in why or "Permission denied" in why:
             raise RiverError(f"tmux {args[0]}: {why}. A sandbox around this session blocks the tmux socket: run "
-                             f"this command outside the sandbox, or start the session from the river page")
+                             f"this command outside the sandbox, or start the session from the MaximizePM page")
         if check:
             raise RiverError(f"tmux {args[0]}: {why}")
         return None
@@ -1029,7 +1029,7 @@ def terminal_keys(conn, agent, keys, who=None):
             continue
         if isinstance(k, dict) and k.get("key") in TERMINAL_KEYS:
             continue
-        raise RiverError(f"not a key river sends: {k!r}")
+        raise RiverError(f"not a key MaximizePM sends: {k!r}")
     for k in keys:
         if "text" in k:
             _tmux("send-keys", "-t", pane, "-l", "--", k["text"])
@@ -1164,7 +1164,7 @@ def update_apply(repo=REPO, restart=_restart_soon):
     command pick up the new code on their next run, because `river` and the skills link into this folder."""
     st = update_status(repo)
     if not st["git"]:
-        raise RiverError("this river is not a git clone; update it the way you installed it")
+        raise RiverError("this copy of MaximizePM is not a git clone; update it the way you installed it")
     if st["fetch_error"]:
         raise RiverError(f"could not check for updates: {st['fetch_error']}")
     if not st["upstream"]:

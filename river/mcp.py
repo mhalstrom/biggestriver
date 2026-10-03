@@ -24,7 +24,7 @@ from .core import RiverError
 
 PROTOCOL = "2025-06-18"
 
-_AS = {"type": "string", "description": "your river agent name (default: the one go or plan gave you)"}
+_AS = {"type": "string", "description": "your MaximizePM agent name (default: the one go or plan gave you)"}
 TOOLS = [
     {"name": "river",
      "description": "Run any maxpm command and get its text output, for example [\"go\"], "
@@ -34,7 +34,7 @@ TOOLS = [
          "as": _AS,
          "cwd": {"type": "string", "description": "run in this folder (the project folder, for go and add)"}}}},
     {"name": "go",
-     "description": "Start or continue work: river names you, picks a role, claims an item, and prints a briefing "
+     "description": "Start or continue work: MaximizePM names you, picks a role, claims an item, and prints a briefing "
                     "that ends with what to run next.",
      "inputSchema": {"type": "object", "properties": {
          "as": _AS, "project": {"type": "string"}, "cwd": {"type": "string", "description": "the project folder"}}}},
@@ -60,7 +60,7 @@ TOOLS = [
      "description": "Your unread messages and the questions that wait for your answer.",
      "inputSchema": {"type": "object", "properties": {"as": _AS}}},
     {"name": "plan",
-     "description": "Plan with the user: river names you a planner and prints the overview, the open questions, "
+     "description": "Plan with the user: MaximizePM names you a planner and prints the overview, the open questions, "
                     "and the planner's rules (add items, dependencies, priorities).",
      "inputSchema": {"type": "object", "properties": {
          "as": _AS, "project": {"type": "string", "description": "project name(s) to focus on (default: all)"}}}},
@@ -154,19 +154,19 @@ class Server:
                 try:
                     code = cli.run(words) or 0
                 except RiverError as e:
-                    print(f"river: {e}", file=sys.stderr)
+                    print(f"maxpm: {e}", file=sys.stderr)
                     code = 2
                 except SystemExit as e:  # argparse errors and --help
                     code = e.code if isinstance(e.code, int) else 2
         except OSError as e:
-            err.write(f"river: {e}\n")
+            err.write(f"maxpm: {e}\n")
             code = 2
         finally:
             os.chdir(old)
             if env_agent is not None:
                 os.environ["RIVER_AGENT"] = env_agent
         text = out.getvalue() + err.getvalue()
-        m = re.search(r"^You are (?:river agent|the river MANAGER) (\S+?)(?: \(|\.)", text, re.M)
+        m = re.search(r"^You are (?:MaximizePM agent|the MaximizePM MANAGER) (\S+?)(?: \(|\.)", text, re.M)
         if m:
             self.agent = m.group(1)
         return text.strip() or "(no output)", code != 0
@@ -187,7 +187,7 @@ class Server:
             try:
                 text, bad = self.call(p.get("name"), p.get("arguments") or {})
             except (RiverError, KeyError) as e:
-                text, bad = f"river: {e}", True
+                text, bad = f"maxpm: {e}", True
             result = {"content": [{"type": "text", "text": text}], "isError": bad}
         elif method == "ping":
             result = {}
