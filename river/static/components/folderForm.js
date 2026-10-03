@@ -33,6 +33,12 @@ export function wireFolderForms(onAdded) {
   document.addEventListener("input", (e) => {
     if (e.target.dataset && e.target.dataset.ff === "path") hint(e.target.closest(".folderForm"), e.target.value.trim());
   });
+  // Enter in a field of the form does what Add folder does.
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || e.isComposing || !e.target.dataset || !e.target.dataset.ff) return;
+    const go = e.target.closest(".folderForm").querySelector("[data-ff-go]");
+    if (go) { e.preventDefault(); go.click(); }
+  });
   document.addEventListener("click", async (e) => {
     const form = e.target.closest(".folderForm"); if (!form) return;
     if (e.target.closest("[data-ff-pick]")) {

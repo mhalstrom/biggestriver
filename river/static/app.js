@@ -700,7 +700,7 @@ document.addEventListener("click", async (e) => {
   const la = t.closest("[data-launch]"); if (la) {
     if (la.dataset.busy) return; la.dataset.busy = "1"; setTimeout(() => delete la.dataset.busy, 4000);
     const ch = await chooseLaunch(S, { title: "Start an agent", go: "Start", pickWork: true });
-    if (!ch) return;
+    if (!ch) { delete la.dataset.busy; return; }  // closed with no start: the next click opens it again at once
     try { const w = ch.work || "";
       const r = w.startsWith("i:") ? await act("dispatch_item", { id: +w.slice(2), ...launchArgs(ch) })
         : await act("launch_agent", { project: w.startsWith("p:") ? w.slice(2) : undefined, ...launchArgs(ch) });
@@ -1086,6 +1086,16 @@ $("#setupSteps").addEventListener("click", async (e) => {
     }
     await openSetup();
   } catch (err) { /* act() showed the error */ }
+});
+// Enter in a field of the guide does what the button next to it does (the name, the first task, a tracker).
+// The fields of the folder form have their own (folderForm.js), and an option saves when it changes.
+$("#setupSteps").addEventListener("keydown", (e) => {
+  const f = e.target;
+  if (e.key !== "Enter" || e.isComposing || f.tagName !== "INPUT") return;
+  const b = f.id === "suName" ? '[data-su="register"]' : f.id === "suTaskTitle" ? '[data-su="task"]'
+    : f.dataset.trackerFor !== undefined ? `[data-su="tracker"][data-project="${CSS.escape(f.dataset.trackerFor)}"]` : null;
+  const btn = b && $("#setupSteps").querySelector(b);
+  if (btn) { e.preventDefault(); btn.click(); }
 });
 $("#setupSteps").addEventListener("change", async (e) => {
   const x = e.target.closest("[data-su-opt]"); if (!x) return;

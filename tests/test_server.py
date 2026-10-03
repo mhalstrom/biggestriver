@@ -2284,6 +2284,108 @@ def _chrome():
     return None
 
 
+class OnboardingForm(unittest.TestCase):
+    """The setup guide of the page (the first run): each field works with the Enter key, as its button does."""
+
+    DRIVER = """
+const post = (o) => navigator.sendBeacon("/__result", JSON.stringify(o));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const until = async (f, what) => { for (let i = 0; i < 150; i++) { const v = f(); if (v) return v; await sleep(100); } throw new Error("never: " + what); };
+const q = (s) => document.querySelector(s);
+// What a person does: type in the field, then press Enter.
+const enter = async (sel, text) => { const f = await until(() => q(sel), sel); f.focus(); f.value = text;
+  f.dispatchEvent(new Event("input", { bubbles: true }));
+  f.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); };
+try {
+  await until(() => !q("#setup").classList.contains("hidden") && q("#suName"), "the guide opens with the name step");
+  await enter("#suName", "mark");
+  await until(() => !q("#suName"), "the name step is done");
+  await enter('#setupSteps [data-ff="path"]', FOLDER);
+  await until(() => q("#suTaskTitle"), "the folder step is done, and the task step has its field");
+  await enter("#suTaskTitle", "add a README");
+  await until(() => !q("#suTaskTitle"), "the task step is done");
+  q("#setupSteps details.more").open = true;
+  await enter("[data-tracker-for]", "github owner/repo via gh");
+  await until(() => !q("[data-tracker-for]"), "the tracker is saved");
+  // Start an agent: Cancel in its dialog, and the next click opens the dialog again at once.
+  const open = () => !q("#launchDlg").classList.contains("hidden");
+  const cancel = () => [...document.querySelectorAll("#launchDlg button")].find((b) => b.textContent.trim() === "Cancel").click();
+  q("#setupSteps [data-launch]").click(); await until(open, "the launch dialog opens");
+  cancel(); await until(() => !open(), "the launch dialog closes");
+  q("#setupSteps [data-launch]").click(); await until(open, "the launch dialog opens again at once");
+  cancel();
+  const st = await (await fetch("/api/setup")).json(), state = await (await fetch("/api/state")).json();
+  post({ people: st.people, projects: st.folders.map((f) => f.projects), items: state.items.map((i) => [i.title, i.doer]), actor: q("#actor").value });
+} catch (e) { post({ error: String(e && e.stack || e) }); }
+"""
+
+    def test_the_fields_have_an_enter_key(self):
+        app = (server.STATIC / "app.js").read_text()
+        form = (server.STATIC / "components" / "folderForm.js").read_text()
+        self.assertRegex(app, r'\$\("#setupSteps"\)\.addEventListener\("keydown"')
+        for field in ('f.id === "suName"', 'f.id === "suTaskTitle"', "f.dataset.trackerFor"):
+            self.assertIn(field, app)
+        self.assertRegex(form, r'document\.addEventListener\("keydown"')
+
+    @unittest.skipUnless(_chrome(), "no Chrome on this computer (RIVER_CHROME names one)")
+    def test_each_step_works_with_the_enter_key_in_a_browser(self):
+        import threading
+        got, result = threading.Event(), {}
+        with tempfile.TemporaryDirectory() as d:
+            folder = os.path.join(os.path.realpath(d), "proj")
+            os.mkdir(folder)
+            driver = self.DRIVER.replace("FOLDER", json.dumps(folder)).encode()
+            page = (server.STATIC / "index.html").read_bytes().replace(
+                b"</body>", b'<script type="module" src="/__drive.js"></script></body>')
+
+            class H(server.Handler):
+                def do_GET(self):
+                    if self.path == "/":
+                        return self._send(200, page, "text/html; charset=utf-8")
+                    if self.path == "/__drive.js":
+                        return self._send(200, driver, "text/javascript; charset=utf-8")
+                    return super().do_GET()
+
+                def do_POST(self):
+                    if self.path == "/__result":
+                        result.update(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+                        got.set()
+                        return self._send(204, b"")
+                    return super().do_POST()
+
+            os.environ["RIVER_DB"] = os.path.join(d, "q.db")
+            self.addCleanup(os.environ.pop, "RIVER_DB", None)
+            try:
+                httpd = server._Server(("127.0.0.1", 0), H)
+            except PermissionError:
+                self.skipTest("no local port here (a sandbox)")
+            httpd.daemon_threads = True
+            threading.Thread(target=httpd.serve_forever, daemon=True).start()
+            chrome = subprocess.Popen(
+                [_chrome(), "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
+                 "--disable-extensions", "--window-size=1280,900", f"--user-data-dir={os.path.join(d, 'profile')}",
+                 f"http://127.0.0.1:{httpd.server_address[1]}/"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                ran = got.wait(90)
+            finally:
+                chrome.kill()
+                chrome.wait()
+                httpd.shutdown()
+                httpd.server_close()
+            if not ran:
+                self.skipTest("Chrome did not run the page here")
+            self.assertNotIn("error", result, result.get("error"))
+            self.assertEqual((result["people"], result["projects"], result["items"], result["actor"]),
+                             (["mark"], [["proj"]], [["add a README", "ai"]], "mark"))
+            c = core.connect()
+            try:
+                self.assertEqual([r["value"] for r in c.execute("SELECT value FROM settings WHERE key='tracker'")],
+                                 ["github owner/repo via gh"])
+            finally:
+                c.close()
+            self.assertIn("MaximizePM", Path(folder, "AGENTS.md").read_text())  # the folder got its block
+
+
 class TerminalDialogLayout(unittest.TestCase):
     """The Terminal dialog has its size from the browser window. The columns and rows of the tmux pane do not
     change it: the pane's text scrolls inside the dialog, and the view ends at the prompt."""
