@@ -1,4 +1,4 @@
-"""`river` command line. Every command takes --json and --as <agent>."""
+"""`maxpm` command line (`river` is the same command). Every command takes --json and --as <agent>."""
 
 from __future__ import annotations
 
@@ -18,44 +18,52 @@ GUIDES = next((p for p in (Path(__file__).resolve().parent / "skills", Path(__fi
 
 QUICKSTART = """MaximizePM (the maxpm command; river is the same command): a shared work queue for people and agent sessions.
 
-Items live in projects and can wait on other items. `river next` gives the
+Items live in projects and can wait on other items. `maxpm next` gives the
 most important ready item in the area you choose; `--claim` takes it.
 
-Agent sessions: run `river go` in the project folder. It names the session,
+Agent sessions: run `maxpm go` in the project folder. It names the session,
 picks a role (worker, unblocker, planner, idle), claims an item, and prints a
 briefing. Run it again after each item. To plan work with the user instead,
-run `river plan`: an overview, the open questions, and the planner's rules.
+run `maxpm plan`: an overview, the open questions, and the planner's rules.
 
 By hand:
-  river register <your-name> [--human] --note "what you work on"
+  maxpm register <your-name> [--human] --note "what you work on"
   export RIVER_AGENT=<your-name>
-  river project list                      what each project covers; pick the one you know
+  maxpm project list                      what each project covers; pick the one you know
 
 Work loop:
-  river next --project <name> --claim     take the next item where you have context
-  river next --mine --claim               or: next to what you did before (after your first item)
-  river show <id>                         read it
-  river done <id> --output "what changed" finish it   (or: river release <id>)
+  maxpm next --project <name> --claim     take the next item where you have context
+  maxpm next --mine --claim               or: next to what you did before (after your first item)
+  maxpm show <id>                         read it
+  maxpm done <id> --output "what changed" finish it   (or: maxpm release <id>)
 
 More:
-  river guide          how an agent works from the queue (the full loop)
-  river guide planner  how to split work into items and dependencies
-  river guide setup    how to set up your agents to use river
-  river --help         every command
+  maxpm guide          how an agent works from the queue (the full loop)
+  maxpm guide planner  how to split work into items and dependencies
+  maxpm guide setup    how to set up your agents to use river
+  maxpm --help         every command
 """
 
-# The block river init puts in AGENTS.md: only what an agent needs before its first river command.
+# The block maxpm init puts in AGENTS.md: only what an agent needs before its first maxpm command.
 # How to work (keep going, wait, report) is in the go and plan briefings, which update with river.
 AGENT_SNIPPET = """## Work queue
+
+This project uses MaximizePM (`maxpm`) to track work and who is doing it.
+When the user says "go" (or asks you to take work from the queue), run
+`maxpm go` in this folder and follow the briefing it prints, to its end.
+When the user says "plan", run `maxpm plan` and follow its briefing.
+"""
+
+# Earlier versions of the block, longest first; river init replaces them with AGENT_SNIPPET,
+# and river go says when a folder still has one. The product was called Biggest River before MaximizePM.
+# The command was river before maxpm (river stays the same command, so a block that names it still works).
+_SNIPPET_RIVER = """## Work queue
 
 This project uses MaximizePM (`river`) to track work and who is doing it.
 When the user says "go" (or asks you to take work from the queue), run
 `river go` in this folder and follow the briefing it prints, to its end.
 When the user says "plan", run `river plan` and follow its briefing.
 """
-
-# Earlier versions of the block, longest first; river init replaces them with AGENT_SNIPPET,
-# and river go says when a folder still has one. The product was called Biggest River before MaximizePM.
 _SNIPPET_BR = """## Work queue
 
 This project uses Biggest River (`river`) to track work and who is doing it.
@@ -98,11 +106,12 @@ gives you a role and an item, and says what to run when you finish.
 When the user says "plan", run `river plan` instead and ask the user what
 outcome they want before you add items.
 """
-OLD_SNIPPETS = [_WAIT_BLOCK, _KEEP_GOING_BLOCK, _PLAN_BLOCK, _SNIPPET_BR, _PLAN_BLOCK.split('When the user says "plan"')[0]]
+OLD_SNIPPETS = [_WAIT_BLOCK, _KEEP_GOING_BLOCK, _PLAN_BLOCK, _SNIPPET_RIVER, _SNIPPET_BR, _PLAN_BLOCK.split('When the user says "plan"')[0]]
 
-SETUP = """Setting up agents to use river
+SETUP = """Setting up agents to use MaximizePM
 
-1. Put the command on PATH:
+1. Put the command on PATH (install.sh does both; river is the same command, for blocks from before maxpm):
+     ln -s <repo>/bin/maxpm ~/.local/bin/maxpm
      ln -s <repo>/bin/river ~/.local/bin/river
 
 2. Tell your agents about it. Add this block to the instructions file your
@@ -110,37 +119,37 @@ SETUP = """Setting up agents to use river
 
 """ + "\n".join("     " + line for line in AGENT_SNIPPET.splitlines()) + """
 
-   Or let river add it:  river init   (AGENTS.md holds the rules and the block;
+   Or let maxpm add it:  maxpm init   (AGENTS.md holds the rules and the block;
    CLAUDE.md imports it with the line @AGENTS.md, so every agent reads one file)
 
 3. Claude Code only, optional: install the skills so they load when needed:
      ln -s <repo>/skills/river ~/.claude/skills/river
      ln -s <repo>/skills/river-planner ~/.claude/skills/river-planner
 
-4. Give each agent session its own name (river register <name>). A person
+4. Give each agent session its own name (maxpm register <name>). A person
    registers with --human and usually wants longer claims:
-     river config set lease_ttl 7d --agent <person>
+     maxpm config set lease_ttl 7d --agent <person>
 
-5. Watch it:  river serve --open
-   Sessions that river starts (river launch, the page's Start, fresh sessions)
-   open in tmux when tmux is installed (river view shows them all in one
-   terminal), else in a Terminal tab. To choose: river config set launch_in
+5. Watch it:  maxpm serve --open
+   Sessions that river starts (maxpm launch, the page's Start, fresh sessions)
+   open in tmux when tmux is installed (maxpm view shows them all in one
+   terminal), else in a Terminal tab. To choose: maxpm config set launch_in
    tmux|tab|window   (auto is the default).
 
 6. Optional, the Claude desktop app: plan, manage, and answer what waits on
    you from a chat (river runs it with no folder):
-     river setup-agent --claude-desktop    then quit and reopen the app
+     maxpm setup-agent --claude-desktop    then quit and reopen the app
    The ChatGPT desktop app (Work and Codex modes) the same way:
-     river setup-agent --chatgpt-desktop   then restart the app
+     maxpm setup-agent --chatgpt-desktop   then restart the app
 """
 
 HINTS = {
-    "register": "next: export RIVER_AGENT={name}, read river project list, then river next --project <name> --claim  (river guide for the full loop)",
-    "claim": "when finished: river done {id} --output \"what changed\"   cannot finish: river release {id} --note \"why\"   work found: river add <project> \"title\"",
-    "done": "next: river next --mine --claim (work next to what you just did)  or  river next --project <name> --claim",
-    "release": "next: river next --claim",
-    "empty": "nothing ready here. Try: river next (all projects), river next --unblocks <id>, river blockers <id>, river list",
-    "no_actor": "tip: river register <name> and export RIVER_AGENT=<name> so claims and history carry your name",
+    "register": "next: export RIVER_AGENT={name}, read maxpm project list, then maxpm next --project <name> --claim  (maxpm guide for the full loop)",
+    "claim": "when finished: maxpm done {id} --output \"what changed\"   cannot finish: maxpm release {id} --note \"why\"   work found: maxpm add <project> \"title\"",
+    "done": "next: maxpm next --mine --claim (work next to what you just did)  or  maxpm next --project <name> --claim",
+    "release": "next: maxpm next --claim",
+    "empty": "nothing ready here. Try: maxpm next (all projects), maxpm next --unblocks <id>, maxpm blockers <id>, maxpm list",
+    "no_actor": "tip: maxpm register <name> and export RIVER_AGENT=<name> so claims and history carry your name",
 }
 
 
@@ -287,12 +296,12 @@ def _print_show(a):
     if a.get("lease_expires_at"):
         print("  lease until:", a["lease_expires_at"])
     if a.get("hold_expires_at"):
-        print("  held until:", a["hold_expires_at"], "(renewed by your commands; river release ends it)")
+        print("  held until:", a["hold_expires_at"], "(renewed by your commands; maxpm release ends it)")
     if a.get("holder_wait"):
         w = a["holder_wait"]
         left = core._short(core.parse_iso(w["until"]) - core.now())
         print(f"  you wait for this person at most {w['max']} (human_wait_max; {left} left). Then river releases "
-              f"#{w['item']}, which still waits on this item, and you take other work: river go")
+              f"#{w['item']}, which still waits on this item, and you take other work: maxpm go")
     if a.get("output"):
         print("  output:", a["output"])
     if a.get("found_during"):
@@ -300,7 +309,7 @@ def _print_show(a):
     if a.get("found_here"):
         print("  found while doing this:", ", ".join(f"#{d['id']} {d['title']} ({d['status']})" for d in a["found_here"]))
     if a.get("message_count"):
-        print(f"  messages: {a['message_count']} (river thread --item {a['id']})")
+        print(f"  messages: {a['message_count']} (maxpm thread --item {a['id']})")
     if a.get("shipped_in"):
         print(f"  ship requested: joins deploy item #{a['shipped_in']}")
     if a.get("now_ready"):
@@ -339,7 +348,7 @@ def _unread_text(u, actor):
     if u["questions"]:
         parts.append(f"{u['questions']} question{'s' if u['questions'] > 1 else ''} to answer"
                      + (f", {u['questions_waiting']} waiting over {u['nudge_after']}" if u.get("questions_waiting") else ""))
-    return f"inbox: {', '.join(parts)} (river --as {actor} inbox)"
+    return f"inbox: {', '.join(parts)} (maxpm --as {actor} inbox)"
 
 
 def _footer(conn, actor):
@@ -347,7 +356,7 @@ def _footer(conn, actor):
         return
     r = conn.execute("SELECT 1 FROM agents WHERE name=?", (actor,)).fetchone()
     if not r:
-        print(f"(agent {actor} is not registered: river register {actor} [--human])", file=sys.stderr)
+        print(f"(agent {actor} is not registered: maxpm register {actor} [--human])", file=sys.stderr)
         return
     st = core.agent_status(conn, actor)
     holds = st["holds"]
@@ -390,7 +399,7 @@ def _fmt_msg(m, indent=""):
 
 def build_parser():
     p = argparse.ArgumentParser(prog=core.command_name(), description="MaximizePM: a dependency-ordered work queue for agents and people. maxpm and river are the same command.")
-    p.add_argument("--version", action="version", version=f"river {__version__}")
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     p.add_argument("--as", dest="actor", default=os.environ.get("RIVER_AGENT"), help="agent name (default $RIVER_AGENT)")
     p.add_argument("--quiet", "-q", action="store_true", default=bool(os.environ.get("RIVER_QUIET")),
@@ -402,10 +411,10 @@ def build_parser():
     x = prs.add_parser("add"); x.add_argument("name"); x.add_argument("--rank", type=int)
     x.add_argument("--description", "--notes", dest="notes", default="",
                    help="what the project covers and what context helps (agents read this to pick an area)")
-    x.add_argument("--path", help="folder this project lives in; river go run there finds it")
-    x.add_argument("--target", help="deploy target this project ships to (river target list)")
+    x.add_argument("--path", help="folder this project lives in; maxpm go run there finds it")
+    x.add_argument("--target", help="deploy target this project ships to (maxpm target list)")
     x = prs.add_parser("describe", help="set a project's description"); x.add_argument("name"); x.add_argument("text")
-    x = prs.add_parser("path", help="link a project to a folder (river go uses it)"); x.add_argument("name"); x.add_argument("path", nargs="?")
+    x = prs.add_parser("path", help="link a project to a folder (maxpm go uses it)"); x.add_argument("name"); x.add_argument("path", nargs="?")
     x.add_argument("--move", action="store_true", help="move a project that is linked to another folder (the user decides)")
     x = prs.add_parser("show", help="a project's description, who works on it, and its ready items"); x.add_argument("name")
     x = prs.add_parser("target", help="put a project in a deploy target (no target clears it)")
@@ -419,11 +428,11 @@ def build_parser():
 
     gl = sub.add_parser("goal", help="goals: outcomes in a project that one agent owns and works toward")
     gls = gl.add_subparsers(dest="gcmd", required=True)
-    x = gls.add_parser("add", help="river goal add <project> <name> --outcome \"...\" --done-when \"...\"")
+    x = gls.add_parser("add", help="maxpm goal add <project> <name> --outcome \"...\" --done-when \"...\"")
     x.add_argument("project"); x.add_argument("name"); x.add_argument("--outcome", default="")
     x.add_argument("--done-when", dest="done_when", default="", help="the test that shows the outcome is reached")
     x.add_argument("--rank", type=int, help="position among the project's goals (1 = first)")
-    x.add_argument("--shared", action="store_true", help="no owner, ever: river go gives the goal to no agent, and "
+    x.add_argument("--shared", action="store_true", help="no owner, ever: maxpm go gives the goal to no agent, and "
                    "its items stay open to every agent")
     x = gls.add_parser("list", help="open goals in order (--all: complete ones too)")
     x.add_argument("--project"); x.add_argument("--all", action="store_true")
@@ -432,7 +441,7 @@ def build_parser():
     x = gls.add_parser("edit"); x.add_argument("name"); x.add_argument("--outcome"); x.add_argument("--done-when", dest="done_when")
     x.add_argument("--rename")
     x.add_argument("--shared", dest="shared", action="store_true", default=None,
-                   help="no owner, ever: river go gives the goal to no agent, nobody can own it, and its items stay "
+                   help="no owner, ever: maxpm go gives the goal to no agent, nobody can own it, and its items stay "
                    "open to every agent (several agents work on it at the same time). A person or a manager sets it")
     x.add_argument("--owned", dest="shared", action="store_false", help="undo --shared: one agent can own the goal again")
     for verb in ("own", "take"):
@@ -464,7 +473,7 @@ def build_parser():
     x.add_argument("--to", required=True)
     tgs.add_parser("list")
 
-    x = sub.add_parser("add", help="add an item: river add [project] \"title\" (project from --blocks/--found-during or the folder)")
+    x = sub.add_parser("add", help="add an item: maxpm add [project] \"title\" (project from --blocks/--found-during or the folder)")
     x.add_argument("words", nargs="*", metavar="[project] title")
     x.add_argument("--from", dest="plan_file", metavar="FILE",
                    help="add every line of a plan file (an outline) as an item; a line waits on the lines indented under it")
@@ -503,7 +512,7 @@ def build_parser():
     _ref_args(x)
     x.add_argument("--unref", action="append", help="remove a tracker link (repeatable)")
     x.add_argument("--unreserve", action="store_true", help="end the reservation of an open item (\"reserved for <agent>\"), "
-                   "so every agent can take it: that agent, a person, or a manager (the same as river push <id> --cancel)")
+                   "so every agent can take it: that agent, a person, or a manager (the same as maxpm push <id> --cancel)")
 
     x = sub.add_parser("list", help="list items (open by default)")
     x.add_argument("--project"); x.add_argument("--status"); x.add_argument("--all", action="store_true")
@@ -548,6 +557,9 @@ def build_parser():
     x.add_argument("--move", action="store_true", default=None,
                    help="move the rules in CLAUDE.md to AGENTS.md; CLAUDE.md becomes @AGENTS.md")
     x.add_argument("--no-move", dest="move", action="store_false", help="keep CLAUDE.md and AGENTS.md apart")
+    x.add_argument("--refresh", action="store_true",
+                   help="in every project folder of the queue: bring the work queue block in CLAUDE.md and AGENTS.md "
+                        "to the current text (only a block that is there already; nothing else changes)")
     x.add_argument("--tracker", help="the outside tracker it uses: \"github owner/repo via gh\", \"jira PROJ via the Jira MCP server\"")
 
     x = sub.add_parser("go", help="start or continue an agent session: name, role, item, briefing")
@@ -585,7 +597,7 @@ def build_parser():
     g.add_argument("--tab", dest="launch_in", action="store_const", const="tab")
     g.add_argument("--window", dest="launch_in", action="store_const", const="window")
     g.add_argument("--tmux", dest="launch_in", action="store_const", const="tmux",
-                   help="in a pane of the tmux session 'river' (river view shows them); no Terminal app needed")
+                   help="in a pane of the tmux session 'river' (maxpm view shows them); no Terminal app needed")
     x.add_argument("--dry-run", action="store_true", help="say what it would start; open nothing")
     x = sub.add_parser("view", help="show every agent that runs in tmux (launch_in tmux) side by side in this terminal")
     g = x.add_mutually_exclusive_group()
@@ -604,7 +616,7 @@ def build_parser():
     qs = q.add_subparsers(dest="qcmd", required=True)
     x = qs.add_parser("add", help="add an item (at the end, --first, or --before <id>) or an instruction (--message)")
     x.add_argument("agent"); x.add_argument("id", type=int, nargs="?")
-    x.add_argument("--message", help="an instruction the agent reads first, at the top of its river go")
+    x.add_argument("--message", help="an instruction the agent reads first, at the top of its maxpm go")
     x.add_argument("--first", action="store_true"); x.add_argument("--before", type=int)
     x = qs.add_parser("list", help="an agent's queue (default: yours)"); x.add_argument("agent", nargs="?")
     x = qs.add_parser("remove", help="take an item (12) or an instruction (e5) out of a queue")
@@ -613,7 +625,7 @@ def build_parser():
     x.add_argument("--before", type=int); x.add_argument("--after", type=int)
     x = sub.add_parser("claim", help="take one ready item by id"); x.add_argument("id", type=int)
     x = sub.add_parser("done", help="finish an item"); x.add_argument("id", type=int); x.add_argument("--output")
-    x.add_argument("--ship", action="store_true", help="also ask for it to be deployed (river ship)")
+    x.add_argument("--ship", action="store_true", help="also ask for it to be deployed (maxpm ship)")
     x.add_argument("--note", help="why an agent may close a person's item (required then; the user is told)")
     x.add_argument("--synced", action="store_true", help="you already posted the result to its tracker issues")
     x.add_argument("--force", metavar="REASON", help="close it although items it waits on are still open (not a deploy)")
@@ -730,7 +742,7 @@ def build_parser():
     x = sub.add_parser("register", help="register this agent or person")
     x.add_argument("name"); x.add_argument("--human", action="store_true"); x.add_argument("--note", default="")
     x.add_argument("--session", help="the Claude Code session this agent runs in")
-    x = sub.add_parser("session", help="record the Claude Code session you run in: river session \"<name>\" --ref <ref>")
+    x = sub.add_parser("session", help="record the Claude Code session you run in: maxpm session \"<name>\" --ref <ref>")
     x.add_argument("name", nargs="+", help="the name ListAgents prints; put it in quotes when it has spaces or starts with #")
     x.add_argument("--ref", help="the short code in brackets after the name in ListAgents")
     x = sub.add_parser("unregister", help="remove an agent that holds nothing"); x.add_argument("name")
@@ -761,7 +773,7 @@ def build_parser():
     x.add_argument("--port", type=int); x.add_argument("--open", action="store_true")
     x.add_argument("--dev", action="store_true", help="restart on code change; the page reloads itself")
     x.add_argument("--restart", action="store_true",
-                   help="ask the river serve that runs to start again with the code on disk, and wait until it answers")
+                   help="ask the maxpm serve that runs to start again with the code on disk, and wait until it answers")
     sk = sub.add_parser("skills", help="install the agent guides as Claude Code skills")
     sks = sk.add_subparsers(dest="scmd", required=True)
     x = sks.add_parser("install", help="link river and river-planner into ~/.claude/skills")
@@ -780,9 +792,9 @@ def build_parser():
     x = sub.add_parser("setup-agent", help="print (or append) the instructions block for CLAUDE.md / AGENTS.md")
     x.add_argument("--append", metavar="FILE", help="append the block to this file if it is not there yet")
     x.add_argument("--claude-desktop", action="store_true",
-                   help="add river (river mcp) to the Claude desktop app's MCP servers, leaving the others as they are")
+                   help="add river (maxpm mcp) to the Claude desktop app's MCP servers, leaving the others as they are")
     x.add_argument("--chatgpt-desktop", "--codex", dest="codex", action="store_true",
-                   help="add river (river mcp) to ~/.codex/config.toml, which the ChatGPT desktop app (Work and Codex "
+                   help="add river (maxpm mcp) to ~/.codex/config.toml, which the ChatGPT desktop app (Work and Codex "
                         "modes) and the Codex CLI share, leaving the other servers as they are")
     x.add_argument("--remove", action="store_true", help="with --claude-desktop or --chatgpt-desktop: take river out again")
     x.add_argument("--config", help="with --claude-desktop or --chatgpt-desktop: the config file (default: where the app keeps it)")
@@ -856,7 +868,7 @@ def setup_codex_config(path=None, remove=False):
         if others(after) != others(before) or servers(after) != servers(before) or (
                 not remove and after["mcp_servers"]["river"] != entry):
             raise RiverError(f"river could not add its entry to {f} without changing other settings; add it by hand: "
-                             f"codex mcp add river --env RIVER_CHAT=1 -- river mcp")
+                             f"codex mcp add river --env RIVER_CHAT=1 -- maxpm mcp")
     if old:
         f.with_name(f.name + ".bak").write_text(old)
     f.parent.mkdir(parents=True, exist_ok=True)
@@ -931,7 +943,7 @@ def install_skills(dest, copy=False, force=False):
         elif dst.exists():
             if not force:
                 raise RiverError(f"{dst} is a folder, not a link; it may hold your own edits. "
-                                 f"Replace it with: river skills install --force")
+                                 f"Replace it with: maxpm skills install --force")
             shutil.rmtree(dst)
         if copy:
             shutil.copytree(src, dst)
@@ -1007,10 +1019,10 @@ def run(argv=None):
 def _run(args, conn):
     if args.cmd == "serve" and args.restart:
         res = serve_restart(conn)
-        print(f"river serve started again and answers on port {core.setting(conn, 'serve_port')}"
+        print(f"maxpm serve started again and answers on port {core.setting(conn, 'serve_port')}"
               + ("" if not res["stale"] else "; the code changed again since: run it once more")
               if res["restarted"] else
-              "river serve took the request but did not answer again within 60s: look at its terminal")
+              "maxpm serve took the request but did not answer again within 60s: look at its terminal")
         return 0 if res["restarted"] else 1
     if args.cmd == "serve":
         from . import server
@@ -1041,8 +1053,8 @@ def _run(args, conn):
             print(f"closed ({p['why']}): {p['name']}")
         done = sum(bool(p["done"]) for p in res["panes"])
         if done:
-            print(f"{done} of the {len(res['panes'])} panes: the session is done. river view --tidy closes "
-                  f"{'it' if done == 1 else 'them'}; river view --list says which and why.")
+            print(f"{done} of the {len(res['panes'])} panes: the session is done. maxpm view --tidy closes "
+                  f"{'it' if done == 1 else 'them'}; maxpm view --list says which and why.")
         sys.stdout.flush()
         os.execvp(res["show"][0], res["show"])  # tmux takes this terminal: the agents, side by side
     if args.json:
@@ -1063,7 +1075,7 @@ def _run(args, conn):
 
 
 def _record_process(conn, name):
-    """The agent CLI process that runs this command (for river who and river stop --kill)."""
+    """The agent CLI process that runs this command (for maxpm who and maxpm stop --kill)."""
     if not name or not conn.execute("SELECT 1 FROM agents WHERE name=? AND kind='ai'", (name,)).fetchone():
         return
     pid, cmd = core.agent_process()
@@ -1072,7 +1084,7 @@ def _record_process(conn, name):
 
 
 def ask_server_for_monitors(conn, timeout=5):
-    """A deploy item was just claimed and its target has a monitor text: ask the river serve of this queue
+    """A deploy item was just claimed and its target has a monitor text: ask the maxpm serve of this queue
     to open a session for the monitor item. Returns what it opened, or {"error": ...} when no server runs."""
     try:
         return ask_server(conn, "open_monitors", {}, timeout=timeout)
@@ -1086,11 +1098,11 @@ def in_sandbox():
     return bool(os.environ.get("SANDBOX_RUNTIME") or os.environ.get("CODEX_SANDBOX"))
 
 
-RETRY_WAIT = 1.0  # seconds between two tries to reach a river serve that does not listen
+RETRY_WAIT = 1.0  # seconds between two tries to reach a maxpm serve that does not listen
 
 
 def ask_server(conn, op, args, actor=None, timeout=5, retries=3):
-    """Ask the river serve of this queue to do one page action (server.OPS) and return its result; RiverError
+    """Ask the maxpm serve of this queue to do one page action (server.OPS) and return its result; RiverError
     says why not. The server runs outside any sandbox. A sandbox refuses a direct connection to this computer;
     its HTTP proxy passes the request when the sandbox allows the host, so the sandbox still decides."""
     import base64
@@ -1116,15 +1128,15 @@ def ask_server(conn, op, args, actor=None, timeout=5, retries=3):
             with e:
                 text = e.read().decode(errors="replace").strip()
             try:
-                why = json.loads(text)["error"]  # river serve refused: its own words
+                why = json.loads(text)["error"]  # maxpm serve refused: its own words
             except (ValueError, KeyError, TypeError):
                 why = None
             if why is None and proxy and (e.code == 403 or e.headers.get("X-Proxy-Error")):
-                raise RiverError(f"the sandbox around this session refused the connection to river serve on {host}"
+                raise RiverError(f"the sandbox around this session refused the connection to maxpm serve on {host}"
                                  f" ({text.splitlines()[0] if text else e.reason}). Allow the host {host} for this "
                                  f"command and run it again (Claude Code: the command's allowed_domains), or run it "
                                  f"outside the sandbox")
-            raise RiverError(why or f"no river serve answers on port {port} (HTTP {e.code}): start it with `river serve`")
+            raise RiverError(why or f"no maxpm serve answers on port {port} (HTTP {e.code}): start it with `maxpm serve`")
     def ask():
         try:
             return post()
@@ -1134,7 +1146,7 @@ def ask_server(conn, op, args, actor=None, timeout=5, retries=3):
             # The sandbox refused the direct connection. Its proxy is the way out that it controls.
             proxy = urlsplit(os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy") or "")
             if proxy.scheme != "http" or not proxy.hostname:
-                raise RiverError(f"the sandbox around this session refused the connection to river serve on {host}. "
+                raise RiverError(f"the sandbox around this session refused the connection to maxpm serve on {host}. "
                                  f"Allow the host {host} for this command, or run it outside the sandbox")
             return post(proxy)
     try:
@@ -1142,18 +1154,18 @@ def ask_server(conn, op, args, actor=None, timeout=5, retries=3):
             try:
                 return ask()
             except OSError as e:
-                # Nobody listens: river serve may start again just now (new code); it is back in a second or two.
+                # Nobody listens: maxpm serve may start again just now (new code); it is back in a second or two.
                 if not left or not isinstance(getattr(e, "reason", e), ConnectionRefusedError):
                     raise
                 time.sleep(RETRY_WAIT)
     except (OSError, ValueError, KeyError) as e:
-        raise RiverError(f"no river serve answers on port {port} ({e.__class__.__name__}): start it with `river serve`")
+        raise RiverError(f"no maxpm serve answers on port {port} ({e.__class__.__name__}): start it with `maxpm serve`")
 
 
 def serve_restart(conn, wait=60, sleep=None):
-    """river serve --restart: ask the river serve of this queue to start again with the code on disk (it
+    """maxpm serve --restart: ask the maxpm serve of this queue to start again with the code on disk (it
     refuses code that does not load), then wait until the new one answers. An agent runs this after a
-    commit that changes river's code; with no command, river serve does it by itself within a pass or two."""
+    commit that changes river's code; with no command, maxpm serve does it by itself within a pass or two."""
     sleep = sleep or time.sleep
     old = ask_server(conn, "serve_restart", {}, timeout=90)["boot"]
     for _ in range(int(wait)):
@@ -1171,17 +1183,17 @@ def _monitor_lines(m):
     """What happened to the monitor of a deploy that just started."""
     if isinstance(m, dict):
         return [f"monitor #{p['id']}: no session opened ({m['error']}). Start one in a folder of target "
-                f"{p['target']}: RIVER_FOCUS=monitor:{p['id']} claude go   (or another agent: river go reads RIVER_FOCUS)"
+                f"{p['target']}: RIVER_FOCUS=monitor:{p['id']} claude go   (or another agent: maxpm go reads RIVER_FOCUS)"
                 for p in m.get("pending", [])]
     return [f"monitor #{x['id']}: " + (f"no session opened: {x['error']}" if x.get("error") else
-            f"river serve opened {x['agent']} in {x['project']}" + (f" ({x['model']})" if x.get("model") else "")
+            f"maxpm serve opened {x['agent']} in {x['project']}" + (f" ({x['model']})" if x.get("model") else "")
             + " to follow the deploy") for x in m]
 
 
 def _stop_banner(me, st):
     return (f"STOP REQUESTED by {st['stop_by'] or 'someone'}: {st['stop_reason']}. Take no new work. Commit finished "
-            f"work, release or hand back your item with a note (river --as {me} release <id> --note \"...\"), "
-            f"then run river --as {me} go once more: it ends the session.")
+            f"work, release or hand back your item with a note (maxpm --as {me} release <id> --note \"...\"), "
+            f"then run maxpm --as {me} go once more: it ends the session.")
 
 
 def _print_queue(res):
@@ -1203,11 +1215,11 @@ def _hint(a, res, actor):
     if c in ("go", "plan"):
         return None
     if actor and c == "done":
-        return f"next: river --as {actor} go   (now: keep going while go gives you items, unless auto_continue is off)"
+        return f"next: maxpm --as {actor} go   (now: keep going while go gives you items, unless auto_continue is off)"
     if actor and (c == "release" or c == "review"):
-        return f"next: river --as {actor} go"
+        return f"next: maxpm --as {actor} go"
     if actor and c == "goal" and a.gcmd == "done":
-        return f"next: river --as {actor} go --role owner   (takes the highest-ranked goal nobody owns)"
+        return f"next: maxpm --as {actor} go --role owner   (takes the highest-ranked goal nobody owns)"
     if c == "register":
         return HINTS["register"].format(name=res["name"])
     if c == "next":
@@ -1215,7 +1227,7 @@ def _hint(a, res, actor):
             return None  # render already says what to try
         if a.claim:
             return HINTS["claim"].format(id=res[0]["id"])
-        return f"take it: river claim {res[0]['id']}   (or add --claim to river next)" + ("" if actor else "\n" + HINTS["no_actor"])
+        return f"take it: maxpm claim {res[0]['id']}   (or add --claim to maxpm next)" + ("" if actor else "\n" + HINTS["no_actor"])
     if c == "claim":
         return HINTS["claim"].format(id=res["id"])
     if c == "done":
@@ -1223,13 +1235,13 @@ def _hint(a, res, actor):
     if c == "release":
         return HINTS["release"]
     if c == "inbox" and isinstance(res, dict):
-        me = f"river --as {actor}"
+        me = f"maxpm --as {actor}"
         if res["result"] == "stop":
             return f"stop: {me} go"
         return (f"act on them, then start it again in the background: {me} inbox --wait" if res["messages"] else
                 f"start it again in the background: {me} inbox --wait")
     if c == "inbox" and res:
-        me = f"river --as {actor}"
+        me = f"maxpm --as {actor}"
         return (f"answer a question: {me} answer <id> \"...\"   reply: {me} send note --reply <id> \"...\"   "
                 f"whole conversation: {me} thread <id>")
     if not actor and c in ("list", "show", "who", "capacity", "blockers"):
@@ -1293,7 +1305,7 @@ def instructions_layout(folder):
 
 
 MOVE_HINT = ("CLAUDE.md holds this folder's rules, but Codex and other agents read AGENTS.md and miss them. "
-             "To give every agent one file: river init --move (the text of CLAUDE.md goes to AGENTS.md, and "
+             "To give every agent one file: maxpm init --move (the text of CLAUDE.md goes to AGENTS.md, and "
              "CLAUDE.md becomes the one line @AGENTS.md, which Claude Code reads as an import)")
 
 
@@ -1332,13 +1344,13 @@ def setup_instructions(folder, move=None):
 
 
 def folder_project_name(folder):
-    """The project name river init gives a folder: its name in lower case, other characters as dashes."""
+    """The project name maxpm init gives a folder: its name in lower case, other characters as dashes."""
     import re
     return re.sub(r"[^a-z0-9._-]+", "-", Path(folder).name.lower()).strip("-") or "project"
 
 
 def link_folder(conn, here, project=None, description="", actor=None):
-    """The project part of river init: create or link the project of a folder. project names one (it may
+    """The project part of maxpm init: create or link the project of a folder. project names one (it may
     move from another folder); else a project already linked here is kept, or one named after the folder
     is made. Returns (name or None when projects are linked here already, linked_here, lines)."""
     here = Path(here).resolve()
@@ -1365,8 +1377,45 @@ def link_folder(conn, here, project=None, description="", actor=None):
     return name, linked_here, lines
 
 
+def refresh_blocks(conn):
+    """maxpm init --refresh: in every project folder of the queue, replace an earlier work queue block in
+    CLAUDE.md and AGENTS.md with the current one. Only the block changes: a file with no block, or with
+    the current one, stays as it is, and no file is added. Returns [{"file", "project", "result"}], where
+    result is updated, current, or no block."""
+    out, seen = [], set()
+    for p in core.project_list(conn):
+        d = Path(p["path"]).expanduser() if p["path"] else None
+        if d is None or d in seen or not d.is_dir():
+            continue
+        seen.add(d)
+        for name in ("AGENTS.md", "CLAUDE.md"):
+            f = d / name
+            try:
+                text = f.read_text()
+            except (OSError, UnicodeDecodeError):
+                continue
+            prev = next((x for x in OLD_SNIPPETS if x in text), None)
+            if AGENT_SNIPPET in text or prev is None:
+                out.append({"file": str(f), "project": p["name"], "result": "current" if AGENT_SNIPPET in text else "no block"})
+                continue
+            f.write_text(text.replace(prev, AGENT_SNIPPET, 1))
+            out.append({"file": str(f), "project": p["name"], "result": "updated"})
+    return out
+
+
 def init_folder(args):
     conn = core.connect()
+    if args.refresh:
+        rows = refresh_blocks(conn)
+        for r in rows:
+            print(f"{r['file']}: " + {"updated": "updated the work queue block to the current text",
+                                      "current": "already has the current work queue block",
+                                      "no block": "has no work queue block; left as it is"}[r["result"]])
+        n = sum(r["result"] == "updated" for r in rows)
+        print(f"{n} file(s) updated in {len({r['file'].rsplit('/', 1)[0] for r in rows})} project folder(s). "
+              + ("Commit each one in its repository." if n else ""))
+        conn.close()
+        return 0
     here = Path.cwd()
     name, linked_here, lines = link_folder(conn, here, args.project, args.description, args.actor)
     if args.tracker:
@@ -1385,10 +1434,10 @@ def init_folder(args):
         lines += setup_instructions(here, move)
     shown = name or linked_here[0]
     if not core._project(conn, shown)["notes"]:
-        lines.append(f'next: describe it for agents: river project describe {shown} "what it covers, where, what helps"')
+        lines.append(f'next: describe it for agents: maxpm project describe {shown} "what it covers, where, what helps"')
     if not core.setting(conn, "tracker", project_id=core._project(conn, shown)["id"]):
-        lines.append(f'if it uses an issue tracker: river project tracker {shown} "github owner/repo via gh"')
-    lines.append(f"next: add work (river add {shown} \"...\") or open an agent here and say go")
+        lines.append(f'if it uses an issue tracker: maxpm project tracker {shown} "github owner/repo via gh"')
+    lines.append(f"next: add work (maxpm add {shown} \"...\") or open an agent here and say go")
     print("\n".join(lines))
     return 0
 
@@ -1448,7 +1497,7 @@ def dispatch(conn, a, actor):
                                    spread=a.project is None and a.item is None, options=opts or None, actor=actor)
             return {**t, "dry_run": True, "would_push_to": core.waiting_agent_for(conn, t["project"], t["item"]["id"])}
         if in_sandbox():
-            # A sandbox blocks Terminal and tmux for this command. river serve runs outside it and opens the
+            # A sandbox blocks Terminal and tmux for this command. maxpm serve runs outside it and opens the
             # session, as for the page's Start and Dispatch; a terminal tab can take a while to open.
             choice = {"agent": a.agent, "model": a.model, "effort": a.effort, "launch_in": a.launch_in, "options": opts}
             res = (ask_server(conn, "dispatch_item", {"id": a.item, **choice}, actor, timeout=40) if a.item is not None
@@ -1497,14 +1546,14 @@ def dispatch(conn, a, actor):
             raise RiverError("--keep and --release go with --blocks <id>")
         if a.plan_file:
             if len(a.words) > 1:
-                raise RiverError("with --from, give at most a project: river add [project] --from plan.md")
+                raise RiverError("with --from, give at most a project: maxpm add [project] --from plan.md")
             text = sys.stdin.read() if a.plan_file == "-" else Path(a.plan_file).expanduser().read_text()
             project = a.words[0] if a.words else core.project_for_add(conn, os.getcwd(), None)
             return core.add_plan(conn, project, text, actor, a.priority, a.doer, a.dry_run)
         if not a.words:
-            raise RiverError("give a title: river add [project] \"title\"   (or a plan file: river add --from plan.md)")
+            raise RiverError("give a title: maxpm add [project] \"title\"   (or a plan file: maxpm add --from plan.md)")
         if len(a.words) > 2:
-            raise RiverError("put the title in quotes: river add [project] \"title\"")
+            raise RiverError("put the title in quotes: maxpm add [project] \"title\"")
         if len(a.words) == 2:
             project, title = a.words
         else:
@@ -1545,7 +1594,7 @@ def dispatch(conn, a, actor):
         if a.once or a.now:
             return {"results": notify.run(conn, now_=a.now)}
         import threading
-        print(f"river notify: sending every {core.setting(conn, 'notify_interval')} (ctrl-c stops)", flush=True)
+        print(f"maxpm notify: sending every {core.setting(conn, 'notify_interval')} (ctrl-c stops)", flush=True)
         try:
             notify.loop(threading.Event())
         except KeyboardInterrupt:
@@ -1566,7 +1615,7 @@ def dispatch(conn, a, actor):
     if c == "manage":
         if a.watch:
             if not actor:
-                raise RiverError("--watch needs the manager's name: river --as <name> manage --watch")
+                raise RiverError("--watch needs the manager's name: maxpm --as <name> manage --watch")
             return core.manage_watch(conn, actor, a.step)
         res = core.manage(conn, os.getcwd(), actor, a.takeover)
         core.set_native(conn, res["agent"], *core.native_from_env(conn, os.environ))
@@ -1640,7 +1689,7 @@ def dispatch(conn, a, actor):
         if a.cancel:
             return core.cancel_push(conn, a.id, actor)
         if not a.to:
-            raise RiverError("river push <id> --to <agent> (or --cancel to take a push or a reservation back; the same as river edit <id> --unreserve)")
+            raise RiverError("maxpm push <id> --to <agent> (or --cancel to take a push or a reservation back; the same as maxpm edit <id> --unreserve)")
         return core.push(conn, a.id, a.to, a.note, actor)
     if c == "accept":
         if a.message:
@@ -1729,7 +1778,7 @@ def dispatch(conn, a, actor):
 def render_status(res):
     rows = res["projects"]
     if not rows:
-        print("(no projects: river project add <name>)")
+        print("(no projects: maxpm project add <name>)")
     else:
         w = max(4, *(len(p["project"]) for p in rows))
         print(f"{'project':<{w}}  {'done':>4} {'open':>4} {'ready':>5} {'working':>7} {'human':>5} {'waiting':>7}")
@@ -1755,7 +1804,7 @@ def render_status(res):
             print(f"  #{d['id']:<4} [{d['project']}] {_cut(d['title'])}  {tag}{d['due_text']}")
     if res.get("unsynced"):
         print()
-        print("Tracker not updated yet (post the output, close the issue, then river synced <id>):")
+        print("Tracker not updated yet (post the output, close the issue, then maxpm synced <id>):")
         for u in res["unsynced"]:
             print(f"  #{u['id']:<4} [{u['project']}] {_cut(u['title'])}  " + " ".join(x["ref"] for x in u["refs"]))
     if res["human_waiting"]:
@@ -1777,8 +1826,8 @@ Change the plan only; do not take or do the work (claims refuse for this session
   Order:         {r} dep <id> --on <id> [--kind feeds|conflicts]   Importance: {r} prio <id> 0 (on the outcome only)
   Model:         --model sonnet|opus|fable --effort low..max (advice); --min-model/--max-model only when a wrong model is costly
   Fix:           {r} edit <id> ...   {r} move <id> --before <id>   {r} drop <id>   {r} blocked <id> --reason "..."
-  Progress:      river status   river log --since 7d   river blockers <id>
-Ask the user about each open question below that matters to what they want. The full guide: river guide planner
+  Progress:      maxpm status   maxpm log --since 7d   maxpm blockers <id>
+Ask the user about each open question below that matters to what they want. The full guide: maxpm guide planner
 When the user wants work done in this session instead: {r} go"""
 
 
@@ -1795,7 +1844,7 @@ def _findings_lines(f, r):
                    f"{x['agent']} <id>) or stop it ({r} stop {x['agent']} --reason \"no work\")")
     for x in f.get("not_connected", []):
         out.append(f"  NOT CONNECTED {x['agent']}: started {x['since']} ago" + (f" for #{x['item']['id']} {_cut(x['item']['title'], 40)}" if x["item"] else "")
-                   + f", and ran no river command: its agent did not start or waits on a prompt in its terminal. "
+                   + f", and ran no maxpm command: its agent did not start or waits on a prompt in its terminal. "
                    f"Tell the user; then {r} stop {x['agent']} --reason \"did not start\" and launch again")
     for x in f["uncovered"]:
         t = x.get("agent_type")
@@ -1814,7 +1863,7 @@ def _findings_lines(f, r):
 
 def render_manage(b):
     me = b["agent"]
-    r = f"river --as {me}"
+    r = f"maxpm --as {me}"
     if "result" in b:  # --watch
         lines = _findings_lines(b["findings"], r)
         print(("CHANGED: " + ", ".join(b["new"]) if b["new"] else "NOTHING NEW")
@@ -1831,7 +1880,7 @@ def render_manage(b):
         return
     out = [f"You are the river MANAGER {me}" + (f" (you took over from {b['took_over']})" if b.get("took_over") else "") + "."]
     if b["new_name"]:
-        out.append(f"Pass --as {me} on every river command.")
+        out.append(f"Pass --as {me} on every maxpm command.")
     st = b["status"]
     out += ["", "Projects: " + ", ".join(f"{p['project']} {p['ready']} ready/{p['open']} open" for p in st["projects"][:12]
                                           if p.get("open")),
@@ -1845,9 +1894,9 @@ def render_manage(b):
             f"  kill:    {r} stop <agent> --kill --reason \"...\"   emergency only, and only after the user says yes",
             f"  targets: {r} target give <target> --to <agent>",
             f"  config:  {r} config set launch_agents|default_model|default_effort ...",
-            (f"  tidy:    river serve closes the tmux panes of finished sessions every tidy_every {b['tidy_every']}; "
-             f"river view --tidy does it now" if core.parse_duration(b["tidy_every"]).total_seconds() else
-             f"  tidy:    tidy_every is 0s: run river view --tidy for the tmux panes of finished sessions"),
+            (f"  tidy:    maxpm serve closes the tmux panes of finished sessions every tidy_every {b['tidy_every']}; "
+             f"maxpm view --tidy does it now" if core.parse_duration(b["tidy_every"]).total_seconds() else
+             f"  tidy:    tidy_every is 0s: run maxpm view --tidy for the tmux panes of finished sessions"),
             (f"In a chat, run {r} manage again when the user asks what changed (manage --watch is for a terminal)."
              if b.get("chat") else
              f"Then watch: keep {r} manage --watch running as a background command (Claude Code: run_in_background "
@@ -1858,7 +1907,7 @@ def render_manage(b):
              if b.get("native") else f"Messages: keep {r} inbox --wait running as a background command (Claude Code: run_in_background; "
              f"Codex: its background shell). It exits with the new messages at once and wakes you; act on them, "
              f"then start it again."]),
-            "The rules: river guide manager"]
+            "The rules: maxpm guide manager"]
     if b.get("chat"):
         out += [""] + _chat_lines(r, False)[:1] + [
             "  launch still works from a chat: it opens a terminal on this computer with a coding agent."]
@@ -1867,7 +1916,7 @@ def render_manage(b):
 
 def render_plan(b):
     me = b["agent"]
-    r = f"river --as {me}"
+    r = f"maxpm --as {me}"
     out = [f"You are river agent {me}. Role: PLANNER."
            + (f" Focus: {', '.join(b['projects'])}." if b["projects"] else " Focus: every project.")]
     if core.queue_note():
@@ -1881,14 +1930,14 @@ def render_plan(b):
                 "  If the user's goal is about this folder, create its project first, then add items to it:",
                 f"  {r} project add <name> --description \"<what it covers>\" --path {b['cwd']}"]
     if b["new_name"]:
-        out.append(f"Your shell may not keep environment variables, so pass --as {me} on every river command.")
+        out.append(f"Your shell may not keep environment variables, so pass --as {me} on every maxpm command.")
     out += ["", PLAN_RULES.format(r=r)]
     for n, t in (b.get("trackers") or {}).items():
         if t:
             out += ["", f"TRACKER: project {n} uses {t}.",
                     "  Import its open issues with that tool before you plan new work:",
                     "  - Link form <tracker>:<key>: github:owner/repo#12, jira:PROJ-123, linear:ENG-42",
-                    "  - Skip an issue river has already: river list --ref <tracker>:<key>",
+                    "  - Skip an issue river has already: maxpm list --ref <tracker>:<key>",
                     f"  - Add the others: {r} add {n} \"<issue title>\" --ref <tracker>:<key> --ref-url <issue link> "
                     "--context \"<what the issue says>\"",
                     "  - Keep the tracker's priority (-p 0..4) and order, and link what must come first: "
@@ -1914,13 +1963,13 @@ def render_plan(b):
     section("Stuck on something outside the queue", q["stuck"],
             lambda x: f"#{x['id']:<4} [{x['project']}] {_cut(x['title'], 60)}  ({x['blocked_text']})"
                       + (f" (holds up {x['holds_up']})" if x["holds_up"] else ""))
-    section("Marked replan: work grew after an agent started (split, re-scope, then river replanned <id>)",
+    section("Marked replan: work grew after an agent started (split, re-scope, then maxpm replanned <id>)",
             q["replan"], lambda x: f"#{x['id']:<4} [{x['project']}] {_cut(x['title'], 60)}  "
                                    f"({x['late_prereqs']} prerequisites added while claimed)")
     section("Due dates", q.get("due", []), lambda x: f"#{x['id']:<4} [{x['project']}] {_cut(x['title'], 60)}  "
             f"({'OVERDUE' if x['due_state'] == 'overdue' else 'due soon' if x['due_state'] == 'soon' else 'due'} "
             f"{x['due_text']}; {x['open_before']} open before it)")
-    section("May be done or stale (check each, then river check <id> done|partial|open)", q.get("suspect", []),
+    section("May be done or stale (check each, then maxpm check <id> done|partial|open)", q.get("suspect", []),
             lambda x: f"#{x['id']:<4} [{x['project']}] {_cut(x['title'], 60)}  ({', '.join(x['reasons'])})")
     section("Waiting on a human", q["human_waiting"], lambda x: f"#{x['id']:<4} [{x['project']}] {_cut(x['title'])}")
     section("Items with no notes or context", q["items_without_notes"],
@@ -1932,7 +1981,7 @@ def render_plan(b):
 
 def _chat_lines(r, has_item=True):
     """What a chat app session (no folder, no shell) does differently: river's words go to the river tool."""
-    out = ["IN A CHAT (no folder, no shell): call the river tool with the words after `river` "
+    out = ["IN A CHAT (no folder, no shell): call the river tool with the words after `maxpm` "
            "(for example [\"--as\", \"<you>\", \"show\", \"12\"]). You cannot edit a repository, run a check, "
            "commit, or deploy, so river gives this chat only items that need no folder."]
     if has_item:
@@ -1945,18 +1994,28 @@ def _chat_lines(r, has_item=True):
     return out
 
 
+def maxpm_on_path():
+    """True when a command finds maxpm here. An install from before the name maxpm has only river on PATH."""
+    import shutil
+    return bool(shutil.which("maxpm"))
+
+
 def render_go(b):
     me = b["agent"]
-    r = f"river --as {me}"
+    r = f"maxpm --as {me}"
     out = []
     out.append(f"You are river agent {me}. Role: {b['role'].upper()}. ({b['why']})")
+    if not maxpm_on_path():
+        out.append("The command maxpm is not on PATH on this computer (an install from before that name): type river "
+                   "in place of maxpm in every command below; it is the same command. To add maxpm, a person runs "
+                   "install.sh of the clone again, or the setup guide of the page.")
     if core.queue_note():
         out.append(core.queue_note() + ". Tell the user if that is not what they meant.")
     if b.get("old_blocks"):
-        out.append(f"This folder's agent block is old ({', '.join(b['old_blocks'])}): run river init there to update "
+        out.append(f"This folder's agent block is old ({', '.join(b['old_blocks'])}): run maxpm init there to update "
                    "it. This briefing is current; follow it.")
     if b["new_name"]:
-        out.append(f"Your shell may not keep environment variables, so pass --as {me} on every river command.")
+        out.append(f"Your shell may not keep environment variables, so pass --as {me} on every maxpm command.")
     # Only Claude Code has session names and ListAgents; it sets CLAUDECODE in the commands it runs.
     if not b.get("session") and os.environ.get("CLAUDECODE"):
         out.append(f"Record your Claude Code session name once, so others can message this session "
@@ -1990,7 +2049,7 @@ def render_go(b):
                    + ("   (you took it now: nobody owned it)" if b.get("took_goal") else ""))
         if gb["done_when"]:
             out.append(f"  done when: {gb['done_when']}")
-        out.append(f"  Its agent items are reserved for you while you own it; each river command renews your claim for "
+        out.append(f"  Its agent items are reserved for you while you own it; each maxpm command renews your claim for "
                    f"{gb['lease']} (goal_lease), and your leases on its items last that long too.")
         def st(o):
             return ("ready" if o["ready"] else o["status"].replace("_", " ")
@@ -2017,7 +2076,7 @@ def render_go(b):
             out.append("You still hold: " + ", ".join(f"#{h['id']} {h['title']}" for h in b["stop_holds"]))
             out += ["1. Commit the work that is finished (tests first, as the project says).",
                     f"2. Finished: {r} done <id> --output \"<commit>\". Not finished: {r} release <id> --note "
-                    "\"<what is done, what is left>\", or hand it on: river give <id> --to <agent>.",
+                    "\"<what is done, what is left>\", or hand it on: maxpm give <id> --to <agent>.",
                     f"3. Run {r} go again: it ends the session. Take no new work."]
         print("\n".join(out).rstrip())
         return
@@ -2145,11 +2204,11 @@ def render_go(b):
                 f"  - You need the user (a decision, an approval, an account or payment step): put it in the queue, not only in chat:",
                 f"    {r} add \"<what to decide or do>\" --doer human --context \"<exactly what, where the material is>\" --blocks {it['id']} --release",
                 *([f"    Commit what is finished, and say in the item's --context what is left. Then run go again: take other work, or",
-                   f"    wait in river wait. When the person answers, river starts a fresh session for #{it['id']} with the answer in its notes."]
+                   f"    wait in maxpm wait. When the person answers, river starts a fresh session for #{it['id']} with the answer in its notes."]
                   if b.get("fresh_sessions") else []),
                 f"    With --keep you hold #{it['id']} and wait for the answer at most {b.get('human_wait_max', '30m')} (human_wait_max); "
                 f"then river releases it and you take other work.",
-                f"    When you ask the user in chat, one decision at a time in this form: river guide decisions",
+                f"    When you ask the user in chat, one decision at a time in this form: maxpm guide decisions",
                 f"    That is what notifies them. A quick question instead: {r} send question --to "
                 + ("|".join(b.get("humans") or []) or "<person>") + " \"...\" --item " + str(it["id"]),
                 "",
@@ -2187,17 +2246,17 @@ def render_go(b):
             f"  2. Add items, one checkable outcome each: {r} add <project> \"<title>\" --doer ai|human --notes \"<files, commands, how to know it is done>\"",
             f"  3. Link what must come first: {r} dep <id> --on <id> ...   Set importance on the outcome only: {r} prio <id> 0",
             f"  4. Then run {r} go to take the first item, or stop and let other sessions take them.",
-            f"  (Full planning guide: river guide planner)",
+            f"  (Full planning guide: maxpm guide planner)",
         ]
     elif b.get("chat"):
         out += ["NOTHING FOR THIS CHAT NOW.",
-                "Tell the user what waits on them (below), and ask what they want to do: plan (river plan), "
-                "manage the agents (river manage), or answer what waits on them. Do not wait for work in a chat."]
+                "Tell the user what waits on them (below), and ask what they want to do: plan (maxpm plan), "
+                "manage the agents (maxpm manage), or answer what waits on them. Do not wait for work in a chat."]
     else:
         out.append("NOTHING FOR YOU NOW.")
         if b.get("queue_waiting"):
             out.append("Your queue holds items that are not ready yet: " + ", ".join(
-                f"#{e['item']} {_cut(e['title'], 40)}" for e in b["queue_waiting"][:5]) + "; river wait wakes you when one is.")
+                f"#{e['item']} {_cut(e['title'], 40)}" for e in b["queue_waiting"][:5]) + "; maxpm wait wakes you when one is.")
         for h in b.get("held_by_others", []):
             out.append(f"  #{h['id']} {h['title']}  (held by {h['assignee']})")
         out += [
@@ -2209,7 +2268,7 @@ def render_go(b):
             "  command a 10-minute time limit). Then do what it prints: WORK: run go. No work yet: run wait again.",
             "  END: no work came within wait_max; stop, tell the user this session has ended, and report",
             "  everything you finished in it.",
-            f"  To work in another project instead: river project list, then {r} go --project <name>.",
+            f"  To work in another project instead: maxpm project list, then {r} go --project <name>.",
         ]
     msg = _unread_text(b.get("messages") or {"unread": 0, "questions": 0}, me)
     if msg:
@@ -2224,7 +2283,7 @@ def render_go(b):
     print("\n".join(out))
 
 
-def _writeback_lines(it, r="river", tracker=""):
+def _writeback_lines(it, r="maxpm", tracker=""):
     """What to do in the tracker after an item with links closes."""
     todo = [x for x in it["refs"] if not x.get("synced_at")]
     if not todo:
@@ -2239,11 +2298,11 @@ def _writeback_lines(it, r="river", tracker=""):
     return out
 
 
-def render_cleanup(rows, r="river"):
+def render_cleanup(rows, r="maxpm"):
     if not rows:
         print("Nothing suspect: every open item looks as the queue says.")
         return
-    print(f"{len(rows)} item(s) may be done or stale. Check each one: its history (river show <id>), "
+    print(f"{len(rows)} item(s) may be done or stale. Check each one: its history (maxpm show <id>), "
           f"git log --grep '#<id>', and the files it touches. Then record what you found.")
     for s in rows:
         print(f"#{s['id']:<4} [{s['project']}] {_cut(s['title'], 70)}" + ("  (person's item)" if s["doer"] == "human" else "")
@@ -2254,7 +2313,7 @@ def render_cleanup(rows, r="river"):
 
 
 def render_wait(res):
-    r = f"river --as {res['agent']}"
+    r = f"maxpm --as {res['agent']}"
     if res["result"] == "stop":
         st = res["stop"]
         print(f"STOP: {st['stop_by'] or 'someone'} asked this session to stop: {st['stop_reason']}. "
@@ -2275,10 +2334,10 @@ def render(a, res):
     if c == "wait":
         return render_wait(res)
     if c == "cleanup":
-        return render_cleanup(res, f"river --as {a.actor}" if a.actor else "river")
+        return render_cleanup(res, f"maxpm --as {a.actor}" if a.actor else "maxpm")
     if c == "done" and isinstance(res, dict) and res.get("refs"):
         _print_show(res)
-        lines = _writeback_lines(res, f"river --as {a.actor}" if a.actor else "river", res.get("tracker", ""))
+        lines = _writeback_lines(res, f"maxpm --as {a.actor}" if a.actor else "maxpm", res.get("tracker", ""))
         if lines:
             print()
             print("\n".join(lines))
@@ -2303,7 +2362,7 @@ def render(a, res):
     if c == "goal":
         rows = res if isinstance(res, list) else [res]
         if not rows:
-            print("(no open goals: river goal add <project> <name> --outcome \"...\" --done-when \"...\")")
+            print("(no open goals: maxpm goal add <project> <name> --outcome \"...\" --done-when \"...\")")
         for g in rows:
             print(_fmt_goal(g))
             if isinstance(res, dict):
@@ -2314,13 +2373,13 @@ def render(a, res):
                 for it in g.get("items", []):
                     print("  " + _fmt_item(it, show_reason=False))
                 if not g.get("items"):
-                    print(f"  no items yet: river add \"<title>\" --goal {g['name']}")
+                    print(f"  no items yet: maxpm add \"<title>\" --goal {g['name']}")
         return
     if c == "review" and a.rcmd == "step":
         rows = [res] if isinstance(res, dict) else res
         if not rows:
             where = f" for {a.project}" if getattr(a, "project", None) and a.scmd == "list" else ""
-            print(f"(no review steps{where}: river review step add <project> \"<instruction>\"  or  --run \"<command>\")")
+            print(f"(no review steps{where}: maxpm review step add <project> \"<instruction>\"  or  --run \"<command>\")")
         last = None
         for r in rows:
             if r["project"] != last:
@@ -2337,9 +2396,9 @@ def render(a, res):
     if c == "project":
         if isinstance(res, dict) and "ready_count" in res:
             print(f"{res['name']} (rank {res['rank']})")
-            print("  " + (res["description"] or "(no description: river project describe " + res["name"] + " \"...\")"))
-            print("  target: " + (res.get("target") or "none (river project target " + res["name"] + " <target>)"))
-            print("  tracker: " + (res.get("tracker") or "none (river project tracker " + res["name"] + " \"<tracker> <where> via <tool>\")"))
+            print("  " + (res["description"] or "(no description: maxpm project describe " + res["name"] + " \"...\")"))
+            print("  target: " + (res.get("target") or "none (maxpm project target " + res["name"] + " <target>)"))
+            print("  tracker: " + (res.get("tracker") or "none (maxpm project tracker " + res["name"] + " \"<tracker> <where> via <tool>\")"))
             print("  items: " + ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in res["counts"].items() if v))
             print("  working now: " + (", ".join(res["working_now"]) or "nobody"))
             if res["worked_recently"]:
@@ -2375,22 +2434,22 @@ def render(a, res):
         else:
             print(f"started {res['agent']} as {res['session_name']} in {res['project']} for {it}"
                   + (f" ({res['why']})" if res.get("why") else "")
-                  + (f"; tmux pane {res['tmux_pane']}: river view shows it" if res.get("tmux_pane") else ""))
+                  + (f"; tmux pane {res['tmux_pane']}: maxpm view shows it" if res.get("tmux_pane") else ""))
             if res.get("via_serve"):
-                print("  river serve opened it: this session runs in a sandbox")
+                print("  maxpm serve opened it: this session runs in a sandbox")
         return
     if c == "view":
         for p in res["closed"]:
             print(f"closed ({p['why']}): {p['name']}")
         for p in res["panes"]:
             print(f"{p['pane']:>4}  {p['name']}" + (f"  [{p['agent']}]" if p["agent"] else "")
-                  + (f"  ({p['done']}: river view --tidy closes it)" if p["done"] else ""))
+                  + (f"  ({p['done']}: maxpm view --tidy closes it)" if p["done"] else ""))
         if not res["panes"]:
             print(f"(no agent panes in the tmux session {res['session']})")
         for name in res["left"]:
             print(f"no space to show it beside the others; it keeps its own window: {name}")
         if res["panes"] and a.layout:
-            print("This command has no terminal of its own, so it shows nothing here. A person sees the agents with: river view")
+            print("This command has no terminal of its own, so it shows nothing here. A person sees the agents with: maxpm view")
         return
     if c == "stop" and "killed" in res:
         print(f"{'killed' if res['killed'] else 'found dead'}: {res['agent']} (PID {res['pid']}); released "
@@ -2406,7 +2465,7 @@ def render(a, res):
     if c == "target":
         if isinstance(res, list):
             if not res:
-                print("(no targets: river target add <name> --description \"how it deploys\")")
+                print("(no targets: maxpm target add <name> --description \"how it deploys\")")
             for t in res:
                 print(f"{t['name']}  ({t['projects']} project{'' if t['projects'] == 1 else 's'})"
                       + (f"  owner {t['owner']}" if t["owner"] else ""))
@@ -2414,19 +2473,19 @@ def render(a, res):
                     print(f"    {t['description']}")
             return
         print(res["name"])
-        print("  " + (res["description"] or f"(no description: river target describe {res['name']} \"how it deploys\")"))
+        print("  " + (res["description"] or f"(no description: maxpm target describe {res['name']} \"how it deploys\")"))
         print("  monitor: " + (res.get("monitor") or f"none (a session follows each deploy when you set one: "
-                                                      f"river target monitor {res['name']} \"<what to watch, for how long>\")"))
+                                                      f"maxpm target monitor {res['name']} \"<what to watch, for how long>\")"))
         if res["owner"]:
             left = core._short(core.parse_iso(res["owner_expires_at"]) - core.now())
             print(f"  owner: {res['owner']} ({left} left; any command by {res['owner']} renews it)")
         else:
-            print(f"  owner: nobody (take it: river target own {res['name']})")
+            print(f"  owner: nobody (take it: maxpm target own {res['name']})")
         print(f"  projects ({len(res['projects'])}):")
         for p in res["projects"]:
             print(f"    {p['name']}  ({p['open_items']} open)")
         if not res["projects"]:
-            print(f"    (none: river project target <project> {res['name']})")
+            print(f"    (none: maxpm project target <project> {res['name']})")
         return
     if c in ("list",):
         if not res:
@@ -2458,8 +2517,8 @@ def render(a, res):
         walk(res)
         if held:
             h = held[0]
-            print(f"\nHeld by another agent? Offer help: river offer \"I am blocked on this; I can take ...\" --item {h['id']}"
-                  f"   Ready pieces nobody holds: river next --unblocks {res['id']} --claim")
+            print(f"\nHeld by another agent? Offer help: maxpm offer \"I am blocked on this; I can take ...\" --item {h['id']}"
+                  f"   Ready pieces nobody holds: maxpm next --unblocks {res['id']} --claim")
         return
     if c == "status":
         return render_status(res)
@@ -2480,7 +2539,7 @@ def render(a, res):
         elif "channels" in res:
             print(f"interval {res['interval']}, batch window {res['batch_window']}")
             if not res["channels"]:
-                print("(no channels: river config set notify_channels log)")
+                print("(no channels: maxpm config set notify_channels log)")
             for ch in res["channels"]:
                 notes = [] if ch["adapter"] else ["no adapter"]
                 if not ch["configured"]:
@@ -2539,7 +2598,7 @@ def render(a, res):
             print(f"sent #{m['id']} {m['kind']} to {to}" + (f" (native: {m['native_status']})" if m.get("native_status") else ""))
         return
     if c == "accept" and a.message:
-        print(f"accepted alert #{res['id']}" + (f"; see: river show {res['item_id']}" if res["item_id"] else "")
+        print(f"accepted alert #{res['id']}" + (f"; see: maxpm show {res['item_id']}" if res["item_id"] else "")
               + "; the sender is told")
         return
     if c == "answer":
@@ -2627,7 +2686,7 @@ def main():
     try:
         sys.exit(run())
     except RiverError as e:
-        print(f"river: {e}", file=sys.stderr)
+        print(f"{core.command_name()}: {e}", file=sys.stderr)
         sys.exit(2)
 
 

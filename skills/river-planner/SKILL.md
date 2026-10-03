@@ -1,81 +1,81 @@
 ---
 name: river-planner
-description: Plan work with the user into MaximizePM queue items with dependencies and priorities (the `river` command). Use when the user says "plan" in a project that uses river, when you plan a project into tasks, load a checklist into the queue, re-rank projects, or fix priorities and dependencies.
+description: Plan work with the user into MaximizePM queue items with dependencies and priorities (the `maxpm` command). Use when the user says "plan" in a project that uses MaximizePM, when you plan a project into tasks, load a checklist into the queue, re-rank projects, or fix priorities and dependencies.
 ---
 
 # MaximizePM: planning work into the queue
 
 ## The planning conversation
 
-When the user says "plan", run `river plan` in the project folder. It names
+When the user says "plan", run `maxpm plan` in the project folder. It names
 you, makes you a planner (you change the plan; claims refuse), and prints the
 overview and the open questions. Then talk with the user before you add
 anything. (To also run the other agents, launch them, fill their queues, and
-stop stuck ones, the user starts a manager session instead: `river manage`,
-rules in `river guide manager`.)
+stop stuck ones, the user starts a manager session instead: `maxpm manage`,
+rules in `maxpm guide manager`.)
 
 1. **Ask for the outcome first.** "What must be true when this is done, and by
    when?" One or two sentences. Do not add items until you have it. Put the
    date on the outcome item: `--due 2026-10-15` (end of that day) or
    `--due "fri 17:00 America/New_York"`. Its prerequisites show the date too.
-   A due date does not change the order; river warns each person when it is
+   A due date does not change the order; MaximizePM warns each person when it is
    `due_warn_before` (3d) away and again when it passes.
 2. **Ask only what changes the plan.** Scope, deadline, who does which steps
    (agents or the user), what already exists, and what must not change. Take
    the open questions from the briefing that bear on this outcome; skip the
    rest.
 3. **Make each outcome a goal when an agent should own it.** A goal is an
-   outcome with a done-when test (`river goal add`, below). Its owner plans
+   outcome with a done-when test (`maxpm goal add`, below). Its owner plans
    and adjusts the items, so the items you add under it are first steps, not
    a full plan. Small or one-off work needs no goal.
 4. **Split the outcome into items you can check.** Each item is one result that
    one agent or person finishes, with a `--check` command or a plain test ("the
    page loads at /pricing"). A step only the user can do (accounts, payments,
    legal, a decision) is its own `--doer human` item. For a person who is not
-   in river (a client, a colleague), still use `--doer human`, and say in
-   `--context` who does it and that the user records the result with `river done`.
+   in MaximizePM (a client, a colleague), still use `--doer human`, and say in
+   `--context` who does it and that the user records the result with `maxpm done`.
 5. **Show the plan before you write it.** A short numbered list with the
    waits-on links. Change it until the user agrees, then add it.
-6. **Set priority on the outcome only** (`river prio <id> 0`). Its prerequisites
+6. **Set priority on the outcome only** (`maxpm prio <id> 0`). Its prerequisites
    inherit it. A new project gets the lowest rank, so equal priorities in older
    projects go first. When the new outcome must go before them, ask the user,
-   then run `river project rank <name> 1`.
+   then run `maxpm project rank <name> 1`.
 7. **Make a new project** only for a separate area with its own folder or
-   goal (`river project add <name> --path <dir> --description "..."`).
-   Otherwise add to the existing project. When `river plan` says the folder
+   goal (`maxpm project add <name> --path <dir> --description "..."`).
+   Otherwise add to the existing project. When `maxpm plan` says the folder
    has no project, the projects it lists are other work: leave them alone
    unless the user names them.
-8. **Report progress** from the queue, not from memory: `river status`,
-   `river log --since 7d`, `river blockers <id>`.
+8. **Report progress** from the queue, not from memory: `maxpm status`,
+   `maxpm log --since 7d`, `maxpm blockers <id>`.
 
-End by saying what is ready now, what waits on the user, and that `river go`
+End by saying what is ready now, what waits on the user, and that `maxpm go`
 in an agent session starts the work.
 
 ## Projects
 
 ```
-river project add <name> [--rank N] --description "..."   # lower-case name
-river project describe <name> "..."
-river project show <name>
-river project rank <name> <N>                          # 1 = most important overall
-river project list
-river target add <name> --description "how it deploys"  # where projects ship to
-river project target <name> <target>                   # each project has at most one
-river target show <target>                             # its projects and owner
-river target own <target>                              # one owner per target runs its deploys
-river target monitor <target> "<what to watch, for how long>"   # a session follows each deploy
-river target give <target> --to <agent>                # or: river target release <target>
+maxpm project add <name> [--rank N] --description "..."   # lower-case name
+maxpm project describe <name> "..."
+maxpm project show <name>
+maxpm project rank <name> <N>                          # 1 = most important overall
+maxpm project list
+maxpm target add <name> --description "how it deploys"  # where projects ship to
+maxpm project target <name> <target>                   # each project has at most one
+maxpm target show <target>                             # its projects and owner
+maxpm target own <target>                              # one owner per target runs its deploys
+maxpm target monitor <target> "<what to watch, for how long>"   # a session follows each deploy
+maxpm target give <target> --to <agent>                # or: maxpm target release <target>
 ```
 
 A target has at most one owner. Ownership lasts `owner_ttl` (default 8h) and
 every command by the owner renews it; when it expires the target is free and
-the old owner gets a notice. `river target own` names the current owner when
+the old owner gets a notice. `maxpm target own` names the current owner when
 it refuses. When that owner is away or gone (`away_after`, default 1h),
-`river target own <target> --takeover "<why>"` moves the target at once and
+`maxpm target own <target> --takeover "<why>"` moves the target at once and
 tells the old owner why. A person can give any target:
-`river target give <target> --to <agent>`.
+`maxpm target give <target> --to <agent>`.
 
-`river ship <id>` (or `river done <id> --ship`) puts an item in its target's
+`maxpm ship <id>` (or `maxpm done <id> --ship`) puts an item in its target's
 open deploy item, in the project `deploy-<target>`. One open deploy item per
 target collects requests from every project on it; once the owner claims it,
 the next request starts a new one. The deploy item waits on what it ships and
@@ -83,13 +83,13 @@ takes the best priority among them.
 
 Write the description for an agent that must decide whether it fits: what the
 project covers, where it lives (repository, directories), and what knowledge
-helps. Agents read `river project list` to pick an area.
+helps. Agents read `maxpm project list` to pick an area.
 
 ### Cleanup
 
-`river plan` lists items that may be done or stale (from `river cleanup`).
+`maxpm plan` lists items that may be done or stale (from `maxpm cleanup`).
 Check each one, or ask the user about a person's item, and record the result
-with `river check <id> done|partial|open --note "..."`. `stale_after` (14d)
+with `maxpm check <id> done|partial|open --note "..."`. `stale_after` (14d)
 sets when an untaken ready item counts as stale.
 
 ### Outside trackers
@@ -98,25 +98,25 @@ When the user says the project uses an issue tracker (Jira, GitHub Issues,
 Linear...), record it once, in words an agent can act on:
 
 ```
-river project tracker <name> "github owner/repo via gh"
-river project tracker <name> "jira PROJ via the Jira MCP server"
+maxpm project tracker <name> "github owner/repo via gh"
+maxpm project tracker <name> "jira PROJ via the Jira MCP server"
 ```
 
-`river plan` then names the tracker. Import its open issues before you plan
+`maxpm plan` then names the tracker. Import its open issues before you plan
 new work:
 
 1. Read the open issues with the tool the tracker line names (gh, a Jira or
    Linear MCP server, a command the user set up).
-2. Skip each issue river has already: `river list --ref <tracker>:<key>`.
-   River also refuses a second open item with the same link in a project.
+2. Skip each issue MaximizePM has already: `maxpm list --ref <tracker>:<key>`.
+   MaximizePM also refuses a second open item with the same link in a project.
 3. Add the others with the link and what the issue says:
-   `river add "<title>" --ref github:owner/repo#12 --context "..."`, or
+   `maxpm add "<title>" --ref github:owner/repo#12 --context "..."`, or
    `--ref jira:PROJ-123 --ref-url <link>` (GitHub links get a URL by themselves).
 4. Keep the tracker's priority (`-p 0..4`) and order, and record what must
-   come first (`river dep <id> --on <id>`).
+   come first (`maxpm dep <id> --on <id>`).
 
 Ask the user before you import a large backlog or issues assigned to other
-people. River has no tracker code: you read and write the tracker with your
+people. MaximizePM has no tracker code: you read and write the tracker with your
 own tools.
 
 ## Goals
@@ -133,46 +133,46 @@ under it can share items: tag an item with both.
 
 An owner reserves the goal's agent items, so one agent does them in sequence.
 When several agents must work on a goal at the same time, make it shared
-(`--shared`): it has no owner, `river go` gives it to no agent, and its items
+(`--shared`): it has no owner, `maxpm go` gives it to no agent, and its items
 stay open to every agent. A person or a manager sets and clears this.
 
 ```
-river goal add <project> <name> --outcome "..." --done-when "..." [--rank N] [--shared]
-river goal list [--project P] [--all]    # open goals in order, with owner and progress
-river goal show <name>                    # the goal and its items
-river goal rank <name> <N>                # 1 = first among the project's goals
-river goal edit <name> [--outcome] [--done-when] [--rename]
-river goal edit <name> --shared           # no owner: its items stay open to every agent; --owned undoes it
-river goal own <name> / river goal release <name> / river goal give <name> --to <agent>
-river goal done <name> --result "<one line>" [--drop-open]   # refused while its items are open
-river goal reopen <name>
-river add "<title>" --goal <name>         # repeatable; default: the goal you own in that project
-river add "<title>" --no-goal             # no tag, even when you own a goal
-river edit <id> --goal <name> / --untag <name>
-river list --goal <name>
+maxpm goal add <project> <name> --outcome "..." --done-when "..." [--rank N] [--shared]
+maxpm goal list [--project P] [--all]    # open goals in order, with owner and progress
+maxpm goal show <name>                    # the goal and its items
+maxpm goal rank <name> <N>                # 1 = first among the project's goals
+maxpm goal edit <name> [--outcome] [--done-when] [--rename]
+maxpm goal edit <name> --shared           # no owner: its items stay open to every agent; --owned undoes it
+maxpm goal own <name> / maxpm goal release <name> / maxpm goal give <name> --to <agent>
+maxpm goal done <name> --result "<one line>" [--drop-open]   # refused while its items are open
+maxpm goal reopen <name>
+maxpm add "<title>" --goal <name>         # repeatable; default: the goal you own in that project
+maxpm add "<title>" --no-goal             # no tag, even when you own a goal
+maxpm edit <id> --goal <name> / --untag <name>
+maxpm list --goal <name>
 ```
 
 ## Items
 
 ```
-river add <project> "<title>" [-p 0-4] [--doer any|ai|human] [--after <id> ...] [--feeds <id> ...] [--notes "..."]
+maxpm add <project> "<title>" [-p 0-4] [--doer any|ai|human] [--after <id> ...] [--feeds <id> ...] [--notes "..."]
           [--context "..."] [--touches <file> ...] [--check "<command>"]
           [--model <m>] [--effort <level>] [--min-model <m>] [--max-model <m>] [--agent codex|claude-code]
-river add [project] --from plan.md [--dry-run]   # one item per line of an outline: a line waits on
+maxpm add [project] --from plan.md [--dry-run]   # one item per line of an outline: a line waits on
                                     # the lines indented under it; 'P0' at the start and '(human)' or
                                     # '(ai)' at the end set priority and doer; '[x]' lines are skipped
-river dep <id> --on <id> ...        # <id> waits on the others
-river dep <id> --on <id> --kind feeds      # waits, then reads their output in its context
+maxpm dep <id> --on <id> ...        # <id> waits on the others
+maxpm dep <id> --on <id> --kind feeds      # waits, then reads their output in its context
                                            # (changes an existing --after link to feeds; show marks it)
-river dep <id> --on <id> --kind conflicts  # no order, never in progress together
-river undep <id> --on <id> ...
-river prio <id> <0-4>               # 0 is most important
-river move <id> --before|--after <id>   # manual order inside a project
-river edit <id> [--title] [--notes] [--doer] [--project] [--context] [--touches ...] [--check] [--due <date>|none]
+maxpm dep <id> --on <id> --kind conflicts  # no order, never in progress together
+maxpm undep <id> --on <id> ...
+maxpm prio <id> <0-4>               # 0 is most important
+maxpm move <id> --before|--after <id>   # manual order inside a project
+maxpm edit <id> [--title] [--notes] [--doer] [--project] [--context] [--touches ...] [--check] [--due <date>|none]
           [--model|--effort|--min-model|--max-model|--agent <value>|none]
-river blocked <id> --reason "..." [--until "mon 07:00 America/New_York"] / river unblock <id>
-river drop <id> / river reopen <id>
-river replanned <id> [--note "..."]   # clear the replan mark after you split or re-scope the item
+maxpm blocked <id> --reason "..." [--until "mon 07:00 America/New_York"] / maxpm unblock <id>
+maxpm drop <id> / maxpm reopen <id>
+maxpm replanned <id> [--note "..."]   # clear the replan mark after you split or re-scope the item
 ```
 
 ## How the order works
@@ -181,8 +181,8 @@ An item is ready when it is open, has no outside blocker, everything it
 waits on is done or dropped, and no item it conflicts with is in progress.
 A conflict keeps two agents apart: the agent that holds the other item can
 take the item (it edits the same files in sequence).
-River adds a conflict by itself when two open items' `--touches` overlap (the
-same file, or a directory and a file in it); change the touches and river
+MaximizePM adds a conflict by itself when two open items' `--touches` overlap (the
+same file, or a directory and a file in it); change the touches and MaximizePM
 removes it. Use `feeds` when the later item needs a name, path, or signature
 that the earlier item creates: the earlier item's `--output` shows in the
 later item's briefing. Ready items sort by:
@@ -192,7 +192,7 @@ later item's briefing. Ready items sort by:
    is P0.
 2. Project rank.
 3. How many open items it unblocks.
-4. Manual order (`river move`).
+4. Manual order (`maxpm move`).
 5. Age.
 
 So set a high priority only on the outcome you care about (for example, "submit
@@ -203,8 +203,8 @@ Stripe activation" P0); its prerequisites inherit it. Do not raise every step.
 - One outcome per item that one agent or person can finish and check.
 - Give an agent what it needs to start without searching. `--context`: why the
   item exists, where to look, decisions already made. `--touches`: the files
-  it changes. `--check`: the command that shows it works. `river next` and
-  `river go` print these three in one block. Use `--notes` for anything else.
+  it changes. `--check`: the command that shows it works. `maxpm next` and
+  `maxpm go` print these three in one block. Use `--notes` for anything else.
 - Mark who can do it: `--doer human` for account, legal, and payment steps;
   `--doer ai` for code and text work; `any` otherwise.
 - Record every "needs first" as a dependency. The tool refuses loops.
@@ -234,24 +234,24 @@ family. Name one model per family to limit both: `--min-model opus,sol`.
 Defaults come from settings: `default_model`, `default_effort`,
 `default_min_model`, `default_max_model`, per project (`--project`) or per
 item kind (`--kind deploy`). An item's own value wins. A session declares its
-model with `RIVER_MODEL=<model>` or `river go --model <model>`.
+model with `RIVER_MODEL=<model>` or `maxpm go --model <model>`.
 
 ## Agent type
 
 An item can need one agent type: `--agent codex` or `--agent claude-code` (a
 launch_agents label such as `Codex` works too). Sessions of another type skip
-it, and Start, Dispatch, and `river launch` start that type. Use it when one
+it, and Start, Dispatch, and `maxpm launch` start that type. Use it when one
 agent does the work better, for example Codex for images and CSS. Keep the
 item's models in that type's family (Codex: luna, terra, sol, astra; Claude
 Code: haiku, sonnet, opus, fable). Set rules once instead of on every item:
-`river config set agent_rules "codex: *.css, *.svg, image, logo"` (a pattern
+`maxpm config set agent_rules "codex: *.css, *.svg, image, logo"` (a pattern
 with `*`, `?`, `/` or `.` matches a file in `--touches`; any other is a word in
 the title). `default_agent` is the fallback, per project or kind. A person can
 still push an item to a session of another type.
 
 ## Settings
 
-`river config get` lists every setting. `river config set <key> <value>
+`maxpm config get` lists every setting. `maxpm config set <key> <value>
 [--project P | --agent A | --item N | --kind K]`. The most specific value wins: item,
 agent, item kind, project, global, default. For example, a person's lease:
-`river config set lease_ttl 7d --agent alex`.
+`maxpm config set lease_ttl 7d --agent alex`.

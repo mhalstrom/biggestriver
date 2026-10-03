@@ -57,7 +57,7 @@ class PageMessages(unittest.TestCase):
         self.assertEqual(core._item(self.c, self.big)["assignee"], "bo")
 
     def test_every_route_answers_this_computer_only(self):
-        # river serve has no sign-in. A page of another site whose name is made to point at 127.0.0.1 (DNS
+        # maxpm serve has no sign-in. A page of another site whose name is made to point at 127.0.0.1 (DNS
         # rebinding) is same-origin for the browser, so the Host header decides, for reads and for actions.
         import io
 
@@ -272,7 +272,7 @@ class LaunchAgent(unittest.TestCase):
         core.activity(self.c, "mark")
         self.assertIsNone(core.item_show(self.c, y)["reserved_for"])
         self.assertIn(f"push to {b} taken back", core.item_show(self.c, y)["events"][0]["change"])
-        # By hand: river push <id> --cancel; a re-pushed item leaves the LEASE RAN OUT finding.
+        # By hand: maxpm push <id> --cancel; a re-pushed item leaves the LEASE RAN OUT finding.
         from river import cli
         import contextlib, io
         core.register(self.c, "w")
@@ -298,7 +298,7 @@ class LaunchAgent(unittest.TestCase):
             self.c.execute("UPDATE agents SET role='manager' WHERE name='boss'")
             self.c.execute("UPDATE items SET reserved_for='boss' WHERE id IN (?,?)", (x, y))
         sent = []
-        with self.assertRaisesRegex(RiverError, f"reserved for boss\\); .*river edit {x} --unreserve"):
+        with self.assertRaisesRegex(RiverError, f"reserved for boss\\); .*maxpm edit {x} --unreserve"):
             server.dispatch_item(self.c, x, runner=sent.append, actor="w")
         t = server.dispatch_item(self.c, x, runner=sent.append, actor="boss")
         it = core._item(self.c, x)
@@ -429,7 +429,7 @@ class LaunchAgent(unittest.TestCase):
         with mock.patch.object(urllib.request.OpenerDirector, "open",
                                side_effect=urllib.error.URLError(ConnectionRefusedError(61, "Connection refused"))):
             got = cli.ask_server_for_monitors(self.c, timeout=1)
-        self.assertIn("no river serve answers on port 1", got["error"])
+        self.assertIn("no maxpm serve answers on port 1", got["error"])
         self.assertIn(f"RIVER_FOCUS=monitor:{m['id']} claude go", cli._monitor_lines(got)[0])
 
     def test_start_spreads_sessions_across_projects(self):
@@ -491,7 +491,7 @@ class LaunchAgent(unittest.TestCase):
         self.assertIn('keystroke "t"', sent[-1])
 
     def test_river_launch_in_a_sandbox_asks_river_serve(self):
-        # A sandbox blocks Terminal and tmux for the command. river serve runs outside it and opens the session.
+        # A sandbox blocks Terminal and tmux for the command. maxpm serve runs outside it and opens the session.
         import base64
         import contextlib
         import io
@@ -504,7 +504,7 @@ class LaunchAgent(unittest.TestCase):
         y = core.item_add(self.c, "shop", "more")["id"]
         core.register(self.c, "boss")
         sent, asked, allowed = [], [], [True]
-        server.TERMINAL_RUNNER = sent.append  # what river serve runs
+        server.TERMINAL_RUNNER = sent.append  # what maxpm serve runs
         self.addCleanup(setattr, server, "TERMINAL_RUNNER", None)
 
         def serve(data):
@@ -539,7 +539,7 @@ class LaunchAgent(unittest.TestCase):
         self.addCleanup(net.stop)
         out = river("launch", "--item", str(y), "--model", "sonnet", "--window")
         self.assertRegex(out, rf"started Claude Code as shop-\w+ in shop for #{y} more")
-        self.assertIn("river serve opened it: this session runs in a sandbox", out)
+        self.assertIn("maxpm serve opened it: this session runs in a sandbox", out)
         self.assertIn(f"RIVER_MODEL=sonnet claude --name '#{y} more' --model sonnet go", sent[-1])
         self.assertNotIn("keystroke", sent[-1])  # --window went to the server
         self.assertEqual(asked, [("127.0.0.1:8765", None),
@@ -549,7 +549,7 @@ class LaunchAgent(unittest.TestCase):
         del asked[:]
         self.assertIn(f"would start Claude Code in shop", river("launch", "--dry-run", "--model", "opus"))
         self.assertEqual(asked, [])
-        # river serve refuses in its own words, and it serves one queue only.
+        # maxpm serve refuses in its own words, and it serves one queue only.
         launch = cli.build_parser().parse_args(["launch", "--model", "sonnet"])
         with self.assertRaisesRegex(RiverError, "needs at least opus"):
             cli.dispatch(self.c, launch, "boss")
@@ -557,7 +557,7 @@ class LaunchAgent(unittest.TestCase):
         self.assertEqual((code, "another queue" in json.loads(body)["error"]), (409, True))
         # The sandbox decides: with the host not allowed, or with no proxy, the command says what to allow.
         allowed[0] = False
-        with self.assertRaisesRegex(RiverError, r"refused the connection to river serve on 127.0.0.1:8765 "
+        with self.assertRaisesRegex(RiverError, r"refused the connection to maxpm serve on 127.0.0.1:8765 "
                                                 r"\(Connection blocked by network allowlist\)\. Allow the host"):
             cli.dispatch(self.c, launch, "boss")
         del os.environ["HTTP_PROXY"]
@@ -579,6 +579,8 @@ class LaunchAgent(unittest.TestCase):
         self.assertIn(f"RIVER_AGENT={t['session_name']} RIVER_MODEL=opus claude --name 'river manager' --model opus manage", sent[-1])
         with self.assertRaisesRegex(RiverError, "is the active manager"):
             server.start_manager(self.c, runner=sent.append)
+        self.assertEqual(server.manage_command('codex "run maxpm go in this folder"'), 'codex "run maxpm manage in this folder"')
+        # A launch command from before the name maxpm runs river, the same command.
         self.assertEqual(server.manage_command('codex "run river go in this folder"'), 'codex "run river manage in this folder"')
         m = t["session_name"]
         core.queue_add(self.c, "w1", x, actor=m)
@@ -593,7 +595,7 @@ class LaunchAgent(unittest.TestCase):
         self.assertIn("ends", r)
         self.assertEqual(core.stop_request(self.c, "w1")["stop_reason"], "stopped from the page by mark")
         with self.assertRaisesRegex(RiverError, "say why"):
-            core.stop_agent(self.c, "w1", " ", actor="m")  # river stop still needs --reason
+            core.stop_agent(self.c, "w1", " ", actor="m")  # maxpm stop still needs --reason
         self.assertEqual(OPS["open_chat"](self.c, {"agent": "w1"}, "mark")["hint"][:24], "No chat to open for w1: ")
         core.record_session_url(self.c, "w1", "https://claude.ai/code/session_x")
         self.assertEqual(OPS["open_chat"](self.c, {"agent": "w1"}, "mark")["url"], "https://claude.ai/code/session_x")
@@ -663,10 +665,10 @@ class LaunchAgent(unittest.TestCase):
         core.config_set(self.c, "launch_in", "tab")
         self.assertIn(t["command"], sent[0])
         self.assertIn('my \\"shop\\" app', sent[0])  # quotes escaped inside the AppleScript string
-        core.config_set(self.c, "launch_agents", 'Claude Code=claude go; Codex=codex "run river go and follow it"')
+        core.config_set(self.c, "launch_agents", 'Claude Code=claude go; Codex=codex "run maxpm go and follow it"')
         t = server.launch_agent(self.c, runner=sent.append, agent="Codex")
-        self.assertEqual((t["agent"], t["command"]), ("Codex", 'codex "run river go and follow it"'))
-        self.assertIn('codex \\"run river go and follow it\\"', sent[-1])
+        self.assertEqual((t["agent"], t["command"]), ("Codex", 'codex "run maxpm go and follow it"'))
+        self.assertIn('codex \\"run maxpm go and follow it\\"', sent[-1])
         self.assertEqual(server.launch_agent(self.c, runner=sent.append)["agent"], "Claude Code")  # first is default
         self.assertEqual(core.state(self.c)["launch_agents"], ["Claude Code", "Codex"])
         with self.assertRaises(RiverError):
@@ -771,7 +773,7 @@ class FakeTmux:
 
 
 class LaunchInTmux(unittest.TestCase):
-    """launch_in tmux: each agent is a pane of the tmux session river, and river view shows them side by side."""
+    """launch_in tmux: each agent is a pane of the tmux session river, and maxpm view shows them side by side."""
 
     def setUp(self):
         self.platform, core.PLATFORM = core.PLATFORM, "linux"  # no Terminal app: tmux needs none
@@ -880,16 +882,16 @@ class LaunchInTmux(unittest.TestCase):
         self.addCleanup(outside.stop)
         self.assertIn("(in a new tmux pane)", river("launch", "--dry-run", "--tmux"))
         out = river("launch", "--tmux")
-        self.assertRegex(out, rf"started Claude Code as shop-\w+ in shop for #{x} work \(.*\); tmux pane %0: river view shows it")
+        self.assertRegex(out, rf"started Claude Code as shop-\w+ in shop for #{x} work \(.*\); tmux pane %0: maxpm view shows it")
         # A command with no terminal (an agent, a test) prints the panes and attaches nothing.
         out = river("view")
         self.assertRegex(out, rf"%0  #{x} work  \[shop-\w+\]\n")
-        self.assertIn("A person sees the agents with: river view", out)
+        self.assertIn("A person sees the agents with: maxpm view", out)
         self.assertNotIn("A person sees", river("view", "--list"))
         self.tmux.panes[0]["running"] = "zsh"
-        self.assertIn("(its agent ended: river view --tidy closes it)", river("view", "--list"))
+        self.assertIn("(its agent ended: maxpm view --tidy closes it)", river("view", "--list"))
         self.assertIn(f"closed (its agent ended): #{x} work", river("view", "--tidy"))
-        # Open chat for an agent in a pane, with no web link, names river view.
+        # Open chat for an agent in a pane, with no web link, names maxpm view.
         self.assertIs(core.state(self.c)["tmux"], False)  # the tests see no tmux (tests/__init__.py)
         with mock.patch.object(core, "tmux_path", lambda: "/opt/homebrew/bin/tmux"):
             self.assertIs(core.state(self.c)["tmux"], True)
@@ -913,7 +915,7 @@ class LaunchInTmux(unittest.TestCase):
         done = lambda: {p["name"]: p["done"] for p in server.tmux_view(None, conn=self.c)["panes"] if p["done"]}
         # Every agent CLI runs (no shell shows), and every session is in the queue: nothing to close.
         self.assertEqual((done(), server.tmux_view(None, tidy=True, conn=self.c)["closed"]), ({}, []))
-        # The river work of a session ended and its CLI stays open and idle: river wait ended it (unregistered).
+        # The river work of a session ended and its CLI stays open and idle: maxpm wait ended it (unregistered).
         core.unregister(self.c, left)
         self.assertEqual(done(), {panes[left]["name"]: f"{left} is not in the queue any more"})
         self.assertEqual(server.tmux_view(None)["panes"][1]["done"], None)  # without the queue only a shell counts
@@ -953,12 +955,12 @@ class LaunchInTmux(unittest.TestCase):
                 self.assertEqual(cli.run(["-q", "--as", "mark", *args]), 0)
             return out.getvalue()
         out = river("view", "--list")
-        self.assertIn(f"[{left}]  ({left} is not in the queue any more: river view --tidy closes it)", out)
-        self.assertEqual(out.count("river view --tidy closes it"), 3)
+        self.assertIn(f"[{left}]  ({left} is not in the queue any more: maxpm view --tidy closes it)", out)
+        self.assertEqual(out.count("maxpm view --tidy closes it"), 3)
         # The page lists the same panes, and its button closes them: one tmux command reads the panes that may be done.
         self.assertEqual({p["name"] for p in server.tmux_done(self.c)}, want)
         self.assertEqual(sum(c[0] == "display-message" for c in self.tmux.calls[-2:]), 1)
-        self.assertIn("3 done (river view --tidy closes them) | Ctrl-b", server.tmux_view("tile", conn=self.c)["show"][-1])
+        self.assertIn("3 done (maxpm view --tidy closes them) | Ctrl-b", server.tmux_view("tile", conn=self.c)["show"][-1])
         closed = server.OPS["tmux_tidy"](self.c, {}, "mark")["closed"]
         self.assertEqual(({c["name"] for c in closed}, closed[0]["why"]), (want, f"{left} is not in the queue any more"))
         self.assertEqual({p["id"] for p in self.tmux.panes}, {panes[n]["id"] for n in (works, asks, again, other)} | {"%7", "%9"})
@@ -1028,7 +1030,7 @@ class LaunchInTmux(unittest.TestCase):
             core.config_set(self.c, "tidy_every", "often")
         core.config_set(self.c, "tidy_every", "5m")
         self.assertEqual(tick(0), [last["name"]])
-        # The manager's briefing names it, and the loop of river serve runs the pass every time.
+        # The manager's briefing names it, and the loop of maxpm serve runs the pass every time.
         self.assertEqual(core.manage(self.c, self.dir.name)["tidy_every"], "5m")
         stop, looks = threading.Event(), []
         with mock.patch.object(server, "watch_prompts", lambda c: None), \
@@ -1105,7 +1107,7 @@ class LaunchInTmux(unittest.TestCase):
         core.config_set(self.c, "busy_max", "0s")
         calls = len(self.tmux.calls)
         self.assertEqual((tick(), self.tmux.calls[calls:]), ([], []))
-        # The loop of river serve runs the pass every time.
+        # The loop of maxpm serve runs the pass every time.
         import threading
         from river import notify
         stop, looks = threading.Event(), []
@@ -1121,7 +1123,7 @@ class LaunchInTmux(unittest.TestCase):
         cmd, server.TMUX_CMD = server.TMUX_CMD, ["tmux-that-is-not-installed"]
         self.addCleanup(setattr, server, "TMUX_CMD", cmd)
         core.item_add(self.c, "shop", "work")
-        with self.assertRaisesRegex(RiverError, "tmux is not installed: brew install tmux .* river config set launch_in tab"):
+        with self.assertRaisesRegex(RiverError, "tmux is not installed: brew install tmux .* maxpm config set launch_in tab"):
             server.launch_agent(self.c, launch_in="tmux")
         self.assertEqual(core.next_item(self.c, "shop")[0]["reserved_for"], None)  # nothing was reserved for a session that never opened
         self.assertIsNone(server._tmux_pane_of("/dev/ttys001"))
@@ -1210,7 +1212,7 @@ class LaunchInTmux(unittest.TestCase):
             self.assertEqual(call("GET", f"/api/terminal?agent={name}", headers, ip=ip)[0], 403, headers)
             code, body = call("POST", "/api/action", headers, keys, ip=ip)
             self.assertEqual(code, 403, headers)
-        self.assertIn("only this computer may call river serve", body["error"])
+        self.assertIn("only this computer may call maxpm serve", body["error"])
         self.assertEqual(len(self.tmux.panes[0]["keys"]), sent)
 
     def test_a_prompt_in_an_agents_terminal_reaches_the_person(self):
@@ -1247,7 +1249,7 @@ class LaunchInTmux(unittest.TestCase):
         self.assertEqual(notify.compose(self.c, [row])[2], f"http://127.0.0.1:8765/#terminal-{name}")
         self.c.execute("UPDATE agents SET session_url='https://claude.ai/code/session_1' WHERE name=?", (name,))
         self.assertEqual(notify.compose(self.c, [row])[2], "https://claude.ai/code/session_1")
-        # river serve starts again while the prompt waits: no second alert.
+        # maxpm serve starts again while the prompt waits: no second alert.
         server.PROMPTS.clear()
         self.assertEqual((watch()["told"], watch()["told"], len(events())), ([], [], 1))
         # The person only marks it read: nothing more for the same prompt. A new prompt is a new alert.
@@ -1275,7 +1277,7 @@ class LaunchInTmux(unittest.TestCase):
         self.assertEqual((len(watch()["closed"]), events()), (1, []))
         with self.assertRaisesRegex(RiverError, "regular expression"):
             core.config_set(self.c, "prompt_pattern", "(")
-        # The loop of river serve looks at the panes on every pass, with or without a notification channel.
+        # The loop of maxpm serve looks at the panes on every pass, with or without a notification channel.
         stop, looks = threading.Event(), []
         with mock.patch.object(server, "watch_prompts", lambda c: (looks.append(1), stop.set())):
             notify.loop(stop, interval_s=1)
@@ -1291,7 +1293,7 @@ class LaunchInTmux(unittest.TestCase):
         self.assertEqual((core.state(self.c)["launch_in"], server.setup_status(self.c)["launch_in"]), ("tab", "tab"))
         with self.assertRaisesRegex(RiverError, "works on macOS and Windows only"):
             server.launch_agent(self.c)
-        # tmux is installed: every start opens a tmux pane, also the fresh sessions of river serve.
+        # tmux is installed: every start opens a tmux pane, also the fresh sessions of maxpm serve.
         with mock.patch.object(core, "tmux_path", lambda: "/opt/homebrew/bin/tmux"):
             self.assertEqual((core.state(self.c)["launch_in"], server.setup_status(self.c)["launch_in"]), ("tmux", "tmux"))
             t = server.launch_agent(self.c)
@@ -1399,7 +1401,7 @@ class LaunchInTmux(unittest.TestCase):
         for key, bad in (("idle_after", "soon"), ("idle_end", "soon"), ("fresh_sessions", "maybe")):
             with self.assertRaisesRegex(RiverError, "bad duration|on or off"):
                 core.config_set(self.c, key, bad)
-        # The loop of river serve runs the pass every time.
+        # The loop of maxpm serve runs the pass every time.
         stop, looks = threading.Event(), []
         with mock.patch.object(server, "watch_prompts", lambda c: None), \
                 mock.patch.object(server, "fresh_sessions", lambda c: (looks.append(1), stop.set())):
@@ -1425,12 +1427,12 @@ class LaunchInTmux(unittest.TestCase):
         # The person answers both: each item starts in a fresh session, with the answer in its notes.
         core.done(self.c, h, "CSV", actor="mark")
         core.answer(self.c, q, "ACME", actor="mark")
-        # A session that waits for work does not take them: river serve starts them within a pass or two.
+        # A session that waits for work does not take them: maxpm serve starts them within a pass or two.
         core.register(self.c, "cy")
         ids = lambda: [a["id"] for a in core.next_item(self.c, "shop", actor="cy", limit=9)]
         self.assertFalse({x, y} & set(ids()))
         with mock.patch.object(core, "now", lambda: core.datetime.now(core.timezone.utc) + core.FRESH_GRACE * 2):
-            self.assertTrue({x, y} <= set(ids()))  # with no river serve, after FRESH_GRACE go takes them
+            self.assertTrue({x, y} <= set(ids()))  # with no maxpm serve, after FRESH_GRACE go takes them
         started = server.fresh_sessions(self.c)["started"]
         self.assertEqual(sorted(started), [x, y])
         self.assertIn(f"[#{h} Pick the format: done by mark] CSV", core.item_show(self.c, x)["notes"])
@@ -1561,7 +1563,7 @@ class LaunchInTmux(unittest.TestCase):
         self.assertEqual([p["name"] for p in server.tmux_done(self.c)], ["#1 first: a | b"])
         self.assertEqual([c["name"] for c in server.tmux_tidy(self.c)["closed"]], ["#1 first: a | b"])
         self.assertEqual(sorted(p["name"] for p in server.tmux_view(None, conn=self.c)["panes"]), ["#2 second", "#4 fourth", "#5 fifth"])
-        # river serve tidies by itself: a shell closes at once, an open CLI after the same screen for idle_after, a prompt never.
+        # maxpm serve tidies by itself: a shell closes at once, an open CLI after the same screen for idle_after, a prompt never.
         server._open_terminal({"project": "shop", "path": self.dir.name, "session_title": "#8 eighth", "command": "sleep 60",
                                "launch_in": "tmux"}, {"RIVER_AGENT": "shop-dddd"})
         panes(lambda p: p["name"] != "#8 eighth" or p["running"] == "sleep")
@@ -1767,13 +1769,13 @@ class LaunchProfiles(unittest.TestCase):
         self.assertEqual(core.build_command("claude-code", claude, "opus", "high"),
                          "claude --model opus --effort high go --remote-control")
         self.assertEqual(core.build_command("claude-code", {**claude, "remote_control": "off", "permission_mode": "plan",
-                                                            "args": "--verbose", "prompt": "run river go now"}, "opus"),
-                         "claude --model opus --permission-mode plan --verbose 'run river go now'")
+                                                            "args": "--verbose", "prompt": "run maxpm go now"}, "opus"),
+                         "claude --model opus --permission-mode plan --verbose 'run maxpm go now'")
         rd = core._shell_quote(core.river_dir())
         codex = core.profile_options(self.c, "codex")
         self.assertEqual(core.build_command("codex", codex, "sol", "xhigh"),
                          f"codex -m sol -c model_reasoning_effort=xhigh --add-dir {rd} "
-                         "'run river go in this folder and follow the briefing'")
+                         "'run maxpm go in this folder and follow the briefing'")
         self.assertEqual(core.build_command("codex", {**codex, "sandbox": "workspace-write", "approval": "never",
                                                       "prompt": "go"}),
                          f"codex --sandbox workspace-write --ask-for-approval never --add-dir {rd} go")
@@ -1881,7 +1883,7 @@ class LaunchProfiles(unittest.TestCase):
         core.config_set(self.c, "launch_agents", "Claude Code=@claude-code; Codex=@codex; Mine=codex -m {model} go")
         t = core._launch_agent_cmd(self.c, pid, "Codex", "astra", "high")
         self.assertEqual(t["command"], f"codex -m gpt-6-astra -c model_reasoning_effort=high --add-dir {rd} "
-                                       "'run river go in this folder and follow the briefing'")
+                                       "'run maxpm go in this folder and follow the briefing'")
         self.assertEqual((t["model"], t["model_id"], t["env"]), ("astra", "gpt-6-astra", {"RIVER_MODEL": "astra"}))
         self.assertEqual(core._launch_agent_cmd(self.c, pid, "Mine", "terra")["command"], "codex -m gpt-5.6-terra go")
         # Claude Code takes the ladder names as they are.
@@ -1966,17 +1968,17 @@ class LaunchProfiles(unittest.TestCase):
         got = self.migrate(f"Claude Code=claude --model {{model}} --effort {{effort}} go; "
                            f"Planner=claude --permission-mode plan go --remote-control; "
                            f"Codex=codex -m {{model}} -c model_reasoning_effort={{effort}} --add-dir {rd} -s read-only "
-                           f"\"run river go and follow it\"; "
-                           f"Fixed=claude --model sonnet go; Odd=claude --verbose go; Grok=grok \"run river go\"", "project:shop")
+                           f"\"run maxpm go and follow it\"; "
+                           f"Fixed=claude --model sonnet go; Odd=claude --verbose go; Grok=grok \"run maxpm go\"", "project:shop")
         self.assertEqual(got, "Claude Code=@claude-code; Planner=@claude-code remote_control=on permission_mode=plan; "
-                              "Codex=@codex; Fixed=claude --model sonnet go; Odd=claude --verbose go; Grok=grok \"run river go\"")
+                              "Codex=@codex; Fixed=claude --model sonnet go; Odd=claude --verbose go; Grok=grok \"run maxpm go\"")
         pid = core._project(self.c, "shop")["id"]
         self.assertEqual(core.setting(self.c, "claude_remote_control", project_id=pid), "off")
         self.assertEqual(core.setting(self.c, "claude_remote_control"), "on")  # other projects keep the default
         self.assertEqual((core.setting(self.c, "codex_sandbox", project_id=pid),
-                          core.setting(self.c, "codex_prompt", project_id=pid)), ("read-only", "run river go and follow it"))
+                          core.setting(self.c, "codex_prompt", project_id=pid)), ("read-only", "run maxpm go and follow it"))
         self.assertEqual(core._launch_agent_cmd(self.c, pid, "Codex", "sol")["command"],
-                         f"codex -m gpt-6.1-sol --sandbox read-only --add-dir {rd} 'run river go and follow it'")
+                         f"codex -m gpt-6.1-sol --sandbox read-only --add-dir {rd} 'run maxpm go and follow it'")
         self.assertEqual(core._launch_agent_cmd(self.c, pid, "Planner")["command"],
                          "claude --permission-mode plan go --remote-control")
         # A remote-control name, or no prompt: custom, since a profile would change them.
@@ -2021,7 +2023,7 @@ class StartPushesToWaiting(unittest.TestCase):
 
 
 class ServeReload(unittest.TestCase):
-    """river serve runs new code without a person: it starts again by itself, or when river serve --restart asks."""
+    """maxpm serve runs new code without a person: it starts again by itself, or when maxpm serve --restart asks."""
 
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
@@ -2082,7 +2084,7 @@ class ServeReload(unittest.TestCase):
     def test_only_the_loop_of_river_serve_starts_again(self):
         import threading
         from river import notify
-        for port, want in ((8765, ["restart"]), (None, [])):  # river notify run has the same loop, and no page
+        for port, want in ((8765, ["restart"]), (None, [])):  # maxpm notify run has the same loop, and no page
             stop, did = threading.Event(), []
             with mock.patch.dict(notify.SERVE_PORT, {"port": port}), \
                     mock.patch.object(server, "watch_prompts", lambda c: stop.set()), \
@@ -2102,7 +2104,7 @@ class ServeReload(unittest.TestCase):
             self.assertIn("SyntaxError", server._code_loads())
             self.assertFalse(server._code_dirty())  # not a git clone: nothing says that someone edits
         with mock.patch.object(server, "_code_loads", lambda: "SyntaxError: invalid syntax"):
-            with self.assertRaisesRegex(RiverError, "does not load, so river serve keeps the code it runs"):
+            with self.assertRaisesRegex(RiverError, "does not load, so maxpm serve keeps the code it runs"):
                 server.OPS["serve_restart"](self.c, {}, None)
         with self.assertRaisesRegex(RiverError, "another queue"):
             server.OPS["serve_restart"](self.c, {"db": "/somewhere/else.db"}, None)
@@ -2115,7 +2117,7 @@ class ServeReload(unittest.TestCase):
 
     def test_river_serve_restart_waits_until_the_new_server_answers(self):
         from river import cli
-        answers = [{"boot": "1", "stale": True}, RiverError("no river serve answers"), RiverError("no river serve answers"),
+        answers = [{"boot": "1", "stale": True}, RiverError("no maxpm serve answers"), RiverError("no maxpm serve answers"),
                    {"boot": "1", "stale": True}, {"boot": "2", "stale": False}]
         ops = []
 
@@ -2137,7 +2139,7 @@ class ServeReload(unittest.TestCase):
             self.assertIn("did not answer again", out.getvalue())
             with contextlib.redirect_stdout(out), mock.patch.object(cli, "serve_restart", lambda conn: {"restarted": True, "stale": False}):
                 self.assertEqual(cli.run(["serve", "--restart"]), 0)
-            self.assertIn("river serve started again and answers on port", out.getvalue())
+            self.assertIn("maxpm serve started again and answers on port", out.getvalue())
 
     def test_a_command_reaches_a_server_that_starts_again_just_now(self):
         import urllib.error
@@ -2162,7 +2164,7 @@ class ServeReload(unittest.TestCase):
             self.assertEqual(cli.ask_server(self.c, "serve_status", {}), {"ok": True})
             self.assertEqual(len(tries), 3)
             tries.clear()
-            with self.assertRaisesRegex(RiverError, "no river serve answers"):
+            with self.assertRaisesRegex(RiverError, "no maxpm serve answers"):
                 cli.ask_server(self.c, "serve_status", {}, retries=1)
             self.assertEqual(len(tries), 2)
 

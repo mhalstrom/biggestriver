@@ -806,7 +806,7 @@ class Ownership(Base):
         box = core.inbox(self.c, "ag")
         self.assertEqual([(m["kind"], m["from_agent"]) for m in box], [("notice", "bo")])
         self.assertIn("deploy is waiting", box[0]["body"])
-        self.assertIn("river target give web --to ag", box[0]["body"])
+        self.assertIn("maxpm target give web --to ag", box[0]["body"])
 
     def test_takeover_from_a_gone_owner(self):
         core.target_own(self.c, "web", "ag")
@@ -1042,7 +1042,7 @@ class Goals(Base):
     def test_owner_adds_an_item_with_no_goal(self):
         core.goal_add(self.c, "shop", "g1", actor="t")
         core.goal_own(self.c, "g1", "ag")
-        a = core.item_add(self.c, "shop", "typo fix", actor="ag", goals=[])["id"]  # river add --no-goal
+        a = core.item_add(self.c, "shop", "typo fix", actor="ag", goals=[])["id"]  # maxpm add --no-goal
         b = core.item_add(self.c, "shop", "goal work", actor="ag")["id"]
         ann = core.annotate(self.c)
         self.assertEqual((ann[a]["goals"], ann[b]["goals"]), ([], ["g1"]))
@@ -1458,7 +1458,7 @@ class KeepRelease(Base):
         st = core._item(self.c, self.p)
         self.assertEqual((st["status"], st["assignee"]), ("open", None))
         self.assertEqual(core._open_prereqs(self.c, self.p), [h["id"]])  # still waits on the person
-        self.assertIn("river go", core.inbox(self.c, "ag")[0]["body"])
+        self.assertIn("maxpm go", core.inbox(self.c, "ag")[0]["body"])
         self.assertTrue(any(m["kind"] == "alert" and f"#{self.p}" in m["body"] for m in core.inbox(self.c, "mark")))
         self.assertEqual(core.go(self.c, self.dir.name, "ag")["item"]["id"], other)
 
@@ -1941,14 +1941,14 @@ class Push(Base):
 
     def test_the_one_an_item_is_reserved_for_pushes_it_on_and_refusals_name_the_command(self):
         self.c.execute("UPDATE items SET reserved_for='boss' WHERE id=?", (self.x,))
-        with self.assertRaisesRegex(RiverError, f"reserved for boss; .*river edit {self.x} --unreserve"):
+        with self.assertRaisesRegex(RiverError, f"reserved for boss; .*maxpm edit {self.x} --unreserve"):
             core.push(self.c, self.x, "bb", None, "aa")
-        with self.assertRaisesRegex(RiverError, f"river edit {self.x} --unreserve"):
+        with self.assertRaisesRegex(RiverError, f"maxpm edit {self.x} --unreserve"):
             core.claim(self.c, self.x, "bb")
-        with self.assertRaisesRegex(RiverError, f"reserved for boss; .*river edit {self.x} --unreserve"):
+        with self.assertRaisesRegex(RiverError, f"reserved for boss; .*maxpm edit {self.x} --unreserve"):
             core.release(self.c, self.x, None, "boss")
         self.c.execute("UPDATE agents SET role='manager' WHERE name='boss'")
-        with self.assertRaisesRegex(RiverError, f"reserved for you: .*river launch --item {self.x}.*river edit {self.x} --unreserve"):
+        with self.assertRaisesRegex(RiverError, f"reserved for you: .*maxpm launch --item {self.x}.*maxpm edit {self.x} --unreserve"):
             core.claim(self.c, self.x, "boss")
         core.push(self.c, self.x, "bb", None, "boss")
         it = core._item(self.c, self.x)
@@ -2056,12 +2056,12 @@ class Prompts(Base):
         p = core.prompt_for(self.c, h)
         from pathlib import Path
         folder = Path(self.dir.name).resolve()
-        for part in (f"cd {folder} && river --as mark show {h}", "docs/policy.md", "It blocks: #",
-                     f"river --as mark done {h} --output", "takeover"):
+        for part in (f"cd {folder} && maxpm --as mark show {h}", "docs/policy.md", "It blocks: #",
+                     f"maxpm --as mark done {h} --output", "takeover"):
             self.assertIn(part, p)
         allp = core.prompt_for_all(self.c, "mark")
         self.assertIn("1. Item #", allp)
-        self.assertIn(f"river --as mark answer {q['id']}", allp)
+        self.assertIn(f"maxpm --as mark answer {q['id']}", allp)
         core.done(self.c, h, "approved", "mark")
         self.assertIn("Nothing", core.prompt_for_all(self.c, "nobody"))
 
@@ -2167,6 +2167,8 @@ class CommandNames(unittest.TestCase):
                 self.assertEqual(h.returncode, 0, h.stderr)
                 self.assertTrue(h.stdout.startswith(f"usage: {c} "), h.stdout[:40])
                 self.assertIn("maxpm and river are the same command", " ".join(h.stdout.split()))
+                v = subprocess.run([sys.executable, str(root / "bin" / c), "--version"], capture_output=True, text=True, env=env)
+                self.assertRegex(v.stdout.strip(), rf"^{c} \d+\.\d+")
             subprocess.run([sys.executable, str(root / "bin" / "maxpm"), "project", "add", "shop"], check=True,
                            capture_output=True, env=env)
             ls = subprocess.run([sys.executable, str(root / "bin" / "river"), "project", "list"], capture_output=True,
@@ -2206,6 +2208,71 @@ class AgentBlock(unittest.TestCase):
             self.assertEqual(f.read_text(), "# Notes\n\n" + cli.AGENT_SNIPPET + "\n## More\n")
             self.assertIn("MaximizePM", cli.AGENT_SNIPPET)
             self.assertIn("already", cli._append_block(f))
+
+    def test_a_block_that_runs_river_becomes_the_maxpm_block_in_every_project_folder(self):
+        from pathlib import Path
+        from river import cli
+        self.assertIn("uses MaximizePM (`maxpm`)", cli.AGENT_SNIPPET)
+        self.assertIn("`maxpm go`", cli.AGENT_SNIPPET)
+        self.assertNotIn("river", cli.AGENT_SNIPPET)
+        with tempfile.TemporaryDirectory() as d:
+            c = core.connect(Path(d, "r.db"))
+            a, b, plain = Path(d, "a").resolve(), Path(d, "b").resolve(), Path(d, "plain").resolve()
+            for x in (a, b, plain):
+                x.mkdir()
+            core.project_add(c, "a", path=str(a))
+            core.project_add(c, "a2", path=str(a))  # two projects in one folder: the folder once
+            core.project_add(c, "b", path=str(b))
+            core.project_add(c, "plain", path=str(plain))
+            core.project_add(c, "nofolder")
+            core.project_add(c, "gone", path=str(Path(d, "gone")))
+            (a / "CLAUDE.md").write_text("# Rules\n\n- keep this line\n\n" + cli._SNIPPET_RIVER + "\n## More\n")
+            (a / "AGENTS.md").write_text(cli._SNIPPET_BR)
+            (b / "AGENTS.md").write_text(cli.AGENT_SNIPPET)
+            (plain / "CLAUDE.md").write_text("# Only my own rules\n")
+            rows = {(Path(r["file"]).parent.name, Path(r["file"]).name): r["result"] for r in cli.refresh_blocks(c)}
+            self.assertEqual(rows, {("a", "CLAUDE.md"): "updated", ("a", "AGENTS.md"): "updated",
+                                    ("b", "AGENTS.md"): "current", ("plain", "CLAUDE.md"): "no block"})
+            # Only the block changed; a file with no block stays, and no file is added.
+            self.assertEqual((a / "CLAUDE.md").read_text(), "# Rules\n\n- keep this line\n\n" + cli.AGENT_SNIPPET + "\n## More\n")
+            self.assertEqual((a / "AGENTS.md").read_text(), cli.AGENT_SNIPPET)
+            self.assertEqual((plain / "CLAUDE.md").read_text(), "# Only my own rules\n")
+            self.assertEqual(sorted(x.name for x in plain.iterdir()), ["CLAUDE.md"])
+            self.assertEqual(sorted(x.name for x in b.iterdir()), ["AGENTS.md"])
+            self.assertEqual({r["result"] for r in cli.refresh_blocks(c)}, {"current", "no block"})  # again: nothing
+            c.close()
+            # The command: maxpm init --refresh.
+            os.environ["RIVER_DB"] = str(Path(d, "r.db"))
+            try:
+                (a / "AGENTS.md").write_text(cli._WAIT_BLOCK)
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    self.assertEqual(cli.run(["init", "--refresh"]), 0)
+            finally:
+                os.environ.pop("RIVER_DB", None)
+            self.assertIn(f"{a / 'AGENTS.md'}: updated the work queue block to the current text", out.getvalue())
+            self.assertIn("1 file(s) updated in 3 project folder(s). Commit each one in its repository.", out.getvalue())
+            self.assertEqual((a / "AGENTS.md").read_text(), cli.AGENT_SNIPPET)
+
+    def test_the_briefing_says_when_maxpm_is_not_on_path(self):
+        from pathlib import Path
+        from river import cli
+        with tempfile.TemporaryDirectory() as d:
+            c = core.connect(Path(d, "r.db"))
+            core.project_add(c, "p", path=d)
+            core.register(c, "ag")
+            b = core.go(c, d, "ag")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                cli.render_go(b)
+            self.assertNotIn("not on PATH", out.getvalue())
+            self.assertIn("maxpm --as ag go", out.getvalue())
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), mock.patch.object(cli, "maxpm_on_path", lambda: False):
+                cli.render_go(b)
+            self.assertIn("The command maxpm is not on PATH on this computer", out.getvalue())
+            self.assertIn("type river in place of maxpm", out.getvalue())
+            c.close()
 
     def test_go_names_an_old_block_until_init_updates_it(self):
         from pathlib import Path
@@ -2263,10 +2330,10 @@ class AgentBlock(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             c, a = Path(d, "CLAUDE.md"), Path(d, "AGENTS.md")
             c.write_text("# Rules\n\nPush to main deploys.\n")
-            a.write_text(cli.AGENT_SNIPPET)  # what an older river init made
+            a.write_text(cli.AGENT_SNIPPET)  # what an older maxpm init made
             self.assertEqual(cli.instructions_layout(d), "claude_only")
             lines = cli.setup_instructions(d)  # no choice given: both get the block, and the choice is named
-            self.assertIn("river init --move", lines[-1])
+            self.assertIn("maxpm init --move", lines[-1])
             self.assertIn("Push to main", c.read_text())
             cli.setup_instructions(d, move=True)
             self.assertEqual(c.read_text(), "@AGENTS.md\n")
@@ -2934,7 +3001,7 @@ class GoalLeases(Base):
 
 
 class AgentQueue(Base):
-    """river queue: one agent's ordered queue of items and instructions, read before the project queue (#425)."""
+    """maxpm queue: one agent's ordered queue of items and instructions, read before the project queue (#425)."""
 
     def setUp(self):
         super().setUp()
@@ -2970,7 +3037,7 @@ class AgentQueue(Base):
         with self.assertRaisesRegex(RiverError, "a person or a manager changes queues"):
             core.queue_add(self.c, "s1", x, actor="s2")
         core.queue_add(self.c, "s1", message="commit what you have, then take #%d" % x, actor="mark")
-        self.assertIn("instruction", core._work_for(self.c, "s1", ["a"]))  # river wait wakes at once
+        self.assertIn("instruction", core._work_for(self.c, "s1", ["a"]))  # maxpm wait wakes at once
         b = core.go(self.c, self.dir.name, "s1")
         (n,) = b["queue_instructions"]
         self.assertEqual((n["body"][:6], n["added_by"]), ("commit", "mark"))
@@ -3002,7 +3069,7 @@ class AgentQueue(Base):
 
 
 class Stop(Base):
-    """river stop: a request at the front of the agent's queue; the agent commits, releases, and ends (#427)."""
+    """maxpm stop: a request at the front of the agent's queue; the agent commits, releases, and ends (#427)."""
 
     def setUp(self):
         super().setUp()
@@ -3142,14 +3209,14 @@ class NativeDelivery(Base):
         core.queue_add(self.c, "cc", message="two\nlines", actor="mark")
         t.join(5)
         srv.close()
-        self.assertEqual(got[0], "[river instruction from mark] two lines (river --as <you> inbox; river go shows your queue)\n")
+        self.assertEqual(got[0], "[river instruction from mark] two lines (maxpm --as <you> inbox; maxpm go shows your queue)\n")
         self.assertEqual(core.queue_list(self.c, "cc")["entries"][0]["native_status"], "sent")
         core.set_native(self.c, "cc", "Claude Code", os.path.join(d, "gone.sock"))
         self.assertTrue(core.deliver_native(self.c, "cc", "x").startswith("failed: exit 1:"))
 
 
 class Kill(Base):
-    """river stop --kill: emergency only; ends the agent's process on this host and releases what it held (#428)."""
+    """maxpm stop --kill: emergency only; ends the agent's process on this host and releases what it held (#428)."""
 
     def setUp(self):
         super().setUp()
@@ -3198,9 +3265,10 @@ class Kill(Base):
         self.assertFalse(core._between("claude", "claude go"))
         with mock.patch("os.name", "nt"):
             self.assertTrue(core._between("cmd.exe", "cmd /k claude go"))
-            self.assertTrue(core._between("river.exe", "river go"))
-            self.assertTrue(core._between("python.exe", r"C:\py\python.exe C:\tools\biggestriver\bin\river go"))
-            self.assertTrue(core._between("python.exe", "python.exe -m river go"))
+            for c in ("maxpm", "river"):  # the same command under both names
+                self.assertTrue(core._between(f"{c}.exe", f"{c} go"), c)
+                self.assertTrue(core._between("python.exe", rf"C:\py\python.exe C:\tools\biggestriver\bin\{c} go"), c)
+            self.assertTrue(core._between("python.exe", "python.exe -m river go"))  # the package is river
             self.assertFalse(core._between("python.exe", r"D:\biggestriver\venv\python.exe agent.py"))
             self.assertFalse(core._between("node.exe", "node claude.js go"))
         self.p.kill()
@@ -3226,7 +3294,7 @@ class Kill(Base):
 
 
 class Manager(Base):
-    """river manage: one manager session at a time that runs the other agents (#430)."""
+    """maxpm manage: one manager session at a time that runs the other agents (#430)."""
 
     def setUp(self):
         super().setUp()
@@ -3369,7 +3437,7 @@ class BusyLease(Base):
         skipped = []
         self.assertEqual(core.next_item(self.c, "shop", claim=True, actor="w2", skipped=skipped), [])
         self.assertEqual(skipped, [{"id": x, "title": "run every check", "why": "w1 still works on it in its session"}])
-        with self.assertRaisesRegex(RiverError, f"the lease on #{x} ran out, but w1 still works on it .* river stop w1"):
+        with self.assertRaisesRegex(RiverError, f"the lease on #{x} ran out, but w1 still works on it .* maxpm stop w1"):
             core.claim(self.c, x, "w2")
         # A person or a manager stops the first session: then the item is free.
         core.stop_agent(self.c, "w1", "w2 takes it", actor="mark")
@@ -3382,7 +3450,7 @@ class BusyLease(Base):
         self.later(minutes=31)
         core.activity(self.c, "w2")
         self.assertEqual(self.status(x), ("open", None))
-        # river serve saw the first session busy after the lease ran out (its tmux pane changed): the item waits
+        # maxpm serve saw the first session busy after the lease ran out (its tmux pane changed): the item waits
         # for it, for lease_ttl after the last such sign.
         self.later(minutes=1)
         self.assertEqual(core.keep_busy(self.c, {"w1", "nobody"}), ["w1"])

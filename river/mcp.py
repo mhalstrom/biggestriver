@@ -1,10 +1,10 @@
 """An MCP server (stdio) for agents that cannot run shell commands.
 
-Run it with `river mcp`. Every tool runs the same code as the `river` command
+Run it with `maxpm mcp`. Every tool runs the same code as the `maxpm` command
 and returns the same text, so an agent reads the same briefings either way.
 The server remembers the agent name that `go`, `plan`, or `manage` gives, and
 passes it as --as on later calls that do not name one. With RIVER_CHAT=1 (the
-Claude desktop entry that `river setup-agent --claude-desktop` writes) the
+Claude desktop entry that `maxpm setup-agent --claude-desktop` writes) the
 session is a chat with no folder: go, plan, and manage brief it for that.
 Standard library only.
 """
@@ -27,10 +27,10 @@ PROTOCOL = "2025-06-18"
 _AS = {"type": "string", "description": "your river agent name (default: the one go or plan gave you)"}
 TOOLS = [
     {"name": "river",
-     "description": "Run any river command and get its text output, for example [\"go\"], "
+     "description": "Run any maxpm command and get its text output, for example [\"go\"], "
                     "[\"done\", \"12\", \"--output\", \"what changed, commit id\"], or [\"guide\"].",
      "inputSchema": {"type": "object", "required": ["args"], "properties": {
-         "args": {"type": "array", "items": {"type": "string"}, "description": "the words after `river`"},
+         "args": {"type": "array", "items": {"type": "string"}, "description": "the words after `maxpm`"},
          "as": _AS,
          "cwd": {"type": "string", "description": "run in this folder (the project folder, for go and add)"}}}},
     {"name": "go",
@@ -76,10 +76,10 @@ CHAT_INSTRUCTIONS = ("MaximizePM is the user's work queue for AI agents. In this
                      "plan work with the user (plan), run the coding agents (manage), go through what waits on the user "
                      "(river tool: [\"needs-you\"], then [\"prompt\", \"--all\"]), and do items that need no code, "
                      "such as writing or research (go; the result goes in done). Call the tool, then follow its briefing; "
-                     "for other river commands use the river tool with the words after `river`.")
+                     "for other maxpm commands use the river tool with the words after `maxpm`.")
 
 
-# One river command at a time: a call changes the process's folder and captures its stdout, and river serve
+# One river command at a time: a call changes the process's folder and captures its stdout, and maxpm serve
 # answers HTTP requests on several threads.
 _CALL_LOCK = threading.Lock()
 
@@ -89,7 +89,7 @@ class Server:
     tool call may name a cwd (not over HTTP: a web chat has no folder on this computer)."""
 
     def __init__(self, chat=None, folders=True):
-        # Over HTTP the session is a new chat: not the agent whose environment started river serve.
+        # Over HTTP the session is a new chat: not the agent whose environment started maxpm serve.
         self.agent = os.environ.get("RIVER_AGENT") if folders else None
         self.chat = os.environ.get("RIVER_CHAT") == "1" if chat is None else chat
         self.folders = folders
@@ -142,13 +142,13 @@ class Server:
     def _call(self, words, a):
         out, err = io.StringIO(), io.StringIO()
         old = os.getcwd()
-        # Over HTTP, river's own default name ($RIVER_AGENT of river serve) is not this chat's.
+        # Over HTTP, river's own default name ($RIVER_AGENT of maxpm serve) is not this chat's.
         env_agent = os.environ.pop("RIVER_AGENT", None) if not self.folders else None
         code = 0
         try:
             if a.get("cwd"):
                 os.chdir(os.path.expanduser(a["cwd"]))
-            elif not self.folders:  # river serve may run in a project folder; a web chat is in none
+            elif not self.folders:  # maxpm serve may run in a project folder; a web chat is in none
                 os.chdir(os.path.abspath(os.sep))
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                 try:
@@ -213,7 +213,7 @@ def serve(stdin=None, stdout=None):
             stdout.flush()
 
 
-# ---------------------------------------------------------------- Streamable HTTP (river serve, /mcp)
+# ---------------------------------------------------------------- Streamable HTTP (maxpm serve, /mcp)
 
 HTTP_SESSIONS = {}
 _SESSIONS_LOCK = threading.Lock()
@@ -232,9 +232,9 @@ def _host_only(value):
 
 def local_refusal(client_ip, headers, what="/mcp"):
     """Why a /mcp request is refused, or None. Until the endpoint has OAuth (#438) it answers only requests
-    made on this computer, straight to river serve: never through a tunnel or proxy, whose requests also
+    made on this computer, straight to maxpm serve: never through a tunnel or proxy, whose requests also
     arrive from 127.0.0.1. The Host and Origin checks stop a web page of another site from calling it (DNS
-    rebinding). Every other route of river serve (what) follows the same rule: server.Handler._refuse."""
+    rebinding). Every other route of maxpm serve (what) follows the same rule: server.Handler._refuse."""
     h = {k.lower(): v for k, v in headers.items()}
     if client_ip not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
         return f"only this computer may call {what}"

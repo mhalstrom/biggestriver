@@ -16,7 +16,7 @@ from . import core
 from .core import RiverError
 
 ADAPTERS = {}
-SERVE_PORT = {"port": None}  # set by river serve, so links point at the page that is running
+SERVE_PORT = {"port": None}  # set by maxpm serve, so links point at the page that is running
 
 
 def register_channel(name, make):
@@ -53,7 +53,7 @@ def _ntfy_channel(conn):
     topic = core.setting(conn, "ntfy_topic")
     token = core.setting(conn, "ntfy_token")
     if not topic:
-        raise RiverError("ntfy has no topic; run: river notify setup ntfy")
+        raise RiverError("ntfy has no topic; run: maxpm notify setup ntfy")
 
     def send(title, body, url):
         headers = {"Title": _header(title), "Tags": "bell", "Content-Type": "text/plain; charset=utf-8",
@@ -102,7 +102,7 @@ def _email_channel(conn):
     sender = core.setting(conn, "email_from") or user
     missing = [k for k, v in (("email_to", to), ("smtp_host", host), ("email_from", sender)) if not v]
     if missing:
-        raise RiverError(f"email needs {', '.join(missing)}: river config set <key> <value>")
+        raise RiverError(f"email needs {', '.join(missing)}: maxpm config set <key> <value>")
     password = smtp_password()
     if user and not password:
         raise RiverError(f"email: smtp_user is set but there is no password; set RIVER_SMTP_PASSWORD "
@@ -281,7 +281,7 @@ def status(conn):
 
 
 def loop(stop, interval_s=None):
-    """Run the dispatcher until stop (a threading.Event) is set. For river serve and river notify run."""
+    """Run the dispatcher until stop (a threading.Event) is set. For maxpm serve and maxpm notify run."""
     while not stop.is_set():
         wait = interval_s or 30
         conn = core.connect()
@@ -294,11 +294,11 @@ def loop(stop, interval_s=None):
             server.auto_tidy(conn)  # every tidy_every: close the tmux panes of sessions that are done
             if core._channels(core.setting(conn, "notify_channels")):
                 run(conn)
-            if SERVE_PORT.get("port") and server.reload_ready(conn):  # river serve only: run the new code
+            if SERVE_PORT.get("port") and server.reload_ready(conn):  # maxpm serve only: run the new code
                 conn.close()
                 server.restart_now("the river code changed")
         except Exception as e:  # keep the loop alive; the next pass retries
-            print(f"river notify: {e}", flush=True)
+            print(f"maxpm notify: {e}", flush=True)
         finally:
             conn.close()
         stop.wait(max(1.0, wait))

@@ -1,4 +1,4 @@
-// Add a project folder: what `river init` does in a folder, from the page (server folder_add). The same form
+// Add a project folder: what `maxpm init` does in a folder, from the page (server folder_add). The same form
 // in the setup guide and on the Projects tab. In the desktop app, "Choose folder…" opens the system folder
 // picker (window.riverDesktop, from the app's preload script); in a browser, people type or paste the path.
 import { esc, act, toast } from "../lib.js";
@@ -19,7 +19,7 @@ export function folderForm() {
   </div>`;
 }
 
-// The name river gives a folder when none is typed (as river init does).
+// The name river gives a folder when none is typed (as maxpm init does).
 function defaultName(path) {
   const base = path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "";
   return base.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "project";

@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # One database per user. A repository clone that already has data/river.db keeps using it until
-# `river db move` copies it to the home folder (sandboxed agents may not be allowed to write there yet).
+# `maxpm db move` copies it to the home folder (sandboxed agents may not be allowed to write there yet).
 # The product, and the names it had before: an instructions file that names one of them has its block.
 PRODUCT = "MaximizePM"
 OLD_PRODUCTS = ("Biggest River",)
@@ -43,7 +43,7 @@ DEFAULT_SETTINGS = {
     "lease_ttl": "30m",
     "hold_ttl": "2h",
     # A goal owner's claim on its goal: how long the ownership lasts without a river command of the owner
-    # (each command renews it), and how long its leases on the goal's items last. river goal own --lease 6h
+    # (each command renews it), and how long its leases on the goal's items last. maxpm goal own --lease 6h
     # picks another length for one ownership. While a goal has an owner, its agent items are reserved for it.
     "goal_lease": "4h",
     # How long an agent may hold an item that waits on a person's item (added with --keep). Then river
@@ -90,12 +90,12 @@ DEFAULT_SETTINGS = {
     # choice the flag before them drops out.
     "launch_agents": "Claude Code=@claude-code",
     # Where a new session opens: a Terminal tab or window (macOS; Windows always opens a console window), or
-    # tmux: a pane of the tmux session "river" on any system, and `river view` shows them all side by side.
-    # auto (the default): tmux when tmux is installed, else tab. Every start uses it: river launch, the page's
-    # Start and Dispatch, and the fresh sessions of river serve.
+    # tmux: a pane of the tmux session "river" on any system, and `maxpm view` shows them all side by side.
+    # auto (the default): tmux when tmux is installed, else tab. Every start uses it: maxpm launch, the page's
+    # Start and Dispatch, and the fresh sessions of maxpm serve.
     "launch_in": "auto",
     # How river reaches a running session through its own platform, so a working agent sees a queue
-    # instruction, a stop, or a message at once: "Label=ENV_VAR: command" entries separated by ";". river go
+    # instruction, a stop, or a message at once: "Label=ENV_VAR: command" entries separated by ";". maxpm go
     # records the platform whose ENV_VAR is set in the session's environment, and its value as the address;
     # delivery runs the command with {address} and {message} filled in. The command "uds {address} {message}"
     # is built in: river writes the message as one line to that Unix socket. Claude Code's session inbox
@@ -108,34 +108,34 @@ DEFAULT_SETTINGS = {
     "setup_done": "off",
     # Review before release: with review on, each deploy item waits on a review item that waits on
     # everything the release ships. review_prompt tells the reviewer what to do (your review process);
-    # review_cmd, when set, must exit 0 before river review pass accepts the review.
-    # Each project can also keep an ordered list of review steps (river review step add): the review
+    # review_cmd, when set, must exit 0 before maxpm review pass accepts the review.
+    # Each project can also keep an ordered list of review steps (maxpm review step add): the review
     # of a release follows the steps of every project it ships, next to review_prompt and review_cmd.
     # Set them globally or on the deploy project (deploy-<target>).
     # The outside tracker a project uses, in words an agent can act on: which tracker, where, and with
     # what tool, e.g. "github owner/shop via gh" or "jira PROJ via the Jira MCP server". Set it per
-    # project (river project tracker). River has no tracker API code: agents use their own tools.
+    # project (maxpm project tracker). River has no tracker API code: agents use their own tools.
     "tracker": "",
-    # A session with no work runs river wait in the foreground (a blocking command costs no tokens), never idle at
+    # A session with no work runs maxpm wait in the foreground (a blocking command costs no tokens), never idle at
     # its prompt: it takes new work when it comes, and ends after wait_max without any (0: end at once). One
-    # river wait call returns after wait_step, below a shell time limit.
+    # maxpm wait call returns after wait_step, below a shell time limit.
     "wait_max": "45m",
     "wait_step": "9m",
-    # The manager (river manage): an agent that waits for work longer than wait_too_long is a finding, and
-    # river manage --watch returns on a new finding, or after manage_every with nothing new (it runs as a
+    # The manager (maxpm manage): an agent that waits for work longer than wait_too_long is a finding, and
+    # maxpm manage --watch returns on a new finding, or after manage_every with nothing new (it runs as a
     # background command, so the manager's session wakes only then).
     "wait_too_long": "20m",
-    # A session the page (or river launch) started that runs no river command within connect_within is a
+    # A session the page (or maxpm launch) started that runs no river command within connect_within is a
     # finding (not connected): its agent did not start, or waits on a prompt in its terminal.
     "connect_within": "5m",
     # An agent in a tmux pane that waits on a prompt in its terminal (a permission prompt, a trust question):
-    # river serve reads each agent's pane every notify_interval. When one of the last lines on the screen
+    # maxpm serve reads each agent's pane every notify_interval. When one of the last lines on the screen
     # matches prompt_pattern (a regular expression; empty: no watch) and those lines stay the same for
     # prompt_wait, each person gets an alert, with the agent's Terminal on the page. The words are those of
-    # Claude Code and Codex; add the words of another CLI or a new version with | (river config set).
+    # Claude Code and Codex; add the words of another CLI or a new version with | (maxpm config set).
     "prompt_pattern": r"Do you (want to|trust)|Would you like to|[Ee]nter to confirm|[❯›]\s*\d+\.\s",
     "prompt_wait": "20s",
-    # An agent that ended its turn at its CLI's prompt runs no river command. river serve never types into its
+    # An agent that ended its turn at its CLI's prompt runs no river command. maxpm serve never types into its
     # pane (a stale session continues a large context); it starts fresh sessions instead. An agent is idle at its
     # prompt when its tmux pane shows the agent CLI with the same screen and no prompt (prompt_pattern) for
     # idle_after, and it ran no river command for idle_after.
@@ -149,23 +149,23 @@ DEFAULT_SETTINGS = {
     "idle_after": "2m",
     "fresh_sessions": "on",
     "idle_end": "15m",
-    # river serve closes the tmux panes of sessions that are done every tidy_every, as river view --tidy does; a pane
+    # maxpm serve closes the tmux panes of sessions that are done every tidy_every, as maxpm view --tidy does; a pane
     # it closes by the queue's word (the CLI is still open) must show the same screen for idle_after first. 0s: never.
     "tidy_every": "20m",
-    # river serve starts again by itself when the river code on disk is newer than the code it runs (a commit, a
+    # maxpm serve starts again by itself when the river code on disk is newer than the code it runs (a commit, a
     # pull), so no person restarts it: it looks every notify_interval, and starts again when the files stayed the
     # same for one pass, git shows no change in the code folder that is not committed (an agent in the middle of an
-    # edit), and the new code loads. river serve --restart does it at once. off: only a person restarts it.
+    # edit), and the new code loads. maxpm serve --restart does it at once. off: only a person restarts it.
     "serve_reload": "on",
     # A lease does not run out while its agent is busy. An agent is busy when a command runs in its session (a
     # process below the agent CLI that started after the agent's last river command: a test run, a build), when its
-    # tmux pane changes, or when its pane shows a prompt for a person. river serve looks every notify_interval and
+    # tmux pane changes, or when its pane shows a prompt for a person. maxpm serve looks every notify_interval and
     # renews the leases of a busy agent; a river command that finds a lease past its time renews it when a command
     # runs in the holder's session. busy_max: how long after an agent's last river command these signs still
     # count (a server that an agent left running would hold an item for ever). 0s: only river commands renew.
     "busy_max": "4h",
     "manage_every": "30m",
-    # river cleanup lists a ready item that nobody claimed for this long.
+    # maxpm cleanup lists a ready item that nobody claimed for this long.
     "stale_after": "14d",
     "review": "off",
     "review_prompt": "",
@@ -181,7 +181,7 @@ DEFAULT_SETTINGS = {
     "default_effort": "",
     "default_min_model": "",
     "default_max_model": "",
-    # The agent type an item needs, when it names none (river add --agent): a launch platform (codex,
+    # The agent type an item needs, when it names none (maxpm add --agent): a launch platform (codex,
     # claude-code). agent_rules picks one from the item first: "codex: *.css, *.svg, image, logo" gives
     # Codex the items that touch a .css or .svg file or have the word image or logo in the title.
     # default_agent is the fallback; set it per project (--project) or kind (--kind).
@@ -219,7 +219,7 @@ LAUNCH_PLATFORMS = {
                       "text": "the id Codex gets (codex -m) for a model_ladder name (name=id, ...); "
                               "a name with no entry goes as it is"},
         "args": {"kind": "text", "default": "", "text": "more arguments, put before the prompt"},
-        "prompt": {"kind": "text", "default": "run river go in this folder and follow the briefing",
+        "prompt": {"kind": "text", "default": "run maxpm go in this folder and follow the briefing",
                    "text": "the first prompt (Codex does not read CLAUDE.md)"},
     }},
 }
@@ -237,7 +237,7 @@ CREATE TABLE IF NOT EXISTS targets (
   id                INTEGER PRIMARY KEY,
   name              TEXT NOT NULL UNIQUE,
   description       TEXT NOT NULL DEFAULT '',
-  monitor           TEXT NOT NULL DEFAULT '',  -- what a session watches after each deploy (river target monitor)
+  monitor           TEXT NOT NULL DEFAULT '',  -- what a session watches after each deploy (maxpm target monitor)
   owner             TEXT,
   owner_expires_at  TEXT,
   created_at        TEXT NOT NULL
@@ -293,7 +293,7 @@ CREATE TABLE IF NOT EXISTS items (
   takeover_at       TEXT,
   takeover_seen     INTEGER NOT NULL DEFAULT 0,
   needs_check       INTEGER NOT NULL DEFAULT 0,
-  fresh_start       TEXT,                     -- river serve starts a fresh session for it (an answer came)
+  fresh_start       TEXT,                     -- maxpm serve starts a fresh session for it (an answer came)
   model             TEXT,                     -- recommended model (NULL: the default_model setting)
   effort            TEXT,                     -- recommended effort level (NULL: default_effort)
   min_model         TEXT,                     -- hard limits, one model per family, comma list
@@ -316,8 +316,8 @@ CREATE TABLE IF NOT EXISTS goals (
   status            TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','complete')),
   owner             TEXT,
   owner_expires_at  TEXT,
-  owner_lease       TEXT,                     -- river goal own --lease; NULL: the goal_lease setting
-  shared            INTEGER NOT NULL DEFAULT 0, -- river goal edit --shared: no agent owns it, nothing is reserved
+  owner_lease       TEXT,                     -- maxpm goal own --lease; NULL: the goal_lease setting
+  shared            INTEGER NOT NULL DEFAULT 0, -- maxpm goal edit --shared: no agent owns it, nothing is reserved
   result            TEXT NOT NULL DEFAULT '',
   created_at        TEXT NOT NULL,
   completed_at      TEXT
@@ -381,16 +381,16 @@ CREATE TABLE IF NOT EXISTS agents (
   session        TEXT,
   session_ref    TEXT,
   session_url    TEXT,                       -- web link to the agent's session (Claude Code Remote Control)
-  model          TEXT,                       -- the model the session runs (RIVER_MODEL, river go --model)
+  model          TEXT,                       -- the model the session runs (RIVER_MODEL, maxpm go --model)
   agent_type     TEXT,                       -- the agent CLI it runs in (codex, claude-code), from its environment
-  manage_seen    TEXT,                       -- the manager's findings it has seen (river manage --watch)
+  manage_seen    TEXT,                       -- the manager's findings it has seen (maxpm manage --watch)
   busy_at        TEXT,                       -- when river last saw the session busy without a river command (keep_busy)
   pid            INTEGER,                    -- the agent CLI process that runs river, its host, and its command line
   host           TEXT,
   pid_cmd        TEXT,
   platform       TEXT,                       -- the agent CLI (a native_message label) and the session's address in it
   native_address TEXT,
-  stop_at        TEXT,                       -- river stop: when, who, and why; the session ends after it
+  stop_at        TEXT,                       -- maxpm stop: when, who, and why; the session ends after it
   stop_by        TEXT,
   stop_reason    TEXT,
   registered_at  TEXT NOT NULL,
@@ -643,7 +643,7 @@ def db_move(force=False):
         raise RiverError("RIVER_DB is set, so river does not use the default location; unset it first")
     src, dst = LEGACY_DB, HOME_DB.expanduser()
     if dst.exists():
-        raise RiverError(f"{dst} exists already; river uses it (river db path)")
+        raise RiverError(f"{dst} exists already; river uses it (maxpm db path)")
     if not src.exists():
         raise RiverError(f"no {src} to move; river already uses {dst}")
     old = connect(src)
@@ -653,7 +653,7 @@ def db_move(force=False):
                     if parse_iso(r["last_seen"]) > now() - timedelta(minutes=10)]
             if busy:
                 raise RiverError(f"agents were active in the last 10 minutes ({', '.join(busy)}); they would keep "
-                                 f"writing to the old file. Stop them (and river serve), then run it again, "
+                                 f"writing to the old file. Stop them (and maxpm serve), then run it again, "
                                  f"or add --force")
         dst.parent.mkdir(parents=True, exist_ok=True)
         tmp = dst.with_suffix(".db.tmp")
@@ -906,7 +906,7 @@ def config_set(conn, key, value, project=None, item=None, agent=None, actor=None
     elif key == "ntfy_url" and not re.match(r"^https?://[^\s/]+", value):
         raise RiverError("ntfy_url is the server address, for example https://ntfy.sh")
     elif key == "ntfy_topic" and value and not re.match(r"^[A-Za-z0-9_-]{1,64}$", value):
-        raise RiverError("ntfy_topic uses letters, digits, '-' and '_' (up to 64); river notify setup ntfy makes one")
+        raise RiverError("ntfy_topic uses letters, digits, '-' and '_' (up to 64); maxpm notify setup ntfy makes one")
     elif key == "notify_channels" and not all(re.match(r"^[a-z0-9_-]+$", c) for c in _channels(value)):
         raise RiverError("notify_channels is a comma list of channel names, for example: mac,ntfy (empty sends nothing)")
     sc = _scope(conn, project, item, agent, kind)
@@ -1061,7 +1061,7 @@ def _limit_list(ladder, value, what="limit"):
         if fam is None:
             known = "; ".join(f"{f}: {', '.join(ms)}" for f, ms in ladder.items())
             raise RiverError(f"{what}: {m} is not in the model_ladder setting ({known}); "
-                             f"a limit needs an order. Add it: river config set model_ladder \"...\"")
+                             f"a limit needs an order. Add it: maxpm config set model_ladder \"...\"")
         if fam in fams:
             raise RiverError(f"{what}: give at most one model per family ({fam} twice)")
         fams.add(fam)
@@ -1222,7 +1222,7 @@ def _project(conn, name):
     r = conn.execute("SELECT * FROM projects WHERE name=?", (name,)).fetchone()
     if not r:
         names = [x["name"] for x in conn.execute("SELECT name FROM projects WHERE archived=0 ORDER BY rank")]
-        raise RiverError(f"no project {name!r}; projects: {', '.join(names) or '(none; river project add <name>)'}")
+        raise RiverError(f"no project {name!r}; projects: {', '.join(names) or '(none; maxpm project add <name>)'}")
     return r
 
 
@@ -1268,15 +1268,15 @@ def project_archive(conn, name, actor=None):
 
 
 def project_path(conn, name, path, actor=None, move=False):
-    """Link a project to a folder, so `river go` run inside that folder finds it. A project linked to another
+    """Link a project to a folder, so `maxpm go` run inside that folder finds it. A project linked to another
     folder that still exists moves only with move=True: agents in the old folder would stop finding it."""
     full = str(Path(path).expanduser().resolve()) if path else None
     with tx(conn):
         old = _project(conn, name)["path"]
         if old and full and old != full and Path(old).is_dir() and not move:
             raise RiverError(f"project {name} is linked to {old}; linking it to {full} moves it, and agents in "
-                             f"{old} stop finding it. Only the user decides that: river project path {name} "
-                             f"{full} --move. A new project for this folder instead: river init")
+                             f"{old} stop finding it. Only the user decides that: maxpm project path {name} "
+                             f"{full} --move. A new project for this folder instead: maxpm init")
         conn.execute("UPDATE projects SET path=? WHERE name=?", (full, name))
         _event(conn, None, actor, f"project {name} path {full or 'cleared'}")
     return dict(_project(conn, name))
@@ -1369,7 +1369,7 @@ def _goal(conn, name):
     if not r:
         known = [x["name"] for x in conn.execute("SELECT name FROM goals WHERE status='open' ORDER BY rank")]
         raise RiverError(f"no goal {name!r}" + (f"; open goals: {', '.join(known)}" if known
-                                                else "; add one: river goal add <project> <name> --outcome \"...\""))
+                                                else "; add one: maxpm goal add <project> <name> --outcome \"...\""))
     return r
 
 
@@ -1412,7 +1412,7 @@ def goal_add(conn, project, name, outcome="", done_when="", actor=None, rank=Non
     with tx(conn):
         p = _project(conn, project)
         if conn.execute("SELECT 1 FROM goals WHERE name=?", (name,)).fetchone():
-            raise RiverError(f"goal {name} already exists: river goal show {name}")
+            raise RiverError(f"goal {name} already exists: maxpm goal show {name}")
         top = conn.execute("SELECT COALESCE(MAX(rank),0) m FROM goals WHERE project_id=?", (p["id"],)).fetchone()["m"]
         conn.execute("INSERT INTO goals(project_id,name,outcome,done_when,rank,created_at,shared) VALUES (?,?,?,?,?,?,?)",
                      (p["id"], name, outcome or "", done_when or "", top + 1, iso(now()), 1 if shared else 0))
@@ -1455,7 +1455,7 @@ def goal_rank(conn, name, rank, actor=None):
 
 
 def goal_edit(conn, name, outcome=None, done_when=None, new_name=None, actor=None, shared=None):
-    """Change a goal. shared=True makes it a goal with no owner: river go never gives it to an agent, nobody
+    """Change a goal. shared=True makes it a goal with no owner: maxpm go never gives it to an agent, nobody
     can own it, and its items stay open to every agent; shared=False lets one agent own it again. A person
     or a manager decides that, and the goal's owner can hand its goal to everyone."""
     with tx(conn):
@@ -1464,7 +1464,7 @@ def goal_edit(conn, name, outcome=None, done_when=None, new_name=None, actor=Non
             who = conn.execute("SELECT kind, role FROM agents WHERE name=?", (actor,)).fetchone() if actor else None
             if who and who["kind"] == "ai" and who["role"] != "manager" and not (shared and g["owner"] == actor):
                 raise RiverError(f"refused: a person or a manager decides if goal {name} is shared (no owner)"
-                                 + ("" if shared else "; while it is shared, take its items with river go"))
+                                 + ("" if shared else "; while it is shared, take its items with maxpm go"))
             if shared:
                 conn.execute("UPDATE goals SET shared=1, owner=NULL, owner_expires_at=NULL, owner_lease=NULL WHERE id=?",
                              (g["id"],))
@@ -1472,7 +1472,7 @@ def goal_edit(conn, name, outcome=None, done_when=None, new_name=None, actor=Non
                        + (f" (was owned by {g['owner']})" if g["owner"] else ""))
                 if g["owner"] and g["owner"] != actor:
                     _send(conn, "notice", "river", f"{actor or 'someone'} made goal {name} a shared goal: you do not "
-                          f"own it now, and its items are open to every agent. Keep the items you hold; river go "
+                          f"own it now, and its items are open to every agent. Keep the items you hold; maxpm go "
                           f"gives you its other items like any work.", to=g["owner"])
             else:
                 conn.execute("UPDATE goals SET shared=0 WHERE id=?", (g["id"],))
@@ -1520,14 +1520,14 @@ def goal_own(conn, name, actor=None, lease=None):
         _sweep(conn)
         g = _goal(conn, name)
         if g["status"] != "open":
-            raise RiverError(f"goal {name} is complete; reopen it first: river goal reopen {name}")
+            raise RiverError(f"goal {name} is complete; reopen it first: maxpm goal reopen {name}")
         if g["shared"]:
             raise RiverError(f"goal {name} is shared: nobody owns it, and its items are open to every agent. "
-                             f"Take its items with river go. A person or a manager changes that: "
-                             f"river goal edit {name} --owned")
+                             f"Take its items with maxpm go. A person or a manager changes that: "
+                             f"maxpm goal edit {name} --owned")
         if g["owner"] and g["owner"] != actor:
-            raise RiverError(f"goal {name} is owned by {g['owner']}; ask them (river send question --to {g['owner']} ...), "
-                             f"or take another: river goal list")
+            raise RiverError(f"goal {name} is owned by {g['owner']}; ask them (maxpm send question --to {g['owner']} ...), "
+                             f"or take another: maxpm goal list")
         conn.execute("UPDATE goals SET owner=?, owner_lease=? WHERE id=?",
                      (actor, lease if lease is not None else (g["owner_lease"] if g["owner"] == actor else None), g["id"]))
         ttl = _goal_lease(conn, _goal(conn, name), actor)
@@ -1569,7 +1569,7 @@ def goal_give(conn, name, to, actor=None):
         conn.execute("UPDATE goals SET owner=?, owner_expires_at=?, owner_lease=NULL WHERE id=?",
                      (rec["name"], iso(now() + ttl), g["id"]))
         _event(conn, None, actor, f"gave goal {name} to {to}")
-        _send(conn, "notice", actor, f"{actor} gave you goal {name}: {g['outcome']} (river goal show {name})", to=to)
+        _send(conn, "notice", actor, f"{actor} gave you goal {name}: {g['outcome']} (maxpm goal show {name})", to=to)
     return goal_show(conn, name)
 
 
@@ -1578,7 +1578,7 @@ def goal_owner(conn, name):
     g = _goal(conn, name)
     if not g["owner"]:
         raise RiverError((f"goal {name} is shared: it has no owner" if g["shared"] else f"nobody owns goal {name}")
-                         + f"; message an item holder instead (river goal show {name})")
+                         + f"; message an item holder instead (maxpm goal show {name})")
     return g["owner"]
 
 
@@ -1586,7 +1586,7 @@ def goal_done(conn, name, result, actor=None, drop_open=False):
     """Declare a goal complete with a one-line result. Refused while tagged items are open, unless
     drop_open, which drops them with the result as the note."""
     if not (result or "").strip():
-        raise RiverError("say what the goal achieved: river goal done <name> --result \"<one line>\"")
+        raise RiverError("say what the goal achieved: maxpm goal done <name> --result \"<one line>\"")
     g = _goal(conn, name)
     if g["status"] == "complete":
         raise RiverError(f"goal {name} is already complete")
@@ -1595,7 +1595,7 @@ def goal_done(conn, name, result, actor=None, drop_open=False):
     still = _goal_view(conn, g)["items_open"]
     if still and not drop_open:
         raise RiverError(f"goal {name} has open items: {', '.join('#' + str(i) for i in still)}. Finish them, untag them "
-                         f"(river edit <id> --untag {name}), or drop them: river goal done {name} --result \"...\" --drop-open")
+                         f"(maxpm edit <id> --untag {name}), or drop them: maxpm goal done {name} --result \"...\" --drop-open")
     for i in still:
         drop(conn, i, actor, note=f"goal {name} completed without it: {result}")
     with tx(conn):
@@ -1621,7 +1621,7 @@ def _target(conn, name):
     r = conn.execute("SELECT * FROM targets WHERE name=?", (name,)).fetchone()
     if not r:
         names = [x["name"] for x in conn.execute("SELECT name FROM targets ORDER BY name")]
-        raise RiverError(f"no target {name!r}; targets: {', '.join(names) or '(none; river target add <name> --description ...)'}")
+        raise RiverError(f"no target {name!r}; targets: {', '.join(names) or '(none; maxpm target add <name> --description ...)'}")
     return r
 
 
@@ -1647,7 +1647,7 @@ def target_describe(conn, name, text, actor=None):
 
 def target_monitor(conn, name, text, actor=None):
     """What to watch after each deploy of the target: health links, logs, error rates, and for how long.
-    With it set, claiming a deploy item adds a monitor item, and river serve opens a session for it."""
+    With it set, claiming a deploy item adds a monitor item, and maxpm serve opens a session for it."""
     with tx(conn):
         _target(conn, name)
         conn.execute("UPDATE targets SET monitor=? WHERE name=?", (text.strip(), name))
@@ -1702,25 +1702,25 @@ def target_own(conn, name, actor=None, takeover=None):
             left = parse_iso(t["owner_expires_at"]) - now()
             if state == "active" or takeover is None:
                 hint = (f"; {prior} is {state} (last seen {owner['last_seen'] if owner else 'never'}): "
-                        f"take it over with river target own {name} --takeover \"<why>\""
+                        f"take it over with maxpm target own {name} --takeover \"<why>\""
                         if state != "active" else "")
                 raise RiverError(f"refused: target {name} is owned by {prior} "
                                  f"(until {t['owner_expires_at']}, {_short(left)} left unless they renew). "
-                                 f"Ask them: river send question --to {prior} \"...\", "
-                                 f"or they can hand it over: river target give {name} --to {actor}{hint}")
+                                 f"Ask them: maxpm send question --to {prior} \"...\", "
+                                 f"or they can hand it over: maxpm target give {name} --to {actor}{hint}")
             if not reason:
                 raise RiverError(f"say why you take target {name} from {prior}: "
-                                 f"river target own {name} --takeover \"<why>\"")
+                                 f"maxpm target own {name} --takeover \"<why>\"")
         ttl = parse_duration(setting(conn, "owner_ttl", agent=actor))
         cur = conn.execute("UPDATE targets SET owner=?, owner_expires_at=? WHERE name=? AND (owner IS NULL OR owner=?)",
                            (actor, iso(now() + ttl), name, prior or actor))
         if cur.rowcount != 1:
-            raise RiverError(f"target {name} changed owner while you asked; see: river target show {name}")
+            raise RiverError(f"target {name} changed owner while you asked; see: maxpm target show {name}")
         if prior:
             _event(conn, None, actor, f"target {name} taken over from {prior} ({state}) by {actor}: {reason}")
             _send(conn, "notice", actor, f"{actor} took over target {name} while you were {state}: {reason}. "
                   f"You no longer run its deploys; ask {actor} or a person to give it back: "
-                  f"river target give {name} --to {prior}", to=prior)
+                  f"maxpm target give {name} --to {prior}", to=prior)
         elif t["owner"] != actor:
             _event(conn, None, actor, f"target {name} owned by {actor}")
     return target_show(conn, name)
@@ -1749,14 +1749,14 @@ def target_give(conn, name, to, actor=None):
         if t["owner"] != actor and not by_person:
             raise RiverError(f"only the owner, a person, or the manager can give target {name}; "
                              f"it is owned by {t['owner'] or 'nobody'}"
-                             + ("" if t["owner"] else f" (take it: river target own {name})"))
+                             + ("" if t["owner"] else f" (take it: maxpm target own {name})"))
         _agent(conn, to)
         ttl = parse_duration(setting(conn, "owner_ttl", agent=to))
         conn.execute("UPDATE targets SET owner=?, owner_expires_at=? WHERE name=?", (to, iso(now() + ttl), name))
         _event(conn, None, actor, f"target {name} given to {to}"
                + (f" by {actor} (was {t['owner']})" if by_person and t["owner"] else ""))
         _send(conn, "notice", actor, f"{actor} gave you target {name}: you now run its deploys. "
-              f"See: river target show {name}", to=to)
+              f"See: maxpm target show {name}", to=to)
         if by_person and t["owner"] and t["owner"] != to:
             _send(conn, "notice", actor, f"{actor} gave target {name} to {to}; you no longer run its deploys",
                   to=t["owner"])
@@ -1842,7 +1842,7 @@ def deploy_now(conn, target, review=False, actor=None):
             (dep["id"],))] if dep is not None else []
         if not shipped:
             raise RiverError(f"nothing is collected for {tg['name']}: ask for items to go out first "
-                             f"(river ship <id>, or done --ship)")
+                             f"(maxpm ship <id>, or done --ship)")
         rv = _release_review(conn, dep, tg, actor, force=True) if review else None
         _event(conn, dep["id"], actor, "deploy now" + (" after a review" if review else ""))
     ann = annotate(conn)
@@ -1855,7 +1855,7 @@ def deploy_now(conn, target, review=False, actor=None):
     if start["ready"] and start["kind"] == "deploy" and tg["owner"]:
         with tx(conn):
             _send(conn, "alert", actor or "river", f"deploy now: #{dep['id']} {dep['title']} is ready; "
-                  f"river go gives it to you", to=tg["owner"], item_id=dep["id"])
+                  f"maxpm go gives it to you", to=tg["owner"], item_id=dep["id"])
         out["alerted"] = tg["owner"]
     return out
 
@@ -2012,7 +2012,7 @@ def _add_refs(conn, item_id, pairs, actor):
                              (ref, it["id"], it["project_id"])).fetchone()
         if other:
             raise RiverError(f"{ref} is already linked to #{other['id']} {other['title']}, which is open in the "
-                             f"same project: river show {other['id']}")
+                             f"same project: maxpm show {other['id']}")
         old = conn.execute("SELECT url FROM item_refs WHERE item_id=? AND ref=?", (it["id"], ref)).fetchone()
         if old is None:
             conn.execute("INSERT INTO item_refs(item_id, ref, url, created_at) VALUES (?,?,?,?)",
@@ -2031,9 +2031,9 @@ def project_for_add(conn, cwd, related=None):
     if len(names) == 1:
         return names[0]
     if names:
-        raise RiverError(f"this folder belongs to {', '.join(names)}; name one: river add <project> \"<title>\"")
+        raise RiverError(f"this folder belongs to {', '.join(names)}; name one: maxpm add <project> \"<title>\"")
     raise RiverError("no project named and this folder is not linked to one; "
-                     "use: river add <project> \"<title>\" (or --blocks/--found-during <id>)")
+                     "use: maxpm add <project> \"<title>\" (or --blocks/--found-during <id>)")
 
 
 def _project_name(conn, pid):
@@ -2282,7 +2282,7 @@ def _alert_new_prereq(conn, item_id, blocked_by, actor):
         what = "deploy" if it["kind"] == "deploy" else "item"
         _send(conn, "alert", actor or "river",
               f"#{b['id']} {b['title']} was added before your {what} #{it['id']} {it['title']}. "
-              f"Stop and wait for it: river done {it['id']} is refused while it is open (river blockers {it['id']}).",
+              f"Stop and wait for it: maxpm done {it['id']} is refused while it is open (maxpm blockers {it['id']}).",
               to=who, item_id=it["id"])
 
 
@@ -2420,7 +2420,7 @@ def _count_late(conn, parent, n, actor):
     """Count prerequisites added to a claimed item; at replan_threshold, mark it replan.
 
     Work found after an agent starts means the item was bigger than planned, so
-    a planner looks at it again (river plan lists it; river replanned clears it)."""
+    a planner looks at it again (maxpm plan lists it; maxpm replanned clears it)."""
     conn.execute("UPDATE items SET late_prereqs=late_prereqs+? WHERE id=?", (n, parent))
     it = _item(conn, parent)
     limit = int(setting(conn, "replan_threshold", item_id=parent, agent=actor))
@@ -2477,7 +2477,7 @@ def keep(conn, item_id, actor=None):
                              + "; only an open item, or one you hold, can be kept")
         prereqs = _open_prereqs(conn, item_id)
         if not prereqs:
-            raise RiverError(f"#{item_id} waits on nothing open; claim it instead: river claim {item_id}")
+            raise RiverError(f"#{item_id} waits on nothing open; claim it instead: maxpm claim {item_id}")
         taken = [r for r in conn.execute(
             f"SELECT id, assignee, reserved_for FROM items WHERE id IN ({','.join('?' * len(prereqs))})", prereqs)
             if (r["assignee"] and r["assignee"] != actor) or (r["reserved_for"] and r["reserved_for"] != actor)]
@@ -2512,7 +2512,7 @@ def push(conn, item_id, to, note=None, actor=None):
         _event(conn, it["id"], actor, f"pushed to {to}" + (f": {note}" if note else ""))
         _send(conn, "alert", actor or "river",
               f"{actor or 'someone'} pushed #{it['id']} {it['title']} to you" + (f": {note}" if note else "") +
-              f". Take it: river accept {it['id']}   or: river decline {it['id']} --note \"why\"   "
+              f". Take it: maxpm accept {it['id']}   or: maxpm decline {it['id']} --note \"why\"   "
               f"(reserved for you for {_short(ttl)})", to=to, item_id=it["id"])
     return item_show(conn, item_id)
 
@@ -2523,7 +2523,7 @@ def accept(conn, item_id, actor=None):
     if it["reserved_for"] != actor or not it["reserved_until"]:
         raise RiverError(f"#{item_id} is not pushed to {actor}" +
                          (f" (reserved for {it['reserved_for']})" if it["reserved_for"] else "") +
-                         f"; claim it instead: river claim {item_id}")
+                         f"; claim it instead: maxpm claim {item_id}")
     return claim(conn, item_id, actor)
 
 
@@ -2553,15 +2553,15 @@ def offer(conn, body, item, to=None, actor=None, goal=None):
         it = _item(conn, item)
         to = to or it["assignee"] or it["reserved_for"]
         if not to:
-            raise RiverError(f"nobody holds #{item}; take it yourself: river claim {item} (or river next --unblocks {item} --claim)")
+            raise RiverError(f"nobody holds #{item}; take it yourself: maxpm claim {item} (or maxpm next --unblocks {item} --claim)")
         if to == actor:
             raise RiverError("you hold it yourself")
         _agent(conn, to)
         mid = _send(conn, "offer", actor, body.strip(), to=to, item_id=it["id"])
         _event(conn, it["id"], actor, f"offer #{mid} to {to}")
         conn.execute("UPDATE messages SET body=body || ? WHERE id=?", (
-            f"\n(answer: river give <id> --to {actor}   or: river split {it['id']} \"<smaller piece>\" ...   "
-            f"or: river decline {mid} --message --note \"why\")", mid))
+            f"\n(answer: maxpm give <id> --to {actor}   or: maxpm split {it['id']} \"<smaller piece>\" ...   "
+            f"or: maxpm decline {mid} --message --note \"why\")", mid))
     return message_show(conn, mid)
 
 
@@ -2619,7 +2619,7 @@ def give(conn, item_id, to, actor=None):
         _event(conn, it["id"], actor, f"given to {to}")
         _accept_offers(conn, actor, to, iso(t))
         _send(conn, "notice", actor, f"{actor} gave you #{it['id']} {it['title']}; it is yours now "
-              f"(river show {it['id']})", to=to, item_id=it["id"])
+              f"(maxpm show {it['id']})", to=to, item_id=it["id"])
     return item_show(conn, item_id)
 
 
@@ -2652,7 +2652,7 @@ def accept_message(conn, msg_id, actor=None):
         m = _message(conn, msg_id)
         if m["kind"] != "alert":
             raise RiverError(f"message {msg_id} is {'an' if m['kind'][0] in 'aeiou' else 'a'} {m['kind']}; only alerts are "
-                             f"accepted by message id (an offer: river give <item> --to <agent>, or river split)")
+                             f"accepted by message id (an offer: maxpm give <item> --to <agent>, or maxpm split)")
         if m["to_agent"] != actor:
             raise RiverError(f"message {msg_id} is for {m['to_agent']}, not {actor}")
         if m["state"] not in ("open", "read"):  # reading an alert does not answer it
@@ -2673,7 +2673,7 @@ def accept_message(conn, msg_id, actor=None):
             if it["status"] != "open" or (it["reserved_for"] and it["reserved_for"] != actor):
                 raise RiverError(f"#{it['id']} is {it['status']}" + (f" by {it['assignee']}" if it["assignee"] else "")
                                  + (f", reserved for {it['reserved_for']}" if it["reserved_for"] else "")
-                                 + f"; decline instead: river decline {msg_id} --message --note \"why\"")
+                                 + f"; decline instead: maxpm decline {msg_id} --message --note \"why\"")
             ttl = parse_duration(setting(conn, "reserve_ttl", item_id=it["id"], agent=actor))
             conn.execute("UPDATE items SET reserved_for=?, reserved_until=?, reserved_by=? WHERE id=?",
                          (actor, iso(now() + ttl), m["from_agent"], it["id"]))
@@ -2698,7 +2698,7 @@ def _holder_of(conn, item_id):
 
 
 def message(conn, kind, body, to=None, holder_of=None, item=None, file=None, cwd=None, actor=None, goal=None):
-    """The shortcuts river alert / ask / note (design 7.4): to an agent, to the holder of an item, or
+    """The shortcuts maxpm alert / ask / note (design 7.4): to an agent, to the holder of an item, or
     (questions) to every agent whose held items touch a file. Returns the messages sent."""
     if sum(x is not None for x in (to, holder_of, file, goal)) > 1:
         raise RiverError("give one of: an agent name, --holder-of <id>, --goal <name>, or --file <path>")
@@ -2706,10 +2706,10 @@ def message(conn, kind, body, to=None, holder_of=None, item=None, file=None, cwd
         to = goal_owner(conn, goal)
     if file is not None:
         if kind != "question":
-            raise RiverError("--file is for questions: river ask --file <path> \"...\"")
+            raise RiverError("--file is for questions: maxpm ask --file <path> \"...\"")
         targets = [a["name"] for a in who(conn, file=file, cwd=cwd) if a["name"] != actor]
         if not targets:
-            raise RiverError(f"no agent holds an item that touches {file} (river who --file {file})")
+            raise RiverError(f"no agent holds an item that touches {file} (maxpm who --file {file})")
         return [send(conn, kind, body, t, item, None, actor) for t in targets]
     if holder_of is not None:
         to = _holder_of(conn, holder_of)
@@ -2763,7 +2763,7 @@ def _free_reservations(conn, agent, why):
 
 
 def _unreserve_hint(item_id):
-    return f"that agent, a person, or a manager ends the reservation: river edit {item_id} --unreserve"
+    return f"that agent, a person, or a manager ends the reservation: maxpm edit {item_id} --unreserve"
 
 
 def cancel_push(conn, item_id, actor=None):
@@ -3065,7 +3065,7 @@ def ready_list(conn, project=None, unblocks=None, doer_for=None, ann=None, near=
         hist = [i for i in history(conn, mine) if i in ann]
         if not hist:
             raise RiverError(f"{mine} has no claimed or finished items yet, so there is no history to work near. "
-                             f"Pick an area instead: river project list, then river next --project <name>")
+                             f"Pick an area instead: maxpm project list, then maxpm next --project <name>")
         dist = _graph_distances(ann, hist)
         hist_projects = {ann[i]["project"] for i in hist}
         far = 10 ** 6
@@ -3100,7 +3100,7 @@ def may_change_queue(conn, actor, agent):
     if r and (r["kind"] == "human" or r["role"] == "manager"):
         return None
     return (f"{actor} is an agent; a person or a manager changes queues. An agent lists its own queue "
-            f"(river queue list) and removes its own instruction entries after it acts on them")
+            f"(maxpm queue list) and removes its own instruction entries after it acts on them")
 
 
 def _queue_rows(conn, agent):
@@ -3158,13 +3158,13 @@ def queue_add(conn, agent, item=None, message=None, first=False, before=None, ac
         q = conn.execute("SELECT agent FROM queue_entries WHERE item_id=?", (it["id"],)).fetchone()
         if q:
             raise RiverError(f"#{it['id']} is already in the queue of {q['agent']}" + (
-                "" if q["agent"] == agent else f"; remove it there first: river queue remove {q['agent']} {it['id']}"))
+                "" if q["agent"] == agent else f"; remove it there first: maxpm queue remove {q['agent']} {it['id']}"))
         if it["status"] != "open" and it["assignee"] != agent:
             raise RiverError(f"#{it['id']} is {it['status']} by {it['assignee']}")
         conn.execute("INSERT INTO queue_entries(agent,pos,item_id,kind,added_by,created_at) VALUES (?,?,?,'item',?,?)",
                      (agent, _queue_pos(conn, agent, first, before), it["id"], actor, t))
         _event(conn, it["id"], actor, f"queued for {agent}")
-        _send(conn, "notice", actor or "river", f"#{it['id']} {it['title']} is in your queue now; river go takes it "
+        _send(conn, "notice", actor or "river", f"#{it['id']} {it['title']} is in your queue now; maxpm go takes it "
               f"when it is ready", to=agent, item_id=it["id"])
     return queue_list(conn, agent)
 
@@ -3193,9 +3193,9 @@ def _queue_entry(conn, agent, ref):
     elif ref.isdigit():
         r = conn.execute("SELECT * FROM queue_entries WHERE agent=? AND item_id=?", (agent, int(ref))).fetchone()
     else:
-        raise RiverError("name an item id (12) or an entry (e5; river queue list shows them)")
+        raise RiverError("name an item id (12) or an entry (e5; maxpm queue list shows them)")
     if not r:
-        raise RiverError(f"{ref} is not in the queue of {agent} (river queue list {agent})")
+        raise RiverError(f"{ref} is not in the queue of {agent} (maxpm queue list {agent})")
     return r
 
 
@@ -3401,7 +3401,7 @@ def _win_proc_info(pid):
 
 
 # Windows: programs that hold terminals and the desktop. One of them above the shells means a person ran
-# river by hand; it is not an agent, and river stop --kill must not end it.
+# river by hand; it is not an agent, and maxpm stop --kill must not end it.
 WIN_HOSTS = {"explorer", "windowsterminal", "openconsole", "conhost", "svchost", "services", "wininit", "winlogon",
              "sihost", "csrss"}
 
@@ -3412,8 +3412,8 @@ def _between(comm, args):
     name = comm.lower().lstrip("-")
     if os.name == "nt":
         name = name[:-4] if name.endswith(".exe") else name
-        runs_river = re.search(r'(^|[\\/\s"])river(\.exe|-script\.py)?["\s]', args.lower() + " ")
-        if name == "river" or re.fullmatch(r"py|python[\d.]*w?", name) and runs_river:
+        runs_river = re.search(r'(^|[\\/\s"])(river|maxpm)(\.exe|-script\.py)?["\s]', args.lower() + " ")
+        if name in COMMANDS or re.fullmatch(r"py|python[\d.]*w?", name) and runs_river:
             return True
     return name in SHELLS
 
@@ -3444,21 +3444,21 @@ def set_process(conn, name, pid, cmd, host=None):
 
 
 def kill_agent(conn, agent, reason, actor=None, grace=5.0, sleep=None):
-    """Emergency only (the normal path is river stop): end the agent's process on this host, then release
+    """Emergency only (the normal path is maxpm stop): end the agent's process on this host, then release
     everything it held. Checks that the PID still runs the recorded command, so a reused PID is not killed."""
     import signal
     import subprocess
     import time
     sleep = sleep or time.sleep
     if not reason or not reason.strip():
-        raise RiverError("say why: river stop <agent> --kill --reason \"...\"")
+        raise RiverError("say why: maxpm stop <agent> --kill --reason \"...\"")
     why = may_change_queue(conn, actor, agent)
     if why:
         raise RiverError(f"refused: a person or a manager kills an agent ({why})")
     ag = _agent(conn, agent)
     if not ag["pid"]:
-        raise RiverError(f"{agent} has no recorded process (river go records it); ask it to stop instead: "
-                         f"river stop {agent} --reason \"...\"")
+        raise RiverError(f"{agent} has no recorded process (maxpm go records it); ask it to stop instead: "
+                         f"maxpm stop {agent} --reason \"...\"")
     if ag["host"] != this_host():
         raise RiverError(f"{agent} runs on {ag['host']}, not on this host ({this_host()}); kill it there")
     killed = False
@@ -3588,7 +3588,7 @@ def _uds_send(path, text, timeout=5):
 
 
 def _native_text(kind, sender, body):
-    return f"[river {kind} from {sender}] {body} (river --as <you> inbox; river go shows your queue)"
+    return f"[river {kind} from {sender}] {body} (maxpm --as <you> inbox; maxpm go shows your queue)"
 
 
 def _deliver_entry(conn, entry_id):
@@ -3601,11 +3601,11 @@ def _deliver_entry(conn, entry_id):
 
 
 def stop_agent(conn, agent, reason, actor=None):
-    """river stop: a request, not a kill. A stop entry goes to the front of the agent's queue; a waiting agent
-    ends at once (river wait returns STOP), a working one on its next river command, after it commits and
+    """maxpm stop: a request, not a kill. A stop entry goes to the front of the agent's queue; a waiting agent
+    ends at once (maxpm wait returns STOP), a working one on its next river command, after it commits and
     releases its item. A person or a manager may stop any agent; an agent may stop only itself."""
     if not reason or not reason.strip():
-        raise RiverError("say why: river stop <agent> --reason \"...\"")
+        raise RiverError("say why: maxpm stop <agent> --reason \"...\"")
     if actor != agent:
         why = may_change_queue(conn, actor, agent)
         if why:
@@ -3631,7 +3631,7 @@ def stop_agent(conn, agent, reason, actor=None):
     waiting = ag["role"] == "waiting" and not holds
     native = None if waiting else _deliver_entry(conn, eid)
     return {"agent": agent, "reason": reason.strip(), "waiting": waiting, "holds": holds, "native": native,
-            "ends": "now: river wait returns STOP within seconds" if waiting
+            "ends": "now: maxpm wait returns STOP within seconds" if waiting
             else "after its next river command, once it commits and releases its item"}
 
 
@@ -3695,14 +3695,14 @@ def _sweep(conn):
             conn.execute("UPDATE agents SET busy_at=? WHERE name=?", (t, r["assignee"]))
             _event(conn, r["id"], "river", f"lease renewed: a command runs in the session of {r['assignee']}")
             continue
-        # The session may have done part or all of the work: the next taker checks first (river check).
+        # The session may have done part or all of the work: the next taker checks first (maxpm check).
         conn.execute("UPDATE items SET status='open', assignee=NULL, claimed_at=NULL, lease_expires_at=NULL, "
                      "needs_check=1 WHERE id=?", (r["id"],))
         conn.execute("UPDATE items SET reserved_for=NULL, reserved_until=NULL, reserved_by=NULL "
                      "WHERE id=? AND reserved_for=?", (r["id"], r["assignee"]))
         _event(conn, r["id"], "river", f"lease expired (was {r['assignee']}); back to open")
         _send(conn, "notice", "river", f"your lease on #{r['id']} expired; the item is open again. "
-              f"Claim it again if you still work on it: river claim {r['id']}", to=r["assignee"], item_id=r["id"])
+              f"Claim it again if you still work on it: maxpm claim {r['id']}", to=r["assignee"], item_id=r["id"])
     # A session river started for an item that never ran a river command gives its pushes back.
     late = iso(now() - parse_duration(setting(conn, "connect_within")))
     for r in conn.execute("SELECT DISTINCT a.name FROM agents a JOIN items i ON i.reserved_for=a.name "
@@ -3748,7 +3748,7 @@ def _sweep(conn):
         _event(conn, None, "river", f"goal {r['name']} ownership expired (was {r['owner']})")
         _send(conn, "notice", "river", f"your ownership of goal {r['name']} expired (goal_lease without a river "
               f"command); nobody owns it now, and its items are open to every agent. "
-              f"Take it again if you still work on it: river goal own {r['name']}", to=r["owner"])
+              f"Take it again if you still work on it: maxpm goal own {r['name']}", to=r["owner"])
     # An owner whose session is gone reserves nothing: the goal is free at once, not after goal_lease.
     for r in conn.execute("SELECT DISTINCT a.* FROM agents a JOIN goals g ON g.owner=a.name WHERE a.kind='ai'").fetchall():
         if _agent_state(conn, r) == "gone":
@@ -3762,14 +3762,14 @@ def _sweep(conn):
             continue
         _unhold(conn, r["id"], "river", f"hold expired (was {r['assignee']}); released")
         _send(conn, "notice", "river", f"your hold on #{r['id']} expired, so it is open to every agent now, and its "
-              f"prerequisites are no longer reserved for you. Hold it again: river keep {r['id']}",
+              f"prerequisites are no longer reserved for you. Hold it again: maxpm keep {r['id']}",
               to=r["assignee"], item_id=r["id"])
     for r in conn.execute("SELECT name, owner FROM targets WHERE owner IS NOT NULL AND owner_expires_at < ?",
                           (t,)).fetchall():
         conn.execute("UPDATE targets SET owner=NULL, owner_expires_at=NULL WHERE name=?", (r["name"],))
         _event(conn, None, "river", f"target {r['name']} ownership expired (was {r['owner']})")
         _send(conn, "notice", "river", f"your ownership of target {r['name']} expired; nobody owns it now. "
-              f"Take it again if you still deploy there: river target own {r['name']}", to=r["owner"])
+              f"Take it again if you still deploy there: maxpm target own {r['name']}", to=r["owner"])
     return [r["id"] for r in expired]
 
 
@@ -3780,7 +3780,7 @@ def _human_wait_ended(conn, r, human):
     names = ", ".join(f"#{h} {_item(conn, h)['title']}" for h in human)
     _unhold(conn, r["id"], "river", f"waited {wait} (human_wait_max) on {names}; released (was {r['assignee']})")
     _send(conn, "notice", "river", f"you waited {wait} (human_wait_max) for a person on {names}, so #{r['id']} "
-          f"{r['title']} is open again and still waits on it. Take other work now: river go. When the person "
+          f"{r['title']} is open again and still waits on it. Take other work now: maxpm go. When the person "
           f"finishes, #{r['id']} is ready for whoever runs go.", to=r["assignee"], item_id=r["id"])
     for h in (x["name"] for x in conn.execute("SELECT name FROM agents WHERE kind='human' ORDER BY name").fetchall()):
         _send(conn, "alert", "river", f"#{r['id']} {r['title']} waits on you: {names}. {r['assignee']} waited "
@@ -3823,7 +3823,7 @@ def _question_nudges(conn):
         conn.execute("UPDATE messages SET nudged_at=? WHERE id=?", (iso(now()), r["id"]))
         _send(conn, "notice", "river", f"{r['to_agent']} is {state} (last seen {r['last_seen'][:16].replace('T', ' ')} UTC) "
               f"and has not answered your question #{r['id']}. Ask someone else"
-              + (f": river ask --holder-of {r['item_id']} \"...\", or river who" if r["item_id"] else ": river who"),
+              + (f": maxpm ask --holder-of {r['item_id']} \"...\", or maxpm who" if r["item_id"] else ": maxpm who"),
               to=r["from_agent"], item_id=r["item_id"], reply_to=r["id"])
     # Other messages (alerts, notes, offers) that a gone agent never read: tell the sender once.
     for r in conn.execute("SELECT m.id, m.kind, m.from_agent, m.to_agent, m.item_id, a.last_seen FROM messages m "
@@ -3833,7 +3833,7 @@ def _question_nudges(conn):
             continue
         conn.execute("UPDATE messages SET nudged_at=? WHERE id=?", (iso(now()), r["id"]))
         _send(conn, "notice", "river", f"{r['to_agent']} is gone (last seen {r['last_seen'][:16].replace('T', ' ')} UTC) "
-              f"and never read your {r['kind']} #{r['id']}. Send it to someone else if it still matters (river who)",
+              f"and never read your {r['kind']} #{r['id']}. Send it to someone else if it still matters (maxpm who)",
               to=r["from_agent"], item_id=r["item_id"], reply_to=r["id"])
 
 
@@ -3850,7 +3850,7 @@ def _elapsed(text):
 def busy_now(conn, names=None):
     """The agents (among names; else every AI agent) in whose session a command runs now: the agent CLI process
     runs on this computer, and a process below it started after the agent's last river command (a test run, a
-    build, a merge). The servers the CLI started with are older, and so is a river wait, which renews last_seen
+    build, a merge). The servers the CLI started with are older, and so is a maxpm wait, which renews last_seen
     itself. Only within busy_max of the last river command. One ps call; an empty set with no ps (Windows, a
     sandbox that blocks it)."""
     import subprocess
@@ -3894,7 +3894,7 @@ def busy_now(conn, names=None):
 
 
 def keep_busy(conn, names):
-    """river serve saw these agents busy with no river command (busy_now, or their tmux pane): their leases, holds,
+    """maxpm serve saw these agents busy with no river command (busy_now, or their tmux pane): their leases, holds,
     goals and targets run from now, as after a river command. last_seen stays the time of the last river command."""
     limit = parse_duration(setting(conn, "busy_max"))
     t, kept = now(), []
@@ -3910,7 +3910,7 @@ def keep_busy(conn, names):
 def still_worked(conn):
     """{item: agent} for the open items whose lease ran out while the agent's session still works on them: nobody
     claimed the item since, the agent is registered on this computer and is not asked to stop, and a command runs
-    in its session now, or river serve saw it busy after the lease ran out and within the last lease_ttl. No
+    in its session now, or maxpm serve saw it busy after the lease ran out and within the last lease_ttl. No
     second agent takes such an item (two sessions in one folder); the first one claims it again, or a person or
     a manager stops it."""
     rows = conn.execute(
@@ -4130,7 +4130,7 @@ def set_session(conn, name, session, ref=None):
     m = re.match(r"^([^\[\]\x00-\x1f]+?)(?:\[\s*([0-9A-Za-z]+)\s*\])?$", " ".join((session or "").split()))
     if not m or len(m.group(1).strip()) > 128:
         raise RiverError("a session name is one line of up to 128 characters, optionally with its ref: "
-                         "river session \"<name>\" --ref <ref>  (ListAgents prints 'This session is <name> [<ref>]')")
+                         "maxpm session \"<name>\" --ref <ref>  (ListAgents prints 'This session is <name> [<ref>]')")
     session, ref = m.group(1).strip(), (ref or m.group(2) or "").strip("[] ") or None
     if ref and not re.match(r"^[0-9A-Za-z]{1,32}$", ref):
         raise RiverError("a session ref is the short code in brackets that ListAgents prints, such as b5e2e0")
@@ -4151,7 +4151,7 @@ def unregister(conn, name, actor=None):
         owned = [r["name"] for r in conn.execute("SELECT name FROM targets WHERE owner=?", (name,))]
         if owned:
             raise RiverError(f"{name} owns target {', '.join(owned)}; release or give it first "
-                             f"(river target release <t>, river target give <t> --to <agent>)")
+                             f"(maxpm target release <t>, maxpm target give <t> --to <agent>)")
         _drop_queue(conn, name, "stopped")
         _free_reservations(conn, name, f"{name} ended")
         _release_goals(conn, name, f"{name} ended")
@@ -4171,7 +4171,7 @@ def agent_note(conn, name, note):
 def _agent(conn, name):
     r = conn.execute("SELECT * FROM agents WHERE name=?", (name,)).fetchone()
     if not r:
-        raise RiverError(f"agent {name!r} is not registered; run: river register {name} [--human] [--note ...]")
+        raise RiverError(f"agent {name!r} is not registered; run: maxpm register {name} [--human] [--note ...]")
     return r
 
 
@@ -4189,7 +4189,7 @@ def _agent_state(conn, a):
     return "active"
 
 
-# The note of a session that river started for an item (Start, Dispatch, river launch).
+# The note of a session that river started for an item (Start, Dispatch, maxpm launch).
 STARTED_NOTE = "started from the page for"
 # The first words of the alert river sends for an agent that waits on a prompt in its terminal
 # (server.watch_prompts); the page and the notification link open that agent's Terminal for it.
@@ -4278,20 +4278,20 @@ def _claim_row(conn, item_id, actor):
     it0 = _item(conn, item_id)
     if ag["role"] in ("planner", "manager"):
         raise RiverError(f"refused: {actor} is a {ag['role']} session; it changes the plan and does not take work. "
-                         f"To work instead, run: river --as {actor} go" + (
-                             f". #{item_id} is reserved for you: start a session for it (river launch --item {item_id}), "
-                             f"or open it to every agent (river edit {item_id} --unreserve)"
+                         f"To work instead, run: maxpm --as {actor} go" + (
+                             f". #{item_id} is reserved for you: start a session for it (maxpm launch --item {item_id}), "
+                             f"or open it to every agent (maxpm edit {item_id} --unreserve)"
                              if it0["reserved_for"] == actor and it0["status"] == "open" else ""))
     if it0["doer"] == "human" and ag["kind"] == "ai":
         raise RiverError(f"refused: #{item_id} is for a person. If you can do it or work around it, take it over "
-                         f"(the user is told, and can undo it): river takeover {item_id} --note \"<how you will do it>\"")
+                         f"(the user is told, and can undo it): maxpm takeover {item_id} --note \"<how you will do it>\"")
     if it0["reserved_for"] and it0["reserved_for"] != actor:
         raise RiverError(f"refused: #{item_id} is reserved for {it0['reserved_for']}"
                          + ("" if it0["reserved_until"] else ", who holds the item it unblocks or was given it")
                          + f"; {_unreserve_hint(item_id)}")
     q = conn.execute("SELECT agent FROM queue_entries WHERE item_id=?", (item_id,)).fetchone()
     if q and q["agent"] != actor and ag["kind"] == "ai":
-        raise RiverError(f"refused: #{item_id} is in the queue of {q['agent']} (river queue list {q['agent']})")
+        raise RiverError(f"refused: #{item_id} is in the queue of {q['agent']} (maxpm queue list {q['agent']})")
     # A goal's items are its owner's, unless one was pushed or given to this agent.
     if ag["kind"] == "ai" and it0["doer"] != "human" and it0["reserved_for"] != actor:
         g = conn.execute("SELECT g.name, g.owner FROM item_goals ig JOIN goals g ON g.id=ig.goal_id WHERE ig.item_id=? "
@@ -4299,21 +4299,21 @@ def _claim_row(conn, item_id, actor):
                          "ORDER BY g.rank LIMIT 1", (item_id, actor, iso(now()))).fetchone()
         if g:
             raise RiverError(f"refused: #{item_id} is reserved for {g['owner']}, who owns goal {g['name']}. "
-                             f"Offer help: river offer \"<what you can take>\" --goal {g['name']}")
+                             f"Offer help: maxpm offer \"<what you can take>\" --goal {g['name']}")
     # A hold does not use up a lease when the agent takes one of its own reserved prerequisites.
     held, limit, key = _lease_room(conn, item_id, actor, ("in_progress",) if it0["reserved_for"] == actor
                                    else ("in_progress", "held"))
     if held >= limit:
         what = "items of its own goals and targets" if key == "goal_max_leases" else "item(s)"
         raise RiverError(f"refused: {actor} already holds {held} {what} ({key} {limit}). "
-                         f"Finish one (river done <id>), release one (river release <id>), "
-                         f"or raise the limit (river config set {key} <n> --agent {actor})")
-    # An item pushed to this session (Dispatch, river push): a person chose the session, so its agent type
+                         f"Finish one (maxpm done <id>), release one (maxpm release <id>), "
+                         f"or raise the limit (maxpm config set {key} <n> --agent {actor})")
+    # An item pushed to this session (Dispatch, maxpm push): a person chose the session, so its agent type
     # does not matter; model limits still do.
     why = _model_refusal(conn, it0, actor, any_type=it0["reserved_for"] == actor)
     if why:
-        raise RiverError(f"refused: #{item_id} {why}. Take other work (river go), or a session with an allowed "
-                         f"model or agent type takes it; a planner can change them: river edit {item_id} "
+        raise RiverError(f"refused: #{item_id} {why}. Take other work (maxpm go), or a session with an allowed "
+                         f"model or agent type takes it; a planner can change them: maxpm edit {item_id} "
                          f"--min-model/--max-model/--agent")
     it = _item(conn, item_id)
     if it["kind"] == "deploy":
@@ -4321,7 +4321,7 @@ def _claim_row(conn, item_id, actor):
         if not owner or owner["owner"] != actor:
             raise RiverError(f"refused: #{item_id} deploys to target {it['target']}, and only its owner can take it "
                              f"(owner: {owner['owner'] if owner and owner['owner'] else 'nobody'}). "
-                             f"Become the owner first: river target own {it['target']}")
+                             f"Become the owner first: maxpm target own {it['target']}")
     ttl = _lease_for(conn, item_id, actor)
     t = now()
     cur = conn.execute(
@@ -4392,8 +4392,8 @@ def next_item(conn, project=None, unblocks=None, claim=False, actor=None, limit=
         if not actor:
             return fits(pool)
         owned = {r["name"] for r in conn.execute("SELECT name FROM targets WHERE owner=?", (actor,))}
-        # An item an answer just came for goes to a fresh session (river serve starts it within a pass or two),
-        # not to a session that waits; with no river serve, the next go takes it after FRESH_GRACE.
+        # An item an answer just came for goes to a fresh session (maxpm serve starts it within a pass or two),
+        # not to a session that waits; with no maxpm serve, the next go takes it after FRESH_GRACE.
         fresh = {r["id"] for r in conn.execute("SELECT id FROM items WHERE fresh_start > ?",
                                                (iso(now() - FRESH_GRACE),))}
         pool = [a for a in pool if (a["kind"] != "deploy" or a["target"] in owned)
@@ -4431,7 +4431,7 @@ def next_item(conn, project=None, unblocks=None, claim=False, actor=None, limit=
         return [item_show(conn, pool[0]["id"])]
 
 
-# A chat app session (Claude desktop through river mcp) has no folder and no shell: it cannot edit a
+# A chat app session (Claude desktop through maxpm mcp) has no folder and no shell: it cannot edit a
 # repository, run a check, commit, or deploy. An item that names files or a check command needs one.
 FOLDER_WHY = "needs a folder: it names files or a check command (a coding agent takes it)"
 
@@ -4452,12 +4452,12 @@ def claim(conn, item_id, actor=None):
                    else f"conflicts with {', '.join('#' + str(b) for b in a['busy_conflicts'])}, which is in progress "
                         f"(both edit the same files)" if a["busy_conflicts"] and a["status"] == "open"
                    else f"status is {a['status']}" + (f" (held by {a['assignee']})" if a["assignee"] else ""))
-            raise RiverError(f"item {item_id} is not ready: {why}. See: river blockers {item_id}")
+            raise RiverError(f"item {item_id} is not ready: {why}. See: maxpm blockers {item_id}")
         first = still_worked(conn).get(a["id"], actor)
         if first != actor:
             raise RiverError(f"refused: the lease on #{item_id} ran out, but {first} still works on it in its session "
-                             f"(a command runs there). Take other work (river go). A person or a manager ends that "
-                             f"session first: river stop {first} --reason \"...\"")
+                             f"(a command runs there). Take other work (maxpm go). A person or a manager ends that "
+                             f"session first: maxpm stop {first} --reason \"...\"")
         _claim_row(conn, a["id"], actor)
     return item_show(conn, item_id)
 
@@ -4473,11 +4473,11 @@ def _close(conn, item_id, status, actor, output=None, note=None, force=None):
         if waits:
             ids = ", ".join(f"#{x}" for x in waits)
             if it["kind"] == "deploy":
-                raise RiverError(f"refused: deploy #{item_id} still waits on {ids} (river blockers {item_id}); "
+                raise RiverError(f"refused: deploy #{item_id} still waits on {ids} (maxpm blockers {item_id}); "
                                  f"finish or drop those first, then deploy")
             if not (force or "").strip():
-                raise RiverError(f"refused: #{item_id} still waits on {ids} (river blockers {item_id}). Finish those "
-                                 f"first, or close it anyway with a reason: river done {item_id} --force \"<why>\"")
+                raise RiverError(f"refused: #{item_id} still waits on {ids} (maxpm blockers {item_id}). Finish those "
+                                 f"first, or close it anyway with a reason: maxpm done {item_id} --force \"<why>\"")
             _event(conn, it["id"], actor, f"done while {ids} still open: {force.strip()}")
         if it["doer"] == "human" and _is_ai(conn, actor):
             if not (note or "").strip():
@@ -4524,12 +4524,12 @@ def synced(conn, item_id, ref=None, actor=None):
     with tx(conn):
         it = _item(conn, item_id)
         if it["status"] not in CLOSED_STATES:
-            raise RiverError(f"#{item_id} is {it['status']}; the write-back comes after river done {item_id}")
+            raise RiverError(f"#{item_id} is {it['status']}; the write-back comes after maxpm done {item_id}")
         rows = conn.execute("SELECT ref FROM item_refs WHERE item_id=?" + (" AND ref=?" if ref else ""),
                             (it["id"], ref.strip()) if ref else (it["id"],)).fetchall()
         if not rows:
             raise RiverError(f"#{item_id} has no tracker link" + (f" {ref}" if ref else "")
-                             + f"; its links: river show {item_id}")
+                             + f"; its links: maxpm show {item_id}")
         for r in rows:
             if conn.execute("UPDATE item_refs SET synced_at=? WHERE item_id=? AND ref=? AND synced_at IS NULL",
                             (iso(now()), it["id"], r["ref"])).rowcount:
@@ -4596,7 +4596,7 @@ def ship(conn, item_id, actor=None):
         proj = conn.execute("SELECT name, target FROM projects WHERE id=?", (it["project_id"],)).fetchone()
         if not proj["target"]:
             raise RiverError(f"project {proj['name']} has no deploy target; set one: "
-                             f"river project target {proj['name']} <target>  (river target list)")
+                             f"maxpm project target {proj['name']} <target>  (maxpm target list)")
         tg = _target(conn, proj["target"])
         dep = conn.execute("SELECT * FROM items WHERE kind='deploy' AND target=? AND status='open' ORDER BY id LIMIT 1",
                            (tg["name"],)).fetchone()
@@ -4605,7 +4605,7 @@ def ship(conn, item_id, actor=None):
             if not conn.execute("SELECT 1 FROM projects WHERE name=?", (pname,)).fetchone():
                 top = conn.execute("SELECT COALESCE(MAX(rank),0) m FROM projects WHERE archived=0").fetchone()["m"]
                 conn.execute("INSERT INTO projects(name,rank,notes,target,created_at) VALUES (?,?,?,?,?)",
-                             (pname, top + 1, f"Deploys to target {tg['name']}, made by river ship. "
+                             (pname, top + 1, f"Deploys to target {tg['name']}, made by maxpm ship. "
                               f"Only the target owner takes these items.", tg["name"], iso(now())))
                 _event(conn, None, actor, f"project {pname} added for target {tg['name']}")
             pid = conn.execute("SELECT id FROM projects WHERE name=?", (pname,)).fetchone()["id"]
@@ -4648,8 +4648,8 @@ def _release_review(conn, dep, tg, actor, force=False):
         "INSERT INTO items(project_id,title,notes,priority,rank,doer,context,\"check\",kind,target,created_at) "
         "VALUES (?,?,?,?,?,'any',?,?,'review',?,?)",
         (dep["project_id"], f"Review release {tg['name']}",
-         "Review everything this release ships before it deploys. Pass: river review pass <id>; "
-         "problems: river review fail <id> \"<fix>\" ... (fix items the review waits on).",
+         "Review everything this release ships before it deploys. Pass: maxpm review pass <id>; "
+         "problems: maxpm review fail <id> \"<fix>\" ... (fix items the review waits on).",
          dep["priority"], top + 0.5, setting(conn, "review_prompt", item_id=dep["id"]),
          setting(conn, "review_cmd", item_id=dep["id"]), tg["name"], iso(now())))
     rv = _item(conn, cur.lastrowid)
@@ -4669,10 +4669,10 @@ def _release_review(conn, dep, tg, actor, force=False):
 def _review_item(conn, item_id, actor):
     it = _item(conn, item_id)
     if it["kind"] != "review":
-        raise RiverError(f"#{item_id} is not a review item; reviews come with river ship when the setting review is on")
+        raise RiverError(f"#{item_id} is not a review item; reviews come with maxpm ship when the setting review is on")
     if it["status"] != "in_progress" or (actor and it["assignee"] != actor):
         raise RiverError(f"#{item_id} is {it['status']}" + (f" (held by {it['assignee']})" if it["assignee"] else "")
-                         + f"; take it first: river claim {item_id}")
+                         + f"; take it first: maxpm claim {item_id}")
     return it
 
 
@@ -4682,7 +4682,7 @@ def _review_step(conn, step_id):
     r = conn.execute("SELECT s.*, p.name project FROM review_steps s JOIN projects p ON p.id=s.project_id WHERE s.id=?",
                      (int(step_id),)).fetchone()
     if not r:
-        raise RiverError(f"no review step {step_id}; list them: river review step list [<project>]")
+        raise RiverError(f"no review step {step_id}; list them: maxpm review step list [<project>]")
     return r
 
 
@@ -4706,7 +4706,7 @@ def review_step_add(conn, project, text, run=False, at=None, actor=None):
     p = _project(conn, project)
     text = (text or "").strip()
     if not text:
-        raise RiverError("say what the step is: river review step add <project> \"<instruction>\" (or --run \"<command>\")")
+        raise RiverError("say what the step is: maxpm review step add <project> \"<instruction>\" (or --run \"<command>\")")
     with tx(conn):
         n = conn.execute("SELECT COUNT(*) FROM review_steps WHERE project_id=?", (p["id"],)).fetchone()[0]
         pos = n + 1 if at is None else max(1, min(int(at), n + 1))
@@ -4721,9 +4721,9 @@ def review_step_edit(conn, step_id, text=None, run=None, actor=None):
     """Change a step's text, or make it a command (run=True) or a written instruction (run=False)."""
     st = _review_step(conn, step_id)
     if text is None and run is None:
-        raise RiverError(f"say what changes: river review step edit {step_id} --text \"...\" and/or --run / --do")
+        raise RiverError(f"say what changes: maxpm review step edit {step_id} --text \"...\" and/or --run / --do")
     if text is not None and not text.strip():
-        raise RiverError("the step text cannot be empty; to remove it: river review step rm " + str(step_id))
+        raise RiverError("the step text cannot be empty; to remove it: maxpm review step rm " + str(step_id))
     with tx(conn):
         conn.execute("UPDATE review_steps SET text=?, kind=? WHERE id=?",
                      (text.strip() if text is not None else st["text"],
@@ -4789,7 +4789,7 @@ def review_pass(conn, item_id, output=None, actor=None, cwd=None, runner=None, c
     if missing:
         raise RiverError("confirm each written review step after you did it:\n"
                          + "\n".join(f"  step {s['id']} ({g['project']} {s['pos']}): {s['text']}" for g, s in missing)
-                         + f"\nThen: river review pass {item_id} --confirm all   (or --confirm "
+                         + f"\nThen: maxpm review pass {item_id} --confirm all   (or --confirm "
                          + ",".join(str(s["id"]) for _, s in missing) + ")")
     import subprocess
     run = runner or (lambda c, d: subprocess.run(c, shell=True, cwd=d, capture_output=True, text=True, timeout=3600))
@@ -4799,7 +4799,7 @@ def review_pass(conn, item_id, output=None, actor=None, cwd=None, runner=None, c
         if r.returncode != 0:
             tail = "\n".join(((r.stdout or "") + (r.stderr or "")).strip().splitlines()[-15:])
             raise RiverError(f"{what} failed (exit {r.returncode}): {cmd}\n{tail}\n"
-                             f"Fix it, or send the release back: river review fail {item_id} \"<fix>\"")
+                             f"Fix it, or send the release back: maxpm review fail {item_id} \"<fix>\"")
 
     results = []
     for g in groups:
@@ -4837,7 +4837,7 @@ def review_fail(conn, item_id, fixes, note=None, project=None, actor=None, ask=F
     it = _review_item(conn, item_id, actor)
     fixes = [f.strip() for f in fixes if f and f.strip()]
     if not fixes:
-        raise RiverError(f"name at least one fix: river review fail {item_id} \"<what to fix>\" --note \"<why>\"")
+        raise RiverError(f"name at least one fix: maxpm review fail {item_id} \"<what to fix>\" --note \"<why>\"")
     if project is None:
         r = conn.execute("SELECT p.name FROM deps d JOIN items i ON i.id=d.blocked_by JOIN projects p ON p.id=i.project_id "
                          "WHERE d.item_id=? AND i.kind<>'review' ORDER BY i.id LIMIT 1", (it["id"],)).fetchone()
@@ -4900,10 +4900,10 @@ def check(conn, item_id, result, note=None, actor=None):
     note = (note or "").strip()
     if result == "done":
         if not note:
-            raise RiverError(f"say where the work is (commits, files): river check {item_id} done --note \"...\"")
+            raise RiverError(f"say where the work is (commits, files): maxpm check {item_id} done --note \"...\"")
         return done(conn, item_id, f"found done in a check: {note}", actor, note=note, force=f"found done in a check: {note}")
     if result == "partial" and not note:
-        raise RiverError(f"say what is done and what is left: river check {item_id} partial --note \"...\"")
+        raise RiverError(f"say what is done and what is left: maxpm check {item_id} partial --note \"...\"")
     with tx(conn):
         if note:
             conn.execute("UPDATE items SET notes=? WHERE id=?",
@@ -4932,7 +4932,7 @@ def cleanup(conn, project=None, git=True):
 
     Suspect: a lease ran out without done; a commit in the project folder names the item (#id);
     a person's item whose touched files changed after it was made; ready and never claimed for
-    stale_after; a needs-you notice whose title is out of date. A check (river check) after the
+    stale_after; a needs-you notice whose title is out of date. A check (maxpm check) after the
     evidence clears the item."""
     ann = annotate(conn)
     t = now()
@@ -5012,7 +5012,7 @@ def _record_takeover(conn, it, kind, note, actor):
     humans = [r["name"] for r in conn.execute("SELECT name FROM agents WHERE kind='human' ORDER BY name")]
     for h in humans:
         _send(conn, "notice", actor, f"{actor} {_TAKEOVER_WORDS[kind]} #{it['id']} {it['title']} (it was yours): {note}. "
-              f"Undo: river undo-takeover {it['id']}", to=h, item_id=it["id"])
+              f"Undo: maxpm undo-takeover {it['id']}", to=h, item_id=it["id"])
     if humans:
         conn.execute(f"UPDATE messages SET state='read', read_at=COALESCE(read_at, ?) WHERE item_id=? "
                      f"AND kind IN ('question','alert') AND state='open' AND to_agent IN ({','.join('?' * len(humans))})",
@@ -5024,12 +5024,12 @@ def takeover(conn, item_id, note, actor=None):
     if not actor:
         raise RiverError("taking over needs an agent name: set RIVER_AGENT or pass --as <name>")
     if not (note or "").strip():
-        raise RiverError(f"say how you will do it without the user: river takeover {item_id} --note \"...\"")
+        raise RiverError(f"say how you will do it without the user: maxpm takeover {item_id} --note \"...\"")
     with tx(conn):
         _sweep(conn)
         it = _item(conn, item_id)
         if it["doer"] != "human":
-            raise RiverError(f"#{item_id} is not a person's item (doer {it['doer']}); claim it: river claim {item_id}")
+            raise RiverError(f"#{item_id} is not a person's item (doer {it['doer']}); claim it: maxpm claim {item_id}")
         a = annotate(conn)[it["id"]]
         if not a["ready"]:
             raise RiverError(f"#{item_id} is not ready ({a['status']}"
@@ -5209,7 +5209,7 @@ def send(conn, kind, body, to=None, item=None, reply_to=None, actor=None):
     if not actor:
         raise RiverError("sending needs an agent name: set RIVER_AGENT or pass --as <name>")
     if kind not in SEND_KINDS:
-        raise RiverError(f"send kind is one of {', '.join(SEND_KINDS)}; to answer a question: river answer <message-id> \"...\"")
+        raise RiverError(f"send kind is one of {', '.join(SEND_KINDS)}; to answer a question: maxpm answer <message-id> \"...\"")
     if not body or not body.strip():
         raise RiverError("a message needs text")
     with tx(conn):
@@ -5253,11 +5253,11 @@ def answer(conn, msg_id, body, actor=None):
         q = _message(conn, msg_id)
         if q["kind"] != "question":
             raise RiverError(f"message {msg_id} is {'an' if q['kind'][0] in 'aeiou' else 'a'} {q['kind']}, not a question; "
-                             f"reply with: river send note --reply {msg_id} \"...\"")
+                             f"reply with: maxpm send note --reply {msg_id} \"...\"")
         if q["state"] != "open":
-            raise RiverError(f"question {msg_id} is already {q['state']}; see: river thread {msg_id}")
+            raise RiverError(f"question {msg_id} is already {q['state']}; see: maxpm thread {msg_id}")
         if q["from_agent"] == actor:
-            raise RiverError(f"you asked question {msg_id}; add to it with: river send note --reply {msg_id} \"...\"")
+            raise RiverError(f"you asked question {msg_id}; add to it with: maxpm send note --reply {msg_id} \"...\"")
         t = iso(now())
         mid = _send(conn, "answer", actor, body.strip(), to=q["from_agent"], item_id=q["item_id"], reply_to=q["id"])
         conn.execute("UPDATE messages SET state='answered', closed_at=?, read_at=COALESCE(read_at, ?), "
@@ -5296,11 +5296,11 @@ def inbox(conn, actor, include_read=False, mark_read=True):
     return rows
 
 
-INBOX_WAIT = "25m"  # river inbox --wait returns after this with nothing new, below a 30m background-command limit
+INBOX_WAIT = "25m"  # maxpm inbox --wait returns after this with nothing new, below a 30m background-command limit
 
 
 def inbox_wait(conn, actor, timeout=None, sleep=None, poll=3.0):
-    """river inbox --wait: block until a message to the actor is unread (or a stop request comes), at most
+    """maxpm inbox --wait: block until a message to the actor is unread (or a stop request comes), at most
     timeout. Returns the new messages (marked read), so a background command alerts its session at once."""
     import time
     sleep = sleep or time.sleep
@@ -5398,7 +5398,7 @@ def capacity(conn, ann=None):
     ai_active = [a for a in agents if a["kind"] == "ai" and a["state"] == "active" and a.get("role") != "planner"]
     ai_busy = [a for a in ai_active if a["holds"]]
     ai_idle = [a for a in ai_active if not a["holds"]]
-    # Waiting sessions (river wait) take new work by themselves within seconds, and end after wait_max.
+    # Waiting sessions (maxpm wait) take new work by themselves within seconds, and end after wait_max.
     ai_waiting = [a for a in ai_idle if a.get("role") == "waiting"]
     in_progress = [a for a in live if a["status"] in ("in_progress", "held")]
 
@@ -5428,7 +5428,7 @@ def capacity(conn, ann=None):
         advice.append({"kind": "human", "text": f"{len(ready_human)} ready item(s) wait on a human."})
     if not ready and any(a["status"] == "open" for a in live) and not in_progress:
         advice.append({"kind": "stuck", "text": "Nothing is ready and nothing is in progress: "
-                       "every open item is blocked. Check outside blockers (river list)."})
+                       "every open item is blocked. Check outside blockers (maxpm list)."})
     return {
         "ready_for_agents": [a["id"] for a in sorted(ready_ai, key=lambda a: a["sort_key"])],
         "ready_for_humans": [a["id"] for a in sorted(ready_human, key=lambda a: a["sort_key"])],
@@ -5541,8 +5541,8 @@ def _item_prompt_section(conn, a, ann, person, n=None):
         if text.strip():
             lines.append(f"   {label}: {text.strip()}")
     cd = f"cd {p['path']} && " if p["path"] else ""
-    lines.append(f"   Read it first: {cd}river --as {person} show {a['id']}")
-    lines.append(f"   Record the result: river --as {person} done {a['id']} --output \"<what was decided or done>\"")
+    lines.append(f"   Read it first: {cd}maxpm --as {person} show {a['id']}")
+    lines.append(f"   Record the result: maxpm --as {person} done {a['id']} --output \"<what was decided or done>\"")
     return "\n".join(lines)
 
 
@@ -5569,8 +5569,8 @@ PROMPT_STEPS = """How to help:
    Ask before anything that uses their accounts, money, or sends something in their name.
 4. When it is decided or done, record it with the "record the result" command, in their words.
    If you can do the step yourself without them, say so; with their yes, take it over instead:
-   river register <your-agent-name>, then river --as <your-agent-name> takeover <id> --note "<how>".
-If the river command is not found, ask {person} where MaximizePM is installed."""
+   maxpm register <your-agent-name>, then maxpm --as <your-agent-name> takeover <id> --note "<how>".
+If the maxpm command is not found, ask {person} where MaximizePM is installed."""
 
 
 def prompt_for(conn, item_id, person=None):
@@ -5579,7 +5579,7 @@ def prompt_for(conn, item_id, person=None):
     iid = _item(conn, item_id)["id"]
     person = _person(conn, person)
     a = ann[iid]
-    head = (f"You are helping {person} with one step in their work queue (MaximizePM, the `river` command). "
+    head = (f"You are helping {person} with one step in their work queue (MaximizePM, the `maxpm` command). "
             + ("It is marked for a person to do or decide." if a["doer"] == "human"
                else f"{person} took it to do themselves, with your help."))
     return "\n\n".join([head, _item_prompt_section(conn, a, ann, person), PROMPT_STEPS.format(person=person)])
@@ -5597,18 +5597,18 @@ def prompt_for_all(conn, person=None):
     if not items and not qs:
         return f"Nothing in the MaximizePM queue waits on {person} now."
     parts = [f"You are helping {person} work through everything that waits on them in their work queue "
-             f"(MaximizePM, the `river` command): {len(items)} item(s) and {len(qs)} question(s), most important "
+             f"(MaximizePM, the `maxpm` command): {len(items)} item(s) and {len(qs)} question(s), most important "
              f"first. Take them one at a time: finish or park one before you start the next."]
     parts += [_item_prompt_section(conn, a, ann, person, n) for n, a in enumerate(items, 1)]
     for n, q in enumerate(qs, len(items) + 1):
         parts.append(f"{n}. Question #{q['id']} from {q['from_agent']}" + (f" about #{q['item_id']}" if q["item_id"] else "")
-                     + f": {q['body']}\n   Answer it: river --as {person} answer {q['id']} \"<answer>\"")
+                     + f": {q['body']}\n   Answer it: maxpm --as {person} answer {q['id']} \"<answer>\"")
     parts.append(PROMPT_STEPS.format(person=person))
     return "\n\n".join(parts)
 
 
 def parse_launch_agents(value):
-    """'Claude Code=@claude-code; Grok=grok "run river go"' -> [("Claude Code", "@claude-code"), ...]. An entry
+    """'Claude Code=@claude-code; Grok=grok "run maxpm go"' -> [("Claude Code", "@claude-code"), ...]. An entry
     that starts with @ is a launch profile; its platform and options are checked here."""
     out = []
     for part in (value or "").split(";"):
@@ -5617,7 +5617,7 @@ def parse_launch_agents(value):
         label, sep, cmd = part.partition("=")
         if not sep or not label.strip() or not cmd.strip():
             raise RiverError(f"launch_agents entry {part.strip()!r} needs the form Label=command, for example "
-                             f"'Claude Code=@claude-code; Codex=@codex; Grok=grok \"run river go in this folder and follow the briefing\"'")
+                             f"'Claude Code=@claude-code; Codex=@codex; Grok=grok \"run maxpm go in this folder and follow the briefing\"'")
         parse_profile(cmd.strip())
         out.append((label.strip(), cmd.strip()))
     if not out:
@@ -5732,7 +5732,7 @@ PLATFORM = sys.platform
 
 def tmux_path():
     """The tmux program, or None when it is not installed: on PATH, else where Homebrew or MacPorts put it
-    (the desktop app starts river serve from the Dock, with a short PATH)."""
+    (the desktop app starts maxpm serve from the Dock, with a short PATH)."""
     return shutil.which("tmux") or next((p for p in ("/opt/homebrew/bin/tmux", "/usr/local/bin/tmux",
                                                      "/opt/local/bin/tmux") if os.access(p, os.X_OK)), None)
 
@@ -5925,14 +5925,14 @@ def _migrate_launch_agents(conn):
 
 
 def launch_migration_note(conn):
-    """What the move to launch profiles changed, for river config get launch_agents."""
+    """What the move to launch profiles changed, for maxpm config get launch_agents."""
     r = conn.execute("SELECT at, change FROM events WHERE change LIKE 'launch_agents migrated%' ORDER BY id DESC LIMIT 1"
                      ).fetchone()
     return f"{r['change']} (on {r['at']})" if r else None
 
 
 def waiting_agent_for(conn, project, item_id=None):
-    """An active session that waits for work in this project (river wait), longest waiting first; with
+    """An active session that waits for work in this project (maxpm wait), longest waiting first; with
     item_id, only one whose model the item's limits allow."""
     for r in conn.execute("SELECT name, waiting_in FROM agents WHERE role='waiting' AND kind='ai' "
                           "ORDER BY waiting_since").fetchall():
@@ -5945,7 +5945,7 @@ def waiting_agent_for(conn, project, item_id=None):
 
 def covered_projects(conn, ann=None):
     """Projects that have an agent, with one of its sessions: a session that is not gone and holds an item
-    there, waits for work there (river wait), or has an item there pushed to it (a Start just opened it)."""
+    there, waits for work there (maxpm wait), or has an item there pushed to it (a Start just opened it)."""
     return {p: names[0] for p, names in project_sessions(conn, ann).items()}
 
 
@@ -6016,12 +6016,12 @@ def launch_target(conn, project=None, agent=None, item=None, model=None, effort=
     p = _project(conn, top["project"])
     if not p["path"]:
         raise RiverError(f"project {p['name']} has no folder, so river cannot start a session there: "
-                         f"river project path {p['name']} <folder>")
+                         f"maxpm project path {p['name']} <folder>")
     if agent is None and top["agent"]:
         agent = agent_for_type(conn, top["agent"], p["id"])
         if agent is None:
             raise RiverError(f"#{top['id']} is for {top['agent']}, and no launch_agents entry runs it; add one: "
-                             f"river config set launch_agents \"...; {LAUNCH_PLATFORMS[top['agent']]['label']}=@{top['agent']}\"")
+                             f"maxpm config set launch_agents \"...; {LAUNCH_PLATFORMS[top['agent']]['label']}=@{top['agent']}\"")
     if model:
         ok, why = model_check(parse_ladder(setting(conn, "model_ladder")), model, top["min_model"], top["max_model"])
         if not ok:
@@ -6276,7 +6276,7 @@ def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None
         agent_type=None):
     """One call for a fresh agent session: find the project, name the session, pick a role, and brief it.
 
-    chat: a chat app session with no folder (river mcp from Claude desktop). With no project named and no
+    chat: a chat app session with no folder (maxpm mcp from Claude desktop). With no project named and no
     project at cwd, its area is every project; it takes only items that need no folder (needs_folder).
 
     focus (RIVER_FOCUS, set when the page opens an agent): "help:<id>@<person>" briefs the session to do a
@@ -6297,7 +6297,7 @@ def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None
         if not names and chat:
             names = [p["name"] for p in project_list(conn)]
             if not names:
-                raise RiverError("no projects in this queue yet: plan first (river plan), or add one: river project add <name>")
+                raise RiverError("no projects in this queue yet: plan first (maxpm plan), or add one: maxpm project add <name>")
         if not names:
             listing = "; ".join(f"{p['name']}" + (f" ({p['path']})" if p.get("path") else "") for p in project_list(conn))
             q = queue_note()
@@ -6305,8 +6305,8 @@ def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None
                 (f"{q}. If this folder's work is in another queue, that is why: start the agent without RIVER_DB. "
                  if q else "")
                 + f"no project is linked to {Path(cwd).resolve()} in this queue. Ask the user which project this "
-                f"folder is, then: river go --project <name>. A project without a folder: river project path <name> . "
-                f"A new project for this folder: river init. Do not move a project that is linked to another "
+                f"folder is, then: maxpm go --project <name>. A project without a folder: maxpm project path <name> . "
+                f"A new project for this folder: maxpm init. Do not move a project that is linked to another "
                 f"folder. Projects: {listing or '(none)'}")
     area = ",".join(names)
 
@@ -6314,12 +6314,12 @@ def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None
     new_name = False
     if actor:
         if not conn.execute("SELECT 1 FROM agents WHERE name=?", (actor,)).fetchone():
-            register(conn, actor, note=f"started with river go in {area}")
+            register(conn, actor, note=f"started with maxpm go in {area}")
             new_name = True
     else:
         import secrets
         actor = f"{'chat' if chat and not project else names[0]}-{secrets.token_hex(2)}"
-        register(conn, actor, note=f"started with river go in {area}" + (" (chat, no folder)" if chat else ""))
+        register(conn, actor, note=f"started with maxpm go in {area}" + (" (chat, no folder)" if chat else ""))
         new_name = True
     activity(conn, actor)
     if session:
@@ -6470,7 +6470,7 @@ def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None
                 _set_role_note(conn, actor, "unblocker", got["id"])
                 return brief
             brief["focus_note"] = (f"The page opened this session to unblock #{f['id']}, but nothing that blocks it "
-                                   f"is ready for an agent now (river blockers {f['id']}).")
+                                   f"is ready for an agent now (maxpm blockers {f['id']}).")
     if role in (None, "worker"):
         ann = annotate(conn)
         pushed = sorted((a for a in ann.values() if a["reserved_for"] == actor and a["reserved_until"] and ready_for(a, actor)),
@@ -6688,7 +6688,7 @@ def _work_for(conn, actor, names):
         return f"#{nxt[0]['id']} is ready: {nxt[0]['title']}"
     u = unread(conn, actor)
     if u["unread"] or u["questions"]:
-        return "you have messages (river inbox)"
+        return "you have messages (maxpm inbox)"
     return None
 
 
@@ -6716,9 +6716,9 @@ def wait(conn, cwd, actor, project=None, step=None, sleep=None, poll=3.0):
                             (actor,)).fetchall()
         if held:
             raise RiverError(f"{actor} holds {', '.join('#' + str(r['id']) for r in held)}; finish or release it "
-                             f"before you wait: river --as {actor} go")
+                             f"before you wait: maxpm --as {actor} go")
         conn.execute("UPDATE agents SET waiting_since=COALESCE(waiting_since, ?), role='waiting', waiting_in=?, "
-                     "note='waiting for work (river wait)' WHERE name=?", (iso(now()), ",".join(names), actor))
+                     "note='waiting for work (maxpm wait)' WHERE name=?", (iso(now()), ",".join(names), actor))
     since = parse_iso(_agent(conn, actor)["waiting_since"])
     limit = parse_duration(setting(conn, "wait_max", agent=actor))
     step = parse_duration(step or setting(conn, "wait_step", agent=actor))
@@ -6757,7 +6757,7 @@ def _add_note(conn, item_id, text):
 def _want_fresh(conn, item_id, note):
     """An answer came for an agent item that an agent worked on before and nobody holds now (the agent filed a
     person's item and ended, or asked a question and ended): put the answer in the item's notes, and mark it
-    for river serve, which starts a fresh session for it (fresh_sessions). Inside a tx."""
+    for maxpm serve, which starts a fresh session for it (fresh_sessions). Inside a tx."""
     it = _item(conn, item_id)
     if (it["status"] != "open" or it["doer"] == "human" or it["kind"] != "work" or it["reserved_for"]
             or not conn.execute("SELECT 1 FROM events WHERE item_id=? AND change LIKE 'claimed%'", (item_id,)).fetchone()):
@@ -6771,7 +6771,7 @@ def _want_fresh(conn, item_id, note):
 
 
 def fresh_items(conn):
-    """The items river serve starts a fresh session for now; it clears the mark of an item that is not ready
+    """The items maxpm serve starts a fresh session for now; it clears the mark of an item that is not ready
     for a new session any more (claimed, closed, reserved, waits again)."""
     rows = conn.execute("SELECT id FROM items WHERE fresh_start IS NOT NULL ORDER BY fresh_start, id").fetchall()
     if not rows:
@@ -6805,7 +6805,7 @@ def hand_over(conn, agent, news):
     """An agent idle at its prompt got news (idle_news): take its work back so fresh sessions do it. Its held
     items are released (to check first: its changes may be in the folder), its pushes and reservations end, its
     queued items leave its queue, and the news goes into the notes of each item (a message about an item into
-    that item's, other news into all). Returns the ids of the items, in order; river serve starts a session for
+    that item's, other news into all). Returns the ids of the items, in order; maxpm serve starts a session for
     each that is ready."""
     with tx(conn):
         ids = []
@@ -6858,7 +6858,7 @@ def end_idle(conn, agent, why):
                               "AND (read_at IS NULL OR (kind='question' AND state='open'))", (agent,)).fetchall()
         for m in unread:
             _send(conn, "notice", "river", f"{agent} ended ({why}) before it read your {m['kind']} #{m['id']}. Send it "
-                  f"to another agent (river who), or add an item for it", to=m["from_agent"], item_id=m["item_id"],
+                  f"to another agent (maxpm who), or add an item for it", to=m["from_agent"], item_id=m["item_id"],
                   reply_to=m["id"])
         for e in conn.execute("SELECT body, added_by FROM queue_entries WHERE agent=? AND item_id IS NULL "
                               "AND kind<>'stop' AND added_by IS NOT NULL", (agent,)).fetchall():
@@ -6976,12 +6976,12 @@ def manage(conn, cwd, actor=None, takeover=None):
     other = active_manager(conn, but=actor)
     if other and not takeover:
         raise RiverError(f"refused: {other} is the active manager; one manager at a time. Message it "
-                         f"(river note {other} \"...\"), or take over: river manage --takeover \"<why>\"")
+                         f"(maxpm note {other} \"...\"), or take over: maxpm manage --takeover \"<why>\"")
     activity(conn, actor)
     held = conn.execute("SELECT id FROM items WHERE assignee=? AND status IN ('in_progress','held')", (actor,)).fetchall()
     if held:
         raise RiverError(f"{actor} holds {', '.join('#' + str(r['id']) for r in held)}; a manager holds no work. "
-                         f"Finish or release it first, or manage from a new session: river manage (without --as)")
+                         f"Finish or release it first, or manage from a new session: maxpm manage (without --as)")
     if other:
         with tx(conn):
             conn.execute("UPDATE agents SET role=NULL, note='manager until taken over' WHERE name=?", (other,))
@@ -7000,15 +7000,15 @@ def manage(conn, cwd, actor=None, takeover=None):
 
 
 def manage_watch(conn, actor, step=None, sleep=None, poll=3.0):
-    """river manage --watch: block until something new needs the manager (a new finding; messages come
-    through river inbox --wait), at most manage_every (or step). Findings it reported before do not count
+    """maxpm manage --watch: block until something new needs the manager (a new finding; messages come
+    through maxpm inbox --wait), at most manage_every (or step). Findings it reported before do not count
     as new. Returns what changed."""
     import json
     import time
     sleep = sleep or time.sleep
     ag = _agent(conn, actor)
     if ag["role"] != "manager":
-        raise RiverError(f"{actor} is not the manager; start with: river manage")
+        raise RiverError(f"{actor} is not the manager; start with: maxpm manage")
     try:
         base = set(json.loads(conn.execute("SELECT manage_seen FROM agents WHERE name=?", (actor,)).fetchone()[0] or "[]"))
     except (TypeError, ValueError):
@@ -7017,7 +7017,7 @@ def manage_watch(conn, actor, step=None, sleep=None, poll=3.0):
     while True:
         f = manager_findings(conn)
         keys = set(_finding_keys(f))
-        # Messages do not wake the watch: river inbox --wait (or native delivery) brings them, once.
+        # Messages do not wake the watch: maxpm inbox --wait (or native delivery) brings them, once.
         if keys - base or now() >= deadline:
             u = unread(conn, actor)
             with tx(conn):
@@ -7045,7 +7045,7 @@ def plan(conn, cwd, actor=None, project=None):
     held = conn.execute("SELECT id FROM items WHERE assignee=? AND status IN ('in_progress','held')", (actor,)).fetchall()
     if held:
         raise RiverError(f"{actor} holds {', '.join('#' + str(r['id']) for r in held)}; a planner holds no work. "
-                         f"Finish or release it first, or plan from a new session: river plan (without --as)")
+                         f"Finish or release it first, or plan from a new session: maxpm plan (without --as)")
     _set_role_note(conn, actor, "planner", None)
 
     ann = annotate(conn)

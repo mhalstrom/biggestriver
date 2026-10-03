@@ -77,7 +77,7 @@ def _applescript_str(s):
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-# Tests (and river launch tests) set this to a fake that receives what would open a terminal.
+# Tests (and maxpm launch tests) set this to a fake that receives what would open a terminal.
 TERMINAL_RUNNER = None
 
 
@@ -85,7 +85,7 @@ def _can_open_terminal(runner, hint, launch_in=None):
     if launch_in == "tmux":  # no Terminal app needed: any system with tmux, over SSH too
         if TMUX_RUNNER is None and not _tmux_cmd():
             raise RiverError("launch_in is tmux, and tmux is not installed: brew install tmux (Linux: apt install tmux), "
-                             "or use a Terminal tab: river config set launch_in tab")
+                             "or use a Terminal tab: maxpm config set launch_in tab")
         return
     runner = runner or TERMINAL_RUNNER
     if core.PLATFORM not in ("darwin", "win32") and runner is None:
@@ -98,7 +98,7 @@ def launch_agent(conn, project=None, runner=None, agent=None, actor=None, model=
     the command of the chosen launch_agents entry there (default: the Claude Code profile), so one click starts one
     agent session. macOS and Windows."""
     # With no project named, Start spreads sessions: first a project with ready work and no agent yet.
-    # A session that waits for work in that project (river wait) gets the item: no new session needed.
+    # A session that waits for work in that project (maxpm wait) gets the item: no new session needed.
     # Else the new session gets a name and the item is pushed to it, so the next Start sees the project covered.
     t = core.launch_target(conn, project, agent, None, model, effort, launch_in, spread=project is None, options=options)
     waiting = core.waiting_agent_for(conn, t["project"], t["item"]["id"])
@@ -113,7 +113,7 @@ def dispatch_item(conn, item_id, runner=None, agent=None, actor=None, model=None
                   options=None):
     """Start work on one ready item: a session that waits for work in its project gets it (push);
     else river names a new session, reserves the item for it (push), and opens the chosen agent in the
-    project folder with RIVER_AGENT set to that name and RIVER_FOCUS=item:<id>, so its first river go takes it."""
+    project folder with RIVER_AGENT set to that name and RIVER_FOCUS=item:<id>, so its first maxpm go takes it."""
     t = core.launch_target(conn, agent=agent, item=item_id, model=model, effort=effort, launch_in=launch_in,
                            options=options, actor=actor)
     waiting = core.waiting_agent_for(conn, t["project"], t["item"]["id"])
@@ -126,7 +126,7 @@ def dispatch_item(conn, item_id, runner=None, agent=None, actor=None, model=None
 
 def _start_for_item(conn, t, runner, actor, why, by="the page"):
     """Name a new session, reserve the item for it (push), and open the agent with RIVER_AGENT and
-    RIVER_FOCUS=item:<id>: its first river go claims that item, or says why not. A session that never runs
+    RIVER_FOCUS=item:<id>: its first maxpm go claims that item, or says why not. A session that never runs
     a river command is a manager finding (not connected) and does not count as the project's agent."""
     import secrets
     name = f"{t['project']}-{secrets.token_hex(2)}"
@@ -140,7 +140,7 @@ def open_agent_on(conn, item_id, runner=None, agent=None, person=None, actor=Non
                   launch_in=None, options=None):
     """Open an agent session for one item from its drawer. A ready item: Dispatch. A person's item: a
     session that does it together with the person. An item that waits: a session that first takes what
-    blocks it. The session learns which from RIVER_FOCUS, which its river go reads."""
+    blocks it. The session learns which from RIVER_FOCUS, which its maxpm go reads."""
     it = core.item_show(conn, item_id)
     if it["status"] not in core.OPEN_STATES:
         raise RiverError(f"#{item_id} is {it['status']}; there is nothing to open an agent on")
@@ -156,7 +156,7 @@ def open_agent_on(conn, item_id, runner=None, agent=None, person=None, actor=Non
     p = core._project(conn, it["project"])
     if not p["path"]:
         raise RiverError(f"project {p['name']} has no folder, so river cannot start a session there: "
-                         f"river project path {p['name']} <folder>")
+                         f"maxpm project path {p['name']} <folder>")
     return {**_open_focused(conn, p, focus, runner, agent, model, effort, launch_in, options),
             "item": {"id": it["id"], "title": it["title"]}}
 
@@ -171,7 +171,7 @@ def open_needs_you(conn, runner=None, agent=None, person=None, model=None, effor
         core._project(conn, p["name"]) for p in core.project_list(conn)]
     p = next((x for x in projects if x["path"]), None)
     if p is None:
-        raise RiverError("no project has a folder, so river cannot start a session: river project path <name> <folder>")
+        raise RiverError("no project has a folder, so river cannot start a session: maxpm project path <name> <folder>")
     return _open_focused(conn, p, "needs:" + (f"@{person}" if person else ""), runner, agent, model, effort, launch_in,
                          options)
 
@@ -194,7 +194,7 @@ def _target_folder(conn, target):
               if core._project(conn, x["name"])["path"]), None)
     if p is None:
         raise RiverError(f"no project of target {target} has a folder, so river cannot start a session there: "
-                         f"river project path <name> <folder>")
+                         f"maxpm project path <name> <folder>")
     return p
 
 
@@ -202,7 +202,7 @@ def _same_queue(db):
     """A river command that asks the server to act (open a monitor, or start a session for a command in a
     sandbox) names its queue file. Refuse another one, so a test queue never opens sessions from the real one."""
     if db is not None and str(Path(db).expanduser().resolve()) != str(core.db_path().expanduser().resolve()):
-        raise RiverError(f"this river serve uses another queue ({core.db_path()})")
+        raise RiverError(f"this maxpm serve uses another queue ({core.db_path()})")
 
 
 def _agent_for(conn, model):
@@ -241,7 +241,7 @@ def open_monitors(conn, runner=None, db=None):
 
 
 def _open_focused(conn, p, focus, runner, agent, model=None, effort=None, launch_in=None, options=None):
-    """Open the chosen agent in a project folder with RIVER_FOCUS set; its river go reads it."""
+    """Open the chosen agent in a project folder with RIVER_FOCUS set; its maxpm go reads it."""
     launch_in = core._launch_in(conn, p["id"], launch_in)
     _can_open_terminal(runner, f"cd {p['path']}, set RIVER_FOCUS={focus}, then claude go", launch_in)
     name = core.focus_title(conn, focus)
@@ -253,14 +253,15 @@ def _open_focused(conn, p, focus, runner, agent, model=None, effort=None, launch
 
 
 def manage_command(cmd):
-    """A launch_agents command that starts a manager instead of a worker: 'river go' (a first prompt) or the
+    """A launch_agents command that starts a manager instead of a worker: 'maxpm go' (a first prompt) or the
     word go (Claude Code's `claude go`) becomes manage."""
     import re
-    if "river go" in cmd:
-        return cmd.replace("river go", "river manage")
+    for c in core.COMMANDS:  # maxpm go, or river go in a command from before the name maxpm
+        if f"{c} go" in cmd:
+            return cmd.replace(f"{c} go", f"{c} manage")
     out, n = re.subn(r"(?<=\s)go(?=\s|$)", "manage", cmd, count=1)
     if not n:
-        raise RiverError(f"cannot make a manager from the command {cmd!r}: it has no 'go' or 'river go' to replace")
+        raise RiverError(f"cannot make a manager from the command {cmd!r}: it has no 'go' or 'maxpm go' to replace")
     return out
 
 
@@ -273,7 +274,7 @@ def start_manager(conn, runner=None, agent=None, actor=None, model=None, effort=
         raise RiverError(f"{other} is the active manager; open its chat instead")
     p = next((core._project(conn, x["name"]) for x in core.project_list(conn) if x.get("path")), None)
     if p is None:
-        raise RiverError("no project has a folder, so river cannot start a session: river project path <name> <folder>")
+        raise RiverError("no project has a folder, so river cannot start a session: maxpm project path <name> <folder>")
     launch_in = core._launch_in(conn, p["id"], launch_in)
     _can_open_terminal(runner, f"cd {p['path']} && claude manage", launch_in)
     t = {"project": p["name"], "path": p["path"], "session_title": "river manager",
@@ -295,7 +296,7 @@ def open_chat(conn, agent, runner=None):
     a = core.agent_status(conn, agent)
     if a.get("session_url"):
         return {"agent": agent, "url": a["session_url"]}
-    why = ("it has no web link: Remote Control is off for Claude Code (river config set claude_remote_control on)"
+    why = ("it has no web link: Remote Control is off for Claude Code (maxpm config set claude_remote_control on)"
            if core.setting(conn, "claude_remote_control") == "off"
            else "it has no web link (start Claude Code with --remote-control for one)")
     if a.get("pid") and a.get("host") == core.this_host() and core.pid_alive(a["pid"]):
@@ -309,7 +310,7 @@ def open_chat(conn, agent, runner=None):
             pane = _tmux_pane_of(dev)
             if pane:
                 return {"agent": agent, "tmux_pane": pane["pane"],  # the page opens its terminal view
-                        "hint": f"{agent} runs in tmux ({pane['name'] or pane['pane']}): `river view` in a terminal shows it."}
+                        "hint": f"{agent} runs in tmux ({pane['name'] or pane['pane']}): `maxpm view` in a terminal shows it."}
             script = "\n".join([
                 'tell application "Terminal"',
                 '  repeat with w in windows',
@@ -407,7 +408,7 @@ def _open_terminal(t, env, runner=None):
 
 
 # launch_in tmux: each agent river starts is a pane of one tmux session, so one terminal shows them all
-# (river view), over SSH too, and nothing needs AppleScript. TMUX_CMD (tests) is a tmux command line with a
+# (maxpm view), over SSH too, and nothing needs AppleScript. TMUX_CMD (tests) is a tmux command line with a
 # server of its own; TMUX_RUNNER (tests) gets each argument list in its place and returns the output, or
 # None for a command that fails.
 TMUX_CMD = None
@@ -457,7 +458,7 @@ def _tmux(*args, check=True):
 
 def _tmux_env():
     """The environment for a tmux command. The first command starts the tmux server, and every pane gets
-    the server's environment: when an agent session runs river launch, its own name, focus, and session
+    the server's environment: when an agent session runs maxpm launch, its own name, focus, and session
     ids (RIVER_*, CLAUDE*, CODEX_*) must stay out, or each new agent would start as a copy of that session."""
     import os
     keep = ("CLAUDE_CONFIG_DIR", "CODEX_HOME")
@@ -490,7 +491,7 @@ def _tmux_pane_of(tty):
 
 def _tmux_open(t, env, line):
     """Start an agent in a new pane of the river tmux session and return the pane id: a window of its own,
-    or one more pane of the side-by-side window when river view made one. tmux starts the pane's own login
+    or one more pane of the side-by-side window when maxpm view made one. tmux starts the pane's own login
     shell and river types the command line into it, as Terminal's do script does: the shell's PATH finds
     the agent CLI, and the pane stays (with what the agent printed) after the agent ends. Nothing takes
     the keyboard: a person who answers a prompt in another pane keeps typing there."""
@@ -540,10 +541,10 @@ def _prompt_tail(text):
 
 
 def _done_panes(conn, panes, terminals=None):
-    """{pane: why} for the panes whose session is done, which river view --tidy closes. A pane is done when
+    """{pane: why} for the panes whose session is done, which maxpm view --tidy closes. A pane is done when
     only a shell runs there: the agent CLI ended. With the queue (conn) a pane is also done while the agent CLI
     stays open and idle, when the agent river named for it takes no work any more: it is not registered (its
-    river wait ended, or it unregistered), it ended after a stop (or ran no river command for away_after
+    maxpm wait ended, or it unregistered), it ended after a stop (or ran no river command for away_after
     after one), or it is gone, and it holds and owns nothing.
     A registered agent whose process runs in the pane decides in place of the named one (a session that began
     again under another name). A pane that shows a prompt (prompt_pattern) is never done by the queue's word:
@@ -586,7 +587,7 @@ def _done_panes(conn, panes, terminals=None):
 
 
 def tmux_done(conn, terminals=None):
-    """The panes river view --tidy closes now, for the page: [{"pane", "name", "why"}]; [] with no tmux."""
+    """The panes maxpm view --tidy closes now, for the page: [{"pane", "name", "why"}]; [] with no tmux."""
     if TMUX_RUNNER is None and not _tmux_cmd():
         return []
     try:
@@ -598,7 +599,7 @@ def tmux_done(conn, terminals=None):
 
 
 def tmux_view(layout=None, tidy=False, conn=None):
-    """The agents river started in tmux (launch_in tmux), for river view. layout "tile" puts every agent
+    """The agents river started in tmux (launch_in tmux), for maxpm view. layout "tile" puts every agent
     pane side by side in one window, and new agents then join it; "windows" gives each agent a window of
     its own again; None changes nothing. tidy first closes the panes whose session is done (_done_panes:
     only a shell runs there, or, with conn, the agent takes no work any more). Panes that a person made are
@@ -608,7 +609,7 @@ def tmux_view(layout=None, tidy=False, conn=None):
     target = "=" + TMUX_SESSION
     if _tmux("has-session", "-t", target, check=False) is None:
         raise RiverError(f"no agent runs in tmux (there is no tmux session {TMUX_SESSION!r}). Start agents there: "
-                         f"river launch --tmux, or for every start: river config set launch_in tmux")
+                         f"maxpm launch --tmux, or for every start: maxpm config set launch_in tmux")
     mine = lambda: [p for p in _tmux_panes() if p["name"]]
     closed, left = [], []
     if tidy:
@@ -653,25 +654,25 @@ def tmux_view(layout=None, tidy=False, conn=None):
     prefix = (_tmux("show-options", "-gv", "prefix", check=False) or "C-b").replace("C-", "Ctrl-")
     hint = f"{prefix} then: an arrow = the next pane, z = one pane large (and back), n = the next window, d = leave"
     if done:  # first, so a narrow terminal still shows it
-        hint = f"{len(done)} done (river view --tidy closes {'it' if len(done) == 1 else 'them'}) | {hint}"
+        hint = f"{len(done)} done (maxpm view --tidy closes {'it' if len(done) == 1 else 'them'}) | {hint}"
     show = ["switch-client", "-t", target] if os.environ.get("TMUX") else ["attach-session", "-t", target]
     return {"session": TMUX_SESSION, "panes": panes, "closed": closed, "left": left, "layout": layout,
             "show": [*(_tmux_cmd() or ["tmux"]), *show, ";", "display-message", "-d", "6000", hint]}
 
 
 def tmux_tidy(conn):
-    """The page's Close button for the sessions that are done: the same as river view --list --tidy."""
+    """The page's Close button for the sessions that are done: the same as maxpm view --list --tidy."""
     return {"closed": tmux_view(None, tidy=True, conn=conn)["closed"]}
 
 
-# river serve tidies by itself (tidy_every). TIDY: when its last pass ended, and for each pane it may close while
+# maxpm serve tidies by itself (tidy_every). TIDY: when its last pass ended, and for each pane it may close while
 # the agent CLI is still open, the pane's screen and since when that screen has not changed.
 TIDY = {"at": None, "screens": {}}
 
 
 def auto_tidy(conn):
-    """One pass of the loop of river serve (every notify_interval): every tidy_every (0s: never) it closes the panes
-    that river view --tidy closes (_done_panes). A pane where the agent CLI still runs closes only when its screen
+    """One pass of the loop of maxpm serve (every notify_interval): every tidy_every (0s: never) it closes the panes
+    that maxpm view --tidy closes (_done_panes). A pane where the agent CLI still runs closes only when its screen
     stayed the same for idle_after: a screen that changes is a busy agent. Such a pane is read again on the next
     passes, until it is idle or no longer done. Returns the panes it closed: [{"pane", "name", "why"}]."""
     every = core.parse_duration(core.setting(conn, "tidy_every"))
@@ -764,7 +765,7 @@ def terminal_screen(conn, agent):
     the size, and the cursor. One tmux command."""
     pane = agent_terminals(conn).get(agent)
     if not pane:
-        raise RiverError(f"{agent} does not run in a tmux pane on this computer (start agents there: river config set launch_in tmux)")
+        raise RiverError(f"{agent} does not run in a tmux pane on this computer (start agents there: maxpm config set launch_in tmux)")
     return _pane_screen(agent, pane)
 
 
@@ -797,7 +798,7 @@ def _plain(text):
 
 
 def watch_prompts(conn):
-    """One look at every agent's tmux pane (the notify loop of river serve, every notify_interval): when one of
+    """One look at every agent's tmux pane (the notify loop of maxpm serve, every notify_interval): when one of
     the last lines matches the setting prompt_pattern and those lines stay the same for prompt_wait, each
     person gets an alert from that agent (core.PROMPT_NOTE and the line), which opens a needs-you event; the
     page shows the agent's Terminal for it. When the prompt is gone (answered, or the agent ended), river marks
@@ -837,7 +838,7 @@ def watch_prompts(conn):
             if not st or st["sig"] != sig:
                 st = PROMPTS[agent] = {"sig": sig, "since": t, "told": st["told"] if st else None}
             if any(m["from_agent"] == agent and m["id"] not in closed for m in alerts):
-                st["told"] = body  # also after river serve started again: the alert is there
+                st["told"] = body  # also after maxpm serve started again: the alert is there
             if st["told"] == body or t - st["since"] < wait:
                 continue
             held = conn.execute("SELECT id FROM items WHERE assignee=? AND status IN ('in_progress','held') ORDER BY id",
@@ -897,7 +898,7 @@ BUSY = {}
 
 
 def watch_busy(conn):
-    """One pass of the loop of river serve (every notify_interval): the agents that hold work and are busy keep
+    """One pass of the loop of maxpm serve (every notify_interval): the agents that hold work and are busy keep
     their leases (core.keep_busy). Busy: a command runs in the agent's session (core.busy_now), its tmux pane
     changed since the last pass, or its pane shows a prompt (prompt_pattern: the agent waits on a person, and
     its work is in the folder). Returns the agents it kept."""
@@ -943,11 +944,11 @@ def start_fresh(conn, item_id, why, runner=None):
     effort = it["effort"] if opt and it["effort"] in opt["efforts"] else None
     t = core.launch_target(conn, agent=label, item=item_id, model=model, effort=effort)
     _can_open_terminal(runner, f"cd {t['path']} && RIVER_FOCUS=item:{item_id} claude go", t["launch_in"])
-    return _start_for_item(conn, t, runner, "river", why, by="river serve")
+    return _start_for_item(conn, t, runner, "river", why, by="maxpm serve")
 
 
 def fresh_sessions(conn, runner=None):
-    """One pass of the loop of river serve (every notify_interval):
+    """One pass of the loop of maxpm serve (every notify_interval):
     - fresh_sessions on: start a fresh session for each item an answer came for (core.fresh_items).
     - An agent idle at its prompt (_idle_panes, idle_after) with news (core.idle_news): its work goes to fresh
       sessions (core.hand_over), and it ends.
@@ -1084,7 +1085,7 @@ def _restart_argv():
 
 
 def restart_now(why="code changed"):
-    """Replace this process with a new river serve on the same port, which runs the code on disk. Python
+    """Replace this process with a new maxpm serve on the same port, which runs the code on disk. Python
     sockets are not inherited across exec, so the port is free for the new process."""
     print(f"{why}; restarting", flush=True)
     os.execv(sys.executable, _restart_argv())
@@ -1120,12 +1121,12 @@ def _code_dirty():
         return False
 
 
-# The code id river serve saw on its last pass, and the one that did not load (it waits for the next change).
+# The code id maxpm serve saw on its last pass, and the one that did not load (it waits for the next change).
 RELOAD = {"seen": None, "bad": None}
 
 
 def reload_ready(conn):
-    """One look of the loop of river serve (every notify_interval): the code id to start again for, or None.
+    """One look of the loop of maxpm serve (every notify_interval): the code id to start again for, or None.
     The code on disk must be newer than the code this server runs (code_stale), the same as on the pass
     before (nobody writes it now), committed (in a git clone), and it must load. Setting serve_reload."""
     if DESKTOP or DEV["on"] or core.setting(conn, "serve_reload") != "on":
@@ -1142,18 +1143,18 @@ def reload_ready(conn):
     why = _code_loads()
     if why:
         RELOAD["bad"] = cur
-        print(f"river serve: the new code does not load, so the old code keeps running: {why}", flush=True)
+        print(f"maxpm serve: the new code does not load, so the old code keeps running: {why}", flush=True)
         return None
     return cur
 
 
 def serve_restart(conn):
-    """river serve --restart: start again now, when the code on disk loads. The reply goes out first."""
+    """maxpm serve --restart: start again now, when the code on disk loads. The reply goes out first."""
     if DESKTOP:
         raise RiverError("the desktop app runs its own copy of the code; start the app again to restart it")
     why = _code_loads()
     if why:
-        raise RiverError(f"the code on disk does not load, so river serve keeps the code it runs: {why}")
+        raise RiverError(f"the code on disk does not load, so maxpm serve keeps the code it runs: {why}")
     _restart_soon("restart asked")
     return {"restarting": True, "boot": BOOT, "stale": code_stale()}
 
@@ -1188,9 +1189,9 @@ def update_apply(repo=REPO, restart=_restart_soon):
 KNOWN_AGENTS = [
     ("Claude Code", "claude", "@claude-code"),
     ("Codex", "codex", "@codex"),
-    ("Grok", "grok", 'grok "run river go in this folder and follow the briefing"'),
-    ("OpenCode", "opencode", 'opencode --prompt "run river go in this folder and follow the briefing"'),
-    ("Gemini", "gemini", 'gemini -i "run river go in this folder and follow the briefing"'),
+    ("Grok", "grok", 'grok "run maxpm go in this folder and follow the briefing"'),
+    ("OpenCode", "opencode", 'opencode --prompt "run maxpm go in this folder and follow the briefing"'),
+    ("Gemini", "gemini", 'gemini -i "run maxpm go in this folder and follow the briefing"'),
 ]
 
 
@@ -1257,21 +1258,21 @@ def setup_status(conn):
 
 
 def setup_block(conn, path, move=None):
-    """Add or update the work queue block for every agent in a registered project folder (river init):
+    """Add or update the work queue block for every agent in a registered project folder (maxpm init):
     AGENTS.md holds it and CLAUDE.md imports it; move=True first moves the rules in CLAUDE.md to AGENTS.md."""
     from .cli import setup_instructions
     folder = Path(path).expanduser().resolve()
     if folder not in {Path(p["path"]).resolve() for p in core.project_list(conn) if p["path"]}:
-        raise RiverError(f"{path} is not the folder of a river project")
+        raise RiverError(f"{path} is not the folder of a maxpm project")
     if not folder.is_dir():
         raise RiverError(f"{path} does not exist")
     return setup_instructions(folder, move)
 
 
 def folder_add(conn, path, name=None, description="", move=None, actor=None):
-    """Add a project folder from the page: what river init does in that folder, without a terminal. The
+    """Add a project folder from the page: what maxpm init does in that folder, without a terminal. The
     project is created (default name: the folder's) or linked; a project linked to another folder that
-    still exists is refused (only the user moves it: river project path --move). Then the agent block
+    still exists is refused (only the user moves it: maxpm project path --move). Then the agent block
     goes in AGENTS.md, and CLAUDE.md imports it; move is the CLAUDE.md rules choice (None: ask)."""
     from .cli import link_folder, setup_instructions, instructions_layout, folder_project_name
     if not (path or "").strip():
@@ -1287,7 +1288,7 @@ def folder_add(conn, path, name=None, description="", move=None, actor=None):
         row = conn.execute("SELECT path FROM projects WHERE name=?", (name,)).fetchone()
         if row and row["path"] and Path(row["path"]) != folder and Path(row["path"]).is_dir():
             raise RiverError(f"project {name} is linked to {row['path']}. Pick another name for this folder, "
-                             f"or move the project in a terminal: river project path {name} {folder} --move")
+                             f"or move the project in a terminal: maxpm project path {name} {folder} --move")
     name, linked_here, lines = link_folder(conn, folder, name, description.strip(), actor)
     lines += setup_instructions(folder, move)
     return {"project": name or linked_here[0], "path": str(folder), "lines": lines,
@@ -1295,7 +1296,7 @@ def folder_add(conn, path, name=None, description="", move=None, actor=None):
 
 
 # The river command for agents: a small launcher in ~/.local/bin that runs this river with this Python, so an
-# agent started from the app (or any terminal) can run `river go` on a Mac that has only the app.
+# agent started from the app (or any terminal) can run `maxpm go` on a Mac that has only the app.
 LAUNCHER_MARK = "# MaximizePM launcher"
 OLD_LAUNCHER_MARKS = ("# Biggest River launcher",)  # the product's first name
 
@@ -1669,14 +1670,14 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, {"error": "not found"})
 
     def _refuse(self):
-        """Answer 403 and return True when the request was not made on this computer, straight to river serve.
-        river serve has no sign-in, and the page starts agents, types into their terminals, and changes the
+        """Answer 403 and return True when the request was not made on this computer, straight to maxpm serve.
+        maxpm serve has no sign-in, and the page starts agents, types into their terminals, and changes the
         queue. A site whose name is made to point at 127.0.0.1 (DNS rebinding) passes the browser's same-origin
         rule, so the Host header decides, on every route; a tunnel or a proxy that says it forwards gets
         nothing either (mcp.local_refusal). A river command in a sandbox (cli.ask_server) passes: the sandbox's
         proxy runs on this computer and adds no such header."""
         from . import mcp
-        why = mcp.local_refusal(self.client_address[0], dict(self.headers.items()), "river serve")
+        why = mcp.local_refusal(self.client_address[0], dict(self.headers.items()), "maxpm serve")
         if why:
             self._send(403, {"error": why})
         return bool(why)

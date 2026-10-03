@@ -1,6 +1,6 @@
 ---
 name: river-manager
-description: Run the MaximizePM manager session (the `river manage` command): plan with the user, launch agents, fill agent queues, stop stuck agents and agents that wait too long, change launch settings, and give release targets to another agent. Use when the user says "manage" in a project that uses river, or asks you to keep the other agents working together.
+description: Run the MaximizePM manager session (the `maxpm manage` command): plan with the user, launch agents, fill agent queues, stop stuck agents and agents that wait too long, change launch settings, and give release targets to another agent. Use when the user says "manage" in a project that uses MaximizePM, or asks you to keep the other agents working together.
 ---
 
 # MaximizePM: the manager
@@ -11,22 +11,22 @@ together. It takes no items itself: claims refuse for a manager.
 
 ## Start
 
-Run `river manage` and follow the briefing. It names you (pass `--as <name>` on
+Run `maxpm manage` and follow the briefing. It names you (pass `--as <name>` on
 every later command) and lists what needs attention. One manager is active at a
-time: a second `river manage` names the active one and refuses. To replace it,
-`river manage --takeover "<why>"`; the old manager is told.
+time: a second `maxpm manage` names the active one and refuses. To replace it,
+`maxpm manage --takeover "<why>"`; the old manager is told.
 
 ## The loop
 
 1. Read NEEDS ATTENTION in the briefing and act on each line (below).
-2. Start `river --as <you> inbox --wait` as a background command (Claude
+2. Start `maxpm --as <you> inbox --wait` as a background command (Claude
    Code: `run_in_background`, which wakes the session when it exits; Codex:
    its background shell). It exits as soon as a message or question comes to
    you, prints it, and marks it read; after 25 minutes with nothing it exits
    too. Each time it exits, act on the messages and start it again. Skip it
-   when the briefing says river delivers messages into your session itself
+   when the briefing says MaximizePM delivers messages into your session itself
    (`native_message`).
-3. Start `river --as <you> manage --watch` as a background command too (Claude
+3. Start `maxpm --as <you> manage --watch` as a background command too (Claude
    Code: `run_in_background` with a time limit above `manage_every`, 30m; in a
    foreground shell with a 10-minute limit, add `--step 9m`). It exits when a
    new finding needs you (an agent is stuck or gone, an agent waits longer than
@@ -41,61 +41,61 @@ Stop when the user tells you to, and tell the user what you did.
 ## What to do for each finding
 
 - **STUCK agent** (its process ended, or it is away or gone while it holds
-  items or has queued items): `river stop <agent> --reason "..."`. If it does
+  items or has queued items): `maxpm stop <agent> --reason "..."`. If it does
   not end and its items block others, ask the user first; only with their yes,
-  `river stop <agent> --kill --reason "..."` (uncommitted work in its folder is
+  `maxpm stop <agent> --kill --reason "..."` (uncommitted work in its folder is
   lost).
 - **LEASE RAN OUT** on an item: its session stopped mid-item. Queue it for an
-  agent (`river queue add <agent> <id>`), or launch one for it
-  (`river launch --item <id>`). The taker checks what is done first.
-- **WAITS TOO LONG**: give it work from its area (`river queue add <agent> <id>`),
-  or stop it (`river stop <agent> --reason "no work"`) so it does not hold a slot.
-- **NO AGENT in a project** with ready work: `river launch --project <name>`
+  agent (`maxpm queue add <agent> <id>`), or launch one for it
+  (`maxpm launch --item <id>`). The taker checks what is done first.
+- **WAITS TOO LONG**: give it work from its area (`maxpm queue add <agent> <id>`),
+  or stop it (`maxpm stop <agent> --reason "no work"`) so it does not hold a slot.
+- **NO AGENT in a project** with ready work: `maxpm launch --project <name>`
   (`--dry-run` first when unsure). Pick the model and effort from the items
   (`--model`, `--effort`); the items' limits apply. **NO CODEX AGENT** (or
   another type): ready work there needs that agent type; run the launch line
-  it prints (`river launch --item <id> --agent Codex`).
-- **NOT CONNECTED**: a session river started ran no river command. Tell the
+  it prints (`maxpm launch --item <id> --agent Codex`).
+- **NOT CONNECTED**: a session MaximizePM started ran no maxpm command. Tell the
   user (its terminal may wait on a prompt; for an agent in tmux the user reads
   and answers it with the agent's Terminal button on the page, and only a
-  person does that), stop it, and launch again. River
+  person does that), stop it, and launch again. MaximizePM
   takes its push back after `connect_within`. A stop ends every reservation
-  of the agent at once, and river does the same for an agent that is gone.
-  `river edit <id> --unreserve` ends a reservation by hand ("reserved for
+  of the agent at once, and MaximizePM does the same for an agent that is gone.
+  `maxpm edit <id> --unreserve` ends a reservation by hand ("reserved for
   <agent>"), so every agent can take the item. An item reserved for you:
-  `river launch --item <id>` gives it to the new session.
-- **TARGET owner away or gone**: `river target give <target> --to <agent>`
+  `maxpm launch --item <id>` gives it to the new session.
+- **TARGET owner away or gone**: `maxpm target give <target> --to <agent>`
   (an active agent in one of the target's projects).
 - **A goal that several agents must work on at the same time**: an owner
   reserves the goal's agent items, so one agent does them in sequence. When
   the user wants its items open to every agent, make the goal shared:
-  `river goal edit <name> --shared`. The owner goes (and is told), `river go`
+  `maxpm goal edit <name> --shared`. The owner goes (and is told), `maxpm go`
   never gives the goal to an agent again, and nothing is reserved.
-  `river goal edit <name> --owned` undoes it.
+  `maxpm goal edit <name> --owned` undoes it.
 - **QUESTION** to the user or **WAITS ON THE USER**: tell the user in chat, one
-  decision at a time (`river guide decisions`). Do not answer for them.
+  decision at a time (`maxpm guide decisions`). Do not answer for them.
 
 ## Your tools
 
-- `river launch [--project P | --item N] [--agent A] [--model M] [--effort E] [--tab|--window|--tmux] [--dry-run]`
+- `maxpm launch [--project P | --item N] [--agent A] [--model M] [--effort E] [--tab|--window|--tmux] [--dry-run]`
   `--tmux` (or the setting `launch_in tmux`) starts the session as a pane of the tmux session `river`. It needs
   no Terminal app, so it works over SSH and on Linux. The user sees every such agent side by side with
-  `river view` in a terminal (`--windows`: one window each; `--tidy`: close the panes of sessions that are done);
-  `river view --list` prints the panes for you. `river serve` closes the panes of finished sessions by itself
+  `maxpm view` in a terminal (`--windows`: one window each; `--tidy`: close the panes of sessions that are done);
+  `maxpm view --list` prints the panes for you. `maxpm serve` closes the panes of finished sessions by itself
   every `tidy_every` (20m; a pane where the agent CLI still runs only when its screen stays the same for
   `idle_after`, never one with a prompt), so you need not tidy by hand. A sandbox around your session blocks Terminal and tmux, so
-  `river launch` then asks the running `river serve` to open the session. The sandbox must allow the host
+  `maxpm launch` then asks the running `maxpm serve` to open the session. The sandbox must allow the host
   `127.0.0.1:<serve_port>` (8765) for that command (Claude Code: the command's `allowed_domains`); the error
-  names it. `river view` needs a terminal outside the sandbox.
-- `river queue add <agent> <id> [--first|--before <id>]`, `river queue add <agent> --message "..."`,
-  `river queue list|move|remove`: an agent's own queue comes before the project queue.
-- `river note|alert|ask <agent> "..."`: messages (they also go through the
-  agent platform's own messaging when river knows it).
-- `river stop <agent> --reason "..."`: a request; the agent commits, releases, and ends.
-- `river config set launch_agents|default_model|default_effort|default_min_model|default_max_model ...`
-- `river launch ... --option remote_control=off` (or `permission_mode=plan`, `sandbox=read-only`): a launch profile option for one session; the settings `claude_*` and `codex_*` hold the defaults
-- `river target give <target> --to <agent>`
-- Planning: everything in `river guide planner` (add, dep, prio, edit).
+  names it. `maxpm view` needs a terminal outside the sandbox.
+- `maxpm queue add <agent> <id> [--first|--before <id>]`, `maxpm queue add <agent> --message "..."`,
+  `maxpm queue list|move|remove`: an agent's own queue comes before the project queue.
+- `maxpm note|alert|ask <agent> "..."`: messages (they also go through the
+  agent platform's own messaging when MaximizePM knows it).
+- `maxpm stop <agent> --reason "..."`: a request; the agent commits, releases, and ends.
+- `maxpm config set launch_agents|default_model|default_effort|default_min_model|default_max_model ...`
+- `maxpm launch ... --option remote_control=off` (or `permission_mode=plan`, `sandbox=read-only`): a launch profile option for one session; the settings `claude_*` and `codex_*` hold the defaults
+- `maxpm target give <target> --to <agent>`
+- Planning: everything in `maxpm guide planner` (add, dep, prio, edit).
 
 ## Rules
 

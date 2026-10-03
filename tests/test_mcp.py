@@ -75,7 +75,7 @@ def load(path):
 
 
 class ChatApp(unittest.TestCase):
-    """A chat app with no folder (Claude desktop through river mcp): setup, go, plan, and manage."""
+    """A chat app with no folder (Claude desktop through maxpm mcp): setup, go, plan, and manage."""
 
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
@@ -119,7 +119,7 @@ class ChatApp(unittest.TestCase):
         self.call(srv, "done", {"id": self.text, "output": "Chapter one: the river at dawn ..."})
         go = self.call(srv, "go")
         self.assertIn("NOTHING FOR THIS CHAT NOW", go)
-        self.assertNotIn("river wait", go)
+        self.assertNotIn("maxpm wait", go)
         # The code items stay for coding agents.
         c = core.connect()
         self.assertEqual({core.item_show(c, i)["status"] for i in (self.code, self.test)}, {"open"})
@@ -200,7 +200,7 @@ class ChatApp(unittest.TestCase):
             cli.setup_codex_config(f)
 
     def test_a_session_in_a_project_folder_is_not_a_chat(self):
-        # The Codex CLI reads the same config: its river mcp runs with RIVER_CHAT=1 in the project folder.
+        # The Codex CLI reads the same config: its maxpm mcp runs with RIVER_CHAT=1 in the project folder.
         os.makedirs(os.path.join(self.dir.name, "site"))
         srv = mcp.Server()
         go = self.call(srv, "go", {"cwd": os.path.join(self.dir.name, "site")})
@@ -209,7 +209,7 @@ class ChatApp(unittest.TestCase):
 
 
 class HttpEndpoint(unittest.TestCase):
-    """/mcp in river serve: the same tools over Streamable HTTP, for this computer only until it has sign-in."""
+    """/mcp in maxpm serve: the same tools over Streamable HTTP, for this computer only until it has sign-in."""
 
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
@@ -224,7 +224,7 @@ class HttpEndpoint(unittest.TestCase):
         self.text = core.item_add(c, "site", "write the launch post")["id"]
         c.close()
         self.old = os.getcwd()
-        os.chdir(self.dir.name)  # river serve started in a project folder: a web chat is still in none
+        os.chdir(self.dir.name)  # maxpm serve started in a project folder: a web chat is still in none
 
     def tearDown(self):
         os.chdir(self.old)

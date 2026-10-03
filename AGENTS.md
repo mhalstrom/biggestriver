@@ -1,9 +1,9 @@
 ## Work queue
 
-This project uses MaximizePM (`river`) to track work and who is doing it.
+This project uses MaximizePM (`maxpm`) to track work and who is doing it.
 When the user says "go" (or asks you to take work from the queue), run
-`river go` in this folder and follow the briefing it prints, to its end.
-When the user says "plan", run `river plan` and follow its briefing.
+`maxpm go` in this folder and follow the briefing it prints, to its end.
+When the user says "plan", run `maxpm plan` and follow its briefing.
 
 ## Working on MaximizePM itself
 
@@ -12,8 +12,8 @@ When the user says "plan", run `river plan` and follow its briefing.
   repository must always match the latest finished item.
 - The repository is public. Keep names, paths, and plans from other projects
   out of it; local queue data lives in `data/` and `private/`, which git ignores.
-- When you finish a queue item, put the commit id in `river done <id> --output`.
-- After a commit that changes `river/*.py`, `river serve` starts again by itself
+- When you finish a queue item, put the commit id in `maxpm done <id> --output`.
+- After a commit that changes `river/*.py`, `maxpm serve` starts again by itself
   within a minute or two and runs the new code. To have it at once, run
-  `river serve --restart`: it waits until the page answers. Never add an item
-  for a person to restart `river serve`.
+  `maxpm serve --restart`: it waits until the page answers. Never add an item
+  for a person to restart `maxpm serve`.

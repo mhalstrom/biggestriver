@@ -102,7 +102,7 @@ function agentShown(a) {
   if ((S.goals || []).some(g => g.owner === a.name && g.status === "open")) return true;
   return S.items.some(i => i.status === "open" && i.reserved_until && i.reserved_for === a.name);
 }
-// A waiting session (river wait) takes a pushed item within seconds: offer the ready items of its projects.
+// A waiting session (maxpm wait) takes a pushed item within seconds: offer the ready items of its projects.
 function giveWork(a) {
   const where = (a.waiting_in || "").split(",").filter(Boolean);
   const ready = S.items.filter(i => i.ready && i.doer !== "human" && i.kind === "work" && !i.reserved_for
@@ -119,7 +119,7 @@ const giveChoice = {};
 // fold into a detail row (the ▸ at the start of the row). A row is a drop target for an item row.
 let agentsTable = null;
 function renderAgents() {
-  // The tmux panes of sessions that are done (S.tmux_done): one button closes them, as river view --tidy does.
+  // The tmux panes of sessions that are done (S.tmux_done): one button closes them, as maxpm view --tidy does.
   const done = S.tmux_done || [];
   $("#tidyPanes").classList.toggle("hidden", !done.length);
   $("#tidyPanes").textContent = `Close ${done.length} finished`;
@@ -168,7 +168,7 @@ function agentSession(a) {
   return `${a.model ? `<span class="chip c-p" title="the model this session runs (RIVER_MODEL)">${esc(a.model)}</span> ` : ""}${a.session ? `<span title="Claude Code session">${esc(a.session)}${a.session_ref ? " [" + esc(a.session_ref) + "]" : ""}</span>` : ""}${a.session_url ? ` <a class="link" href="${esc(a.session_url)}" target="_blank" rel="noopener">open</a>` : ""}`;
 }
 
-// The monitor sessions that followed a deploy (river target monitor).
+// The monitor sessions that followed a deploy (maxpm target monitor).
 function monitorLines(d) {
   return (d.monitors || []).map(m => `<div class="muted" style="font-size:12px">monitor <span class="link" data-open="${m.id}">#${m.id}</span> (${esc(m.status.replace("_", " "))}${m.assignee ? " · " + esc(m.assignee) : ""})${m.output ? ": " + esc(clip(m.output, 200)) : ""}</div>`).join("");
 }
@@ -187,7 +187,7 @@ function renderTargets() {
             { label: "Review and deploy", attrs: `data-deploy="${esc(t.name)}" data-review="1"`, title: "First one review of everything it ships (review steps per project), then the deploy" }])
         : '<span class="muted" style="font-size:12px">Nothing to deploy: ship items first (maxpm ship &lt;id&gt;, or done --ship).</span>'}</div>
       <div class="st" style="margin-top:6px"><b>Deploys</b></div>
-      ${(t.history || []).map(h => `<div class="st" style="margin-top:4px"><span class="link" data-open="${h.id}">#${h.id}</span> ${ago(h.closed_at)}${h.done_by ? " by " + esc(h.done_by) : ""}${h.output ? ": " + esc(clip(h.output, 200)) : ""}<div class="muted" style="font-size:12px">shipped ${shipList(h.ships)}</div>${monitorLines(h)}</div>`).join("") || '<div class="st muted">Never deployed.</div>'}`)).join("") || `<div class="muted">No deploy targets. Add one: river target add &lt;name&gt; --description "how it deploys"</div>`;
+      ${(t.history || []).map(h => `<div class="st" style="margin-top:4px"><span class="link" data-open="${h.id}">#${h.id}</span> ${ago(h.closed_at)}${h.done_by ? " by " + esc(h.done_by) : ""}${h.output ? ": " + esc(clip(h.output, 200)) : ""}<div class="muted" style="font-size:12px">shipped ${shipList(h.ships)}</div>${monitorLines(h)}</div>`).join("") || '<div class="st muted">Never deployed.</div>'}`)).join("") || `<div class="muted">No deploy targets. Add one: maxpm target add &lt;name&gt; --description "how it deploys"</div>`;
 }
 
 function renderBlocked() {
@@ -973,7 +973,7 @@ function renderSetup(st) {
     st.people.length ? "You're here as " + st.people.map(esc).join(", ") + ". Pick your name at the top right if it isn't chosen."
       : "So MaximizePM can show you what needs you, and let you know.",
     `<input id="suName" placeholder="your name" style="width:160px"><button class="btn primary" data-su="register">Save</button>`));
-  // Agents run `river go`: a new terminal must find the river command (the app writes a small launcher).
+  // Agents run `maxpm go`: a new terminal must find the river command (the app writes a small launcher).
   const rc = st.river_cmd || {};
   if (!rc.unsupported) out.push(step(rc.ok, "Let agents use MaximizePM",
     rc.ok ? `Agents can run the river command${rc.shell_path ? ` (${esc(rc.shell_path)})` : ""}.`

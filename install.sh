@@ -38,8 +38,8 @@ fi
 cat <<'NEXT'
 
 Next, in each project folder:
-  river init --description "what this project covers and what context helps"
-  river add <project> "first item"
+  maxpm init --description "what this project covers and what context helps"
+  maxpm add <project> "first item"
 Then open an agent in that folder and say: go
-Watch the queue:  river serve --open
+Watch the queue:  maxpm serve --open
 NEXT
