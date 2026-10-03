@@ -53,7 +53,7 @@ const tool = (name, arg, ...res) => [`${E}32m●${R} ${E}1m${name}${R}(${arg})`,
 const busy = (text) => [`${E}33m✻ ${text}${R}`];
 function screen(a) {
   return [`${E}2m>${R} go`, "",
-    ...tool("Bash", "river go", `You are river agent ${a.name}. Role: WORKER.`, `YOUR ITEM #${a.id}: ${a.title}`),
+    ...tool("Bash", "maxpm go", `You are MaximizePM agent ${a.name}. Role: WORKER.`, `YOUR ITEM #${a.id}: ${a.title}`),
     ...a.steps.flat()].join("\n");
 }
 
@@ -239,7 +239,7 @@ while True:
   await sleep(500); await shot("river-view.png", "#t", 0);
 
   // The go briefing an agent reads, drawn as a terminal window.
-  await win.loadURL(termPage(`<span style="color:#8bd5a0">~/code/shop $</span> river go\n${esc(brief.trim())}`));
+  await win.loadURL(termPage(`<span style="color:#8bd5a0">~/code/shop $</span> maxpm go\n${esc(brief.trim())}`));
   await sleep(500); await shot("go-briefing.png", "#t", 0);
 
   s2.stop();
