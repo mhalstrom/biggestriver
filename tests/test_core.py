@@ -261,19 +261,19 @@ class Go(Base):
     def test_go_in_an_unlinked_folder_names_a_test_queue(self):
         lone = os.path.join(self.dir.name, "lone")
         os.makedirs(lone)
-        old = os.environ.get("RIVER_DB")
-        os.environ["RIVER_DB"] = self.path
+        old = os.environ.get("MAXPM_DB")
+        os.environ["MAXPM_DB"] = self.path
         try:
             self.assertIn("QUEUE: ", core.queue_note())
             with self.assertRaises(RiverError) as e:
                 core.go(self.c, lone)
-            self.assertIn("RIVER_DB", str(e.exception))
+            self.assertIn("MAXPM_DB", str(e.exception))
             self.assertIn("Ask the user", str(e.exception))
         finally:
             if old is None:
-                del os.environ["RIVER_DB"]
+                del os.environ["MAXPM_DB"]
             else:
-                os.environ["RIVER_DB"] = old
+                os.environ["MAXPM_DB"] = old
 
     def test_worker_from_folder_and_resume(self):
         x = self.add("web", "x", doer="ai")
@@ -473,7 +473,7 @@ class Messages(Base):
         self.c.execute("UPDATE items SET lease_expires_at=? WHERE id=?", (past, self.x))
         core.activity(self.c, "bob")
         box = core.inbox(self.c, "alice")
-        self.assertEqual([(m["kind"], m["from_agent"], m["item_id"]) for m in box], [("notice", "river", self.x)])
+        self.assertEqual([(m["kind"], m["from_agent"], m["item_id"]) for m in box], [("notice", "maxpm", self.x)])
 
 
 class Targets(Base):
@@ -758,7 +758,7 @@ class Ownership(Base):
         core.target_own(self.c, "web", "bo")
         self.assertEqual(core.target_show(self.c, "web")["owner"], "bo")
         box = core.inbox(self.c, "ag")
-        self.assertEqual([(m["kind"], m["from_agent"]) for m in box], [("notice", "river")])
+        self.assertEqual([(m["kind"], m["from_agent"]) for m in box], [("notice", "maxpm")])
         self.assertIn("web", box[0]["body"])
 
     def test_give_release_and_refusals(self):
@@ -1256,14 +1256,14 @@ class GoalClaim(Base):
 class DbLocation(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
-        self.old = (core.HOME_DB, core.LEGACY_DB, os.environ.pop("RIVER_DB", None))
+        self.old = (core.HOME_DB, core.LEGACY_DB, os.environ.pop("MAXPM_DB", None))
         core.HOME_DB = __import__("pathlib").Path(self.dir.name, "home", "river.db")
         core.LEGACY_DB = __import__("pathlib").Path(self.dir.name, "clone", "data", "river.db")
 
     def tearDown(self):
         core.HOME_DB, core.LEGACY_DB, env = self.old
         if env is not None:
-            os.environ["RIVER_DB"] = env
+            os.environ["MAXPM_DB"] = env
         self.dir.cleanup()
 
     def test_clone_keeps_its_file_until_moved(self):
@@ -1293,17 +1293,17 @@ class SkillsInstall(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             dest = Path(d)
             lines = cli.install_skills(dest)
-            self.assertTrue((dest / "river").is_symlink())
-            self.assertTrue((dest / "river-planner" / "SKILL.md").is_file())
+            self.assertTrue((dest / "maxpm").is_symlink())
+            self.assertTrue((dest / "maxpm-planner" / "SKILL.md").is_file())
             cli.install_skills(dest)  # again: links are replaced
-            (dest / "river").unlink()
-            (dest / "river").mkdir()
+            (dest / "maxpm").unlink()
+            (dest / "maxpm").mkdir()
             with self.assertRaises(RiverError):
                 cli.install_skills(dest)  # a real folder may hold edits
             cli.install_skills(dest, copy=True, force=True)
-            self.assertFalse((dest / "river").is_symlink())
-            self.assertEqual(len(lines), 3)  # river, river-planner, river-manager
-            self.assertTrue((dest / "river-manager" / "SKILL.md").is_file())
+            self.assertFalse((dest / "maxpm").is_symlink())
+            self.assertEqual(len(lines), 3)  # maxpm, maxpm-planner, maxpm-manager
+            self.assertTrue((dest / "maxpm-manager" / "SKILL.md").is_file())
 
 
 class DecisionFormat(Base):
@@ -1622,7 +1622,7 @@ class Ntfy(Base):
         from river import notify
         out = notify.setup_ntfy(self.c)
         topic = core.setting(self.c, "ntfy_topic")
-        self.assertTrue(topic.startswith("river-") and len(topic) > 12)
+        self.assertTrue(topic.startswith("maxpm-") and len(topic) > 12)
         self.assertIn(topic, "\n".join(out["subscribe"]))
         self.assertIn("ntfy", core._channels(core.setting(self.c, "notify_channels")))
         listed = [o for o in core.config_list(self.c)["overrides"] if o["key"] == "ntfy_topic"]
@@ -1688,7 +1688,7 @@ class Email(Base):
         self._p.start()
         self._e = mock.patch.dict(os.environ, {}, clear=False)
         self._e.start()
-        os.environ.pop("RIVER_SMTP_PASSWORD", None)
+        os.environ.pop("MAXPM_SMTP_PASSWORD", None)
         for k, v in (("email_to", "me@example.com"), ("smtp_host", "smtp.example.com"),
                      ("smtp_user", "bot@example.com")):
             core.config_set(self.c, k, v)
@@ -1726,7 +1726,7 @@ class Email(Base):
         if os.name != "nt":  # Windows has no POSIX modes: river skips this check there
             with self.assertRaises(RiverError):
                 self.notify.smtp_password()
-        os.environ["RIVER_SMTP_PASSWORD"] = "from-env"
+        os.environ["MAXPM_SMTP_PASSWORD"] = "from-env"
         self.assertEqual(self.notify.smtp_password(), "from-env")
         self.assertNotIn("from-env", str(core.config_list(self.c)))
         with self.assertRaises(RiverError):
@@ -2146,37 +2146,40 @@ if __name__ == "__main__":
 
 
 class CommandNames(unittest.TestCase):
-    """The command is maxpm, and river is the same command: both entry points, the same behaviour."""
+    """The command is maxpm: one entry point, and no text names another."""
 
-    def test_the_name_the_command_runs_under(self):
-        for argv0, name in (("maxpm", "maxpm"), ("/usr/local/bin/river", "river"), (r"C:\\tools\\maxpm.exe", "maxpm"),
-                            ("maxpm-script.py", "maxpm"), ("python3", "river"), ("", "river")):
-            self.assertEqual(core.command_name(argv0), name, argv0)
+    def test_the_product_names(self):
         self.assertTrue(core.names_product("uses Biggest River (`river`)") and core.names_product("uses MaximizePM"))
         self.assertFalse(core.names_product("uses another queue"))
 
-    def test_both_commands_run_with_the_same_queue(self):
+    def test_no_agent_takes_the_name_of_the_notices(self):
+        with tempfile.TemporaryDirectory() as d:
+            c = core.connect(os.path.join(d, "q.db"))
+            with self.assertRaises(core.RiverError):
+                core.register(c, "maxpm")
+            self.assertEqual(core.register(c, "maxpm-1")["name"], "maxpm-1")
+            c.close()
+
+    def test_the_command_is_maxpm(self):
         import subprocess
         from pathlib import Path
         root = Path(__file__).resolve().parent.parent
         with tempfile.TemporaryDirectory() as d:
-            env = {**os.environ, "RIVER_DB": str(Path(d, "q.db"))}
-            out = {}
-            for c in ("maxpm", "river"):
-                h = subprocess.run([sys.executable, str(root / "bin" / c), "--help"], capture_output=True, text=True, env=env)
-                self.assertEqual(h.returncode, 0, h.stderr)
-                self.assertTrue(h.stdout.startswith(f"usage: {c} "), h.stdout[:40])
-                self.assertIn("maxpm and river are the same command", " ".join(h.stdout.split()))
-                v = subprocess.run([sys.executable, str(root / "bin" / c), "--version"], capture_output=True, text=True, env=env)
-                self.assertRegex(v.stdout.strip(), rf"^{c} \d+\.\d+")
+            env = {**os.environ, "MAXPM_DB": str(Path(d, "q.db"))}
+            h = subprocess.run([sys.executable, str(root / "bin" / "maxpm"), "--help"], capture_output=True, text=True, env=env)
+            self.assertEqual(h.returncode, 0, h.stderr)
+            self.assertTrue(h.stdout.startswith("usage: maxpm "), h.stdout[:40])
+            self.assertNotRegex(h.stdout, r"\briver\b")
+            v = subprocess.run([sys.executable, str(root / "bin" / "maxpm"), "--version"], capture_output=True, text=True, env=env)
+            self.assertRegex(v.stdout.strip(), r"^maxpm \d+\.\d+")
             subprocess.run([sys.executable, str(root / "bin" / "maxpm"), "project", "add", "shop"], check=True,
                            capture_output=True, env=env)
-            ls = subprocess.run([sys.executable, str(root / "bin" / "river"), "project", "list"], capture_output=True,
+            ls = subprocess.run([sys.executable, str(root / "bin" / "maxpm"), "project", "list"], capture_output=True,
                                 text=True, env=env)
             self.assertIn("shop", ls.stdout)
         text = (root / "pyproject.toml").read_text()
         self.assertIn('maxpm = "river.cli:main"', text)
-        self.assertIn('river = "river.cli:main"', text)
+        self.assertNotIn('river = "river.cli:main"', text)
         self.assertIn('name = "maximizepm"', text)
 
     def test_the_data_stays_in_the_folder_of_the_first_name(self):
@@ -2242,37 +2245,17 @@ class AgentBlock(unittest.TestCase):
             self.assertEqual({r["result"] for r in cli.refresh_blocks(c)}, {"current", "no block"})  # again: nothing
             c.close()
             # The command: maxpm init --refresh.
-            os.environ["RIVER_DB"] = str(Path(d, "r.db"))
+            os.environ["MAXPM_DB"] = str(Path(d, "r.db"))
             try:
                 (a / "AGENTS.md").write_text(cli._WAIT_BLOCK)
                 out = io.StringIO()
                 with contextlib.redirect_stdout(out):
                     self.assertEqual(cli.run(["init", "--refresh"]), 0)
             finally:
-                os.environ.pop("RIVER_DB", None)
+                os.environ.pop("MAXPM_DB", None)
             self.assertIn(f"{a / 'AGENTS.md'}: updated the work queue block to the current text", out.getvalue())
             self.assertIn("1 file(s) updated in 3 project folder(s). Commit each one in its repository.", out.getvalue())
             self.assertEqual((a / "AGENTS.md").read_text(), cli.AGENT_SNIPPET)
-
-    def test_the_briefing_says_when_maxpm_is_not_on_path(self):
-        from pathlib import Path
-        from river import cli
-        with tempfile.TemporaryDirectory() as d:
-            c = core.connect(Path(d, "r.db"))
-            core.project_add(c, "p", path=d)
-            core.register(c, "ag")
-            b = core.go(c, d, "ag")
-            out = io.StringIO()
-            with contextlib.redirect_stdout(out):
-                cli.render_go(b)
-            self.assertNotIn("not on PATH", out.getvalue())
-            self.assertIn("maxpm --as ag go", out.getvalue())
-            out = io.StringIO()
-            with contextlib.redirect_stdout(out), mock.patch.object(cli, "maxpm_on_path", lambda: False):
-                cli.render_go(b)
-            self.assertIn("The command maxpm is not on PATH on this computer", out.getvalue())
-            self.assertIn("type river in place of maxpm", out.getvalue())
-            c.close()
 
     def test_go_names_an_old_block_until_init_updates_it(self):
         from pathlib import Path
@@ -2710,7 +2693,7 @@ class Version(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as e:
             cli.build_parser().parse_args(["--version"])
-        self.assertEqual((e.exception.code, out.getvalue().strip()), (0, f"river {__version__}"))
+        self.assertEqual((e.exception.code, out.getvalue().strip()), (0, f"maxpm {__version__}"))
 
 
 class Cleanup(Base):
@@ -3209,7 +3192,7 @@ class NativeDelivery(Base):
         core.queue_add(self.c, "cc", message="two\nlines", actor="mark")
         t.join(5)
         srv.close()
-        self.assertEqual(got[0], "[river instruction from mark] two lines (maxpm --as <you> inbox; maxpm go shows your queue)\n")
+        self.assertEqual(got[0], "[maxpm instruction from mark] two lines (maxpm --as <you> inbox; maxpm go shows your queue)\n")
         self.assertEqual(core.queue_list(self.c, "cc")["entries"][0]["native_status"], "sent")
         core.set_native(self.c, "cc", "Claude Code", os.path.join(d, "gone.sock"))
         self.assertTrue(core.deliver_native(self.c, "cc", "x").startswith("failed: exit 1:"))
@@ -3265,9 +3248,8 @@ class Kill(Base):
         self.assertFalse(core._between("claude", "claude go"))
         with mock.patch("os.name", "nt"):
             self.assertTrue(core._between("cmd.exe", "cmd /k claude go"))
-            for c in ("maxpm", "river"):  # the same command under both names
-                self.assertTrue(core._between(f"{c}.exe", f"{c} go"), c)
-                self.assertTrue(core._between("python.exe", rf"C:\py\python.exe C:\tools\biggestriver\bin\{c} go"), c)
+            self.assertTrue(core._between("maxpm.exe", "maxpm go"))
+            self.assertTrue(core._between("python.exe", r"C:\py\python.exe C:\tools\maximizepm\bin\maxpm go"))
             self.assertTrue(core._between("python.exe", "python.exe -m river go"))  # the package is river
             self.assertFalse(core._between("python.exe", r"D:\biggestriver\venv\python.exe agent.py"))
             self.assertFalse(core._between("node.exe", "node claude.js go"))
@@ -3610,8 +3592,8 @@ class Rename(Base):
 
     def test_the_command_renames_and_says_when_an_old_name_was_used(self):
         from river import cli
-        old_env = os.environ.get("RIVER_DB")
-        os.environ["RIVER_DB"] = self.path
+        old_env = os.environ.get("MAXPM_DB")
+        os.environ["MAXPM_DB"] = self.path
         try:
             def run(*words):
                 out, err = io.StringIO(), io.StringIO()
@@ -3632,6 +3614,6 @@ class Rename(Base):
             self.assertIn("web  (old name: site until", run("target", "show", "site")[0])
         finally:
             if old_env is None:
-                del os.environ["RIVER_DB"]
+                del os.environ["MAXPM_DB"]
             else:
-                os.environ["RIVER_DB"] = old_env
+                os.environ["MAXPM_DB"] = old_env

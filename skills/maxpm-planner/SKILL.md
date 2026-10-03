@@ -1,5 +1,5 @@
 ---
-name: river-planner
+name: maxpm-planner
 description: Plan work with the user into MaximizePM queue items with dependencies and priorities (the `maxpm` command). Use when the user says "plan" in a project that uses MaximizePM, when you plan a project into tasks, load a checklist into the queue, re-rank projects, or fix priorities and dependencies.
 ---
 
@@ -236,7 +236,7 @@ family. Name one model per family to limit both: `--min-model opus,sol`.
 Defaults come from settings: `default_model`, `default_effort`,
 `default_min_model`, `default_max_model`, per project (`--project`) or per
 item kind (`--kind deploy`). An item's own value wins. A session declares its
-model with `RIVER_MODEL=<model>` or `maxpm go --model <model>`.
+model with `MAXPM_MODEL=<model>` or `maxpm go --model <model>`.
 
 ## Agent type
 

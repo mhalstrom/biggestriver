@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""MaximizePM command (river and maxpm are the same). Put this directory on PATH or link it:
-ln -s <repo>/bin/river ~/.local/bin/river; ln -s <repo>/bin/maxpm ~/.local/bin/maxpm"""
+"""MaximizePM command. Put this directory on PATH or link it:
+ln -s <repo>/bin/maxpm ~/.local/bin/maxpm"""
 import os
 import sys
 

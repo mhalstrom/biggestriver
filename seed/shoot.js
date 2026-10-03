@@ -5,7 +5,7 @@
 // The server runs with a throwaway HOME (/tmp/.../alex), so no path of this computer shows in a picture.
 // The page never clicks Start or Dispatch here: those open real terminal windows. The agents of the
 // pictures are stand-ins in panes of a tmux server of its own (TMUX_TMPDIR), never this computer's tmux:
-// they give the Terminal of an agent on the page, the alert for a prompt that waits, and river view.
+// they give the Terminal of an agent on the page, the alert for a prompt that waits, and maxpm view.
 // A sandbox blocks the tmux socket: run this outside one.
 const { app, BrowserWindow } = require("electron");
 const { execFileSync, spawn } = require("node:child_process");
@@ -20,7 +20,7 @@ const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "river-shots-"
 const home = path.join(tmp, "alex");
 const sock = fs.realpathSync(fs.mkdtempSync("/tmp/rs-"));  // short: a socket path has a length limit
 const W = 1280, H = 820;
-const COLS = 160, ROWS = 44;  // the terminal that runs river view
+const COLS = 160, ROWS = 44;  // the terminal that runs maxpm view
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const tmuxExe = ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"].find((p) => fs.existsSync(p)) || "tmux";
 
@@ -28,21 +28,21 @@ function freePort() {
   return new Promise((resolve) => { const s = net.createServer(); s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => resolve(p)); }); });
 }
 
-// A throwaway HOME whose login profile finds stand-in claude, codex and river commands (not this Mac's).
+// A throwaway HOME whose login profile finds stand-in claude, codex and maxpm commands (not this Mac's).
 function makeHome() {
   const bin = path.join(home, "bin");
   fs.mkdirSync(bin, { recursive: true });
   fs.mkdirSync(path.join(home, "code", "shop"), { recursive: true });
-  for (const c of ["claude", "codex", "river"]) fs.writeFileSync(path.join(bin, c), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  for (const c of ["claude", "codex", "maxpm"]) fs.writeFileSync(path.join(bin, c), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   fs.writeFileSync(path.join(home, ".zprofile"), `export PATH="${bin}:$PATH"\n`);
 }
-const riverIn = (env) => (...a) => execFileSync("python3", [path.join(repo, "bin", "river"), "-q", ...a], { env, encoding: "utf8" });
+const riverIn = (env) => (...a) => execFileSync("python3", [path.join(repo, "bin", "maxpm"), "-q", ...a], { env, encoding: "utf8" });
 
-// river serve on a database; returns its URL and a stop function.
+// maxpm serve on a database; returns its URL and a stop function.
 const servers = [];
 async function serve(env) {
   const port = await freePort();
-  const srv = spawn("python3", [path.join(repo, "bin", "river"), "serve", "--port", String(port)], { env, stdio: "ignore" });
+  const srv = spawn("python3", [path.join(repo, "bin", "maxpm"), "serve", "--port", String(port)], { env, stdio: "ignore" });
   servers.push(srv);
   return { url: `http://127.0.0.1:${port}/`, stop: () => srv.kill() };
 }
@@ -61,7 +61,7 @@ async function main() {
   fs.mkdirSync(out, { recursive: true });
   makeHome();
   const base = { ...process.env, HOME: home, SHELL: "/bin/zsh", TZ: "UTC", LANG: "en_US.UTF-8", LC_ALL: "en_US.UTF-8", TMUX_TMPDIR: sock };
-  for (const k of ["RIVER_AGENT", "RIVER_FOCUS", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "RIVER_DB", "TMUX", "TMUX_PANE"]) delete base[k];
+  for (const k of ["MAXPM_AGENT", "MAXPM_FOCUS", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "MAXPM_DB", "TMUX", "TMUX_PANE"]) delete base[k];
   const tmux = (...a) => execFileSync(tmuxExe, ["-u", "-f", "/dev/null", ...a], { env: base, encoding: "utf8" }).replace(/\n$/, "");
   const outer = (...a) => tmux("-L", "outer", ...a);
   // The tmux server of the pictures is a new one: this must find no server.
@@ -113,7 +113,7 @@ async function main() {
     <pre style="margin:0;padding:16px 18px;color:#d8dae0;font:${font} Menlo,monospace;white-space:pre-wrap">${inner}</pre></div></body>`);
 
   // The setup guide on a first start: only the person is known yet. It opens by itself.
-  const first = { ...base, RIVER_DB: path.join(tmp, "first.db") };
+  const first = { ...base, MAXPM_DB: path.join(tmp, "first.db") };
   riverIn(first)("register", "alex", "--human");
   let s1 = await serve(first); url = s1.url; await ready();
   await open("as-alex");
@@ -121,7 +121,7 @@ async function main() {
   s1.stop();
 
   // Everything else: the demo data, with the guide dismissed.
-  // The default database of the throwaway HOME, so the go briefing prints no QUEUE line about RIVER_DB.
+  // The default database of the throwaway HOME, so the go briefing prints no QUEUE line about MAXPM_DB.
   const env = { ...base };
   const river = riverIn(env);
   river("config", "set", "setup_done", "on");  // first, so the Recent panel shows only the demo work
@@ -129,7 +129,7 @@ async function main() {
   // The briefing picture: before the page pictures, so the board keeps the state the seed made.
   const brief = river("--as", "web-agent", "go", "--project", "website");
 
-  // Two more agents at work, so river view has four panes.
+  // Two more agents at work, so maxpm view has four panes.
   const add = (project, title, touches) => +river("--json", "--as", "alex", "add", project, title, "--doer", "ai", "--touches", touches).match(/"id":\s*(\d+)/)[1];
   const extra = [
     { name: "search-agent", note: "storefront work", project: "website", title: "Add search to the product list", touches: "web/search/",
@@ -155,7 +155,7 @@ async function main() {
     ...extra,
   ];
 
-  // The agents in tmux, as river launch --tmux makes them: a window each in the session river, with the
+  // The agents in tmux, as maxpm launch --tmux makes them: a window each in the session maxpm, with the
   // session's name and the agent's name on the pane. A stand-in shows the screen and stays.
   const standin = path.join(tmp, "agent.py");
   fs.writeFileSync(standin, `import signal, sys, time
@@ -173,14 +173,14 @@ while True:
     const file = path.join(tmp, a.name + ".txt");
     fs.writeFileSync(file, screen(a));
     const name = `#${a.id} ${a.title}`.slice(0, 45);
-    const make = i ? ["new-window", "-d", "-t", "=river:"] : ["new-session", "-d", "-s", "river", "-x", String(COLS), "-y", String(ROWS)];
+    const make = i ? ["new-window", "-d", "-t", "=maxpm:"] : ["new-session", "-d", "-s", "maxpm", "-x", String(COLS), "-y", String(ROWS)];
     const pane = tmux(...make, "-n", name, "-c", cwd, "-P", "-F", "#{pane_id}", `exec python3 ${standin} ${file}`);
     // The status line shows the time only: the default also shows the host name.
-    if (!i) { tmux("set-option", "-t", "=river:", "default-size", `${COLS}x${ROWS}`); tmux("set-option", "-g", "status-right", " %H:%M "); }
-    tmux("set-option", "-p", "-t", pane, "@river_name", name);
-    tmux("set-option", "-p", "-t", pane, "@river_agent", a.name);
+    if (!i) { tmux("set-option", "-t", "=maxpm:", "default-size", `${COLS}x${ROWS}`); tmux("set-option", "-g", "status-right", " %H:%M "); }
+    tmux("set-option", "-p", "-t", pane, "@maxpm_name", name);
+    tmux("set-option", "-p", "-t", pane, "@maxpm_agent", a.name);
   });
-  console.log(river("view"));  // side by side, as a person's river view leaves them
+  console.log(river("view"));  // side by side, as a person's maxpm view leaves them
 
   // The prompt alert comes after a short wait here.
   river("config", "set", "prompt_wait", "1s");
@@ -227,16 +227,16 @@ while True:
     "-loop", "0", path.join(out, "board-tour.gif")]);
   console.log("wrote board-tour.gif");
 
-  // river view: the command runs in a terminal of COLS x ROWS (a pane of a second tmux server), and that
+  // maxpm view: the command runs in a terminal of COLS x ROWS (a pane of a second tmux server), and that
   // terminal's screen, with its colours, is the picture.
   outer("new-session", "-d", "-s", "outer", "-x", String(COLS), "-y", String(ROWS), "-c", cwd,
-    `env -u TMUX -u TMUX_PANE python3 ${path.join(repo, "bin", "river")} view`, ";", "set-option", "-g", "status", "off");
+    `env -u TMUX -u TMUX_PANE python3 ${path.join(repo, "bin", "maxpm")} view`, ";", "set-option", "-g", "status", "off");
   await sleep(2500);
   const view = outer("capture-pane", "-p", "-e", "-t", "outer");
   await open("as-alex");
   const viewHtml = await js(`import("/components/terminalDialog.js").then(m => m.ansiToHtml(${JSON.stringify(view)}))`);
   await win.loadURL(termPage(viewHtml, "12px/1.2"));
-  await sleep(500); await shot("river-view.png", "#t", 0);
+  await sleep(500); await shot("maxpm-view.png", "#t", 0);
 
   // The go briefing an agent reads, drawn as a terminal window.
   await win.loadURL(termPage(`<span style="color:#8bd5a0">~/code/shop $</span> maxpm go\n${esc(brief.trim())}`));

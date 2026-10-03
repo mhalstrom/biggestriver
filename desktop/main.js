@@ -1,4 +1,4 @@
-// MaximizePM desktop app: runs `river serve` on a free local port and shows the page in a window.
+// MaximizePM desktop app: runs `maxpm serve` on a free local port and shows the page in a window.
 const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const path = require("node:path");
 const { startRiver } = require("./server");

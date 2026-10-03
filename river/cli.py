@@ -1,4 +1,4 @@
-"""`maxpm` command line (`river` is the same command). Every command takes --json and --as <agent>."""
+"""`maxpm` command line. Every command takes --json and --as <agent>."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from .core import RiverError
 GUIDES = next((p for p in (Path(__file__).resolve().parent / "skills", Path(__file__).resolve().parent.parent / "skills")
                if p.is_dir()), Path(__file__).resolve().parent / "skills")
 
-QUICKSTART = """MaximizePM (the maxpm command; river is the same command): a shared work queue for people and agent sessions.
+QUICKSTART = """MaximizePM (the maxpm command): a shared work queue for people and agent sessions.
 
 Items live in projects and can wait on other items. `maxpm next` gives the
 most important ready item in the area you choose; `--claim` takes it.
@@ -28,7 +28,7 @@ run `maxpm plan`: an overview, the open questions, and the planner's rules.
 
 By hand:
   maxpm register <your-name> [--human] --note "what you work on"
-  export RIVER_AGENT=<your-name>
+  export MAXPM_AGENT=<your-name>
   maxpm project list                      what each project covers; pick the one you know
 
 Work loop:
@@ -110,9 +110,8 @@ OLD_SNIPPETS = [_WAIT_BLOCK, _KEEP_GOING_BLOCK, _PLAN_BLOCK, _SNIPPET_RIVER, _SN
 
 SETUP = """Setting up agents to use MaximizePM
 
-1. Put the command on PATH (install.sh does both; river is the same command, for blocks from before maxpm):
+1. Put the command on PATH (install.sh does it):
      ln -s <repo>/bin/maxpm ~/.local/bin/maxpm
-     ln -s <repo>/bin/river ~/.local/bin/river
 
 2. Tell your agents about it. Add this block to the instructions file your
    agent reads (CLAUDE.md for Claude Code, AGENTS.md for Codex and others):
@@ -123,8 +122,8 @@ SETUP = """Setting up agents to use MaximizePM
    CLAUDE.md imports it with the line @AGENTS.md, so every agent reads one file)
 
 3. Claude Code only, optional: install the skills so they load when needed:
-     ln -s <repo>/skills/river ~/.claude/skills/river
-     ln -s <repo>/skills/river-planner ~/.claude/skills/river-planner
+     ln -s <repo>/skills/maxpm ~/.claude/skills/maxpm
+     ln -s <repo>/skills/maxpm-planner ~/.claude/skills/maxpm-planner
 
 4. Give each agent session its own name (maxpm register <name>). A person
    registers with --human and usually wants longer claims:
@@ -144,12 +143,12 @@ SETUP = """Setting up agents to use MaximizePM
 """
 
 HINTS = {
-    "register": "next: export RIVER_AGENT={name}, read maxpm project list, then maxpm next --project <name> --claim  (maxpm guide for the full loop)",
+    "register": "next: export MAXPM_AGENT={name}, read maxpm project list, then maxpm next --project <name> --claim  (maxpm guide for the full loop)",
     "claim": "when finished: maxpm done {id} --output \"what changed\"   cannot finish: maxpm release {id} --note \"why\"   work found: maxpm add <project> \"title\"",
     "done": "next: maxpm next --mine --claim (work next to what you just did)  or  maxpm next --project <name> --claim",
     "release": "next: maxpm next --claim",
     "empty": "nothing ready here. Try: maxpm next (all projects), maxpm next --unblocks <id>, maxpm blockers <id>, maxpm list",
-    "no_actor": "tip: maxpm register <name> and export RIVER_AGENT=<name> so claims and history carry your name",
+    "no_actor": "tip: maxpm register <name> and export MAXPM_AGENT=<name> so claims and history carry your name",
 }
 
 
@@ -409,11 +408,11 @@ def _fmt_msg(m, indent=""):
 
 
 def build_parser():
-    p = argparse.ArgumentParser(prog=core.command_name(), description="MaximizePM: a dependency-ordered work queue for agents and people. maxpm and river are the same command.")
+    p = argparse.ArgumentParser(prog=core.COMMAND, description="MaximizePM: a dependency-ordered work queue for agents and people.")
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument("--json", action="store_true", help="machine-readable output")
-    p.add_argument("--as", dest="actor", default=os.environ.get("RIVER_AGENT"), help="agent name (default $RIVER_AGENT)")
-    p.add_argument("--quiet", "-q", action="store_true", default=bool(os.environ.get("RIVER_QUIET")),
+    p.add_argument("--as", dest="actor", default=os.environ.get("MAXPM_AGENT"), help="agent name (default $MAXPM_AGENT)")
+    p.add_argument("--quiet", "-q", action="store_true", default=bool(os.environ.get("MAXPM_QUIET")),
                    help="no hint lines")
     sub = p.add_subparsers(dest="cmd")
 
@@ -566,8 +565,8 @@ def build_parser():
     x.add_argument("--mine", action="store_true", help="items linked to what you claimed or finished before, then your projects")
     x.add_argument("--claim", action="store_true", help="take it")
     x.add_argument("--limit", "-n", type=int, default=1)
-    x.add_argument("--model", default=os.environ.get("RIVER_MODEL"),
-                   help="the model this session runs (default $RIVER_MODEL): skip items whose limits exclude it")
+    x.add_argument("--model", default=os.environ.get("MAXPM_MODEL"),
+                   help="the model this session runs (default $MAXPM_MODEL): skip items whose limits exclude it")
 
     x = sub.add_parser("init", help="set up the current folder: link or create its project, add the agent block")
     x.add_argument("--project", help="project name (default: the folder name)")
@@ -585,22 +584,22 @@ def build_parser():
     x.add_argument("--project", help="project name(s) when this folder is not linked")
     x.add_argument("--role", choices=core.ROLES, help="ask for a role instead of letting MaximizePM pick")
     x.add_argument("--session", help="your Claude Code session name, so others can message this session")
-    x.add_argument("--model", default=os.environ.get("RIVER_MODEL"),
-                   help="the model this session runs (default $RIVER_MODEL): MaximizePM gives it only items its model is allowed for")
-    x.add_argument("--chat", action="store_true", default=os.environ.get("RIVER_CHAT") == "1",
-                   help="a chat app session with no folder or shell (default $RIVER_CHAT=1): every project, only "
+    x.add_argument("--model", default=os.environ.get("MAXPM_MODEL"),
+                   help="the model this session runs (default $MAXPM_MODEL): MaximizePM gives it only items its model is allowed for")
+    x.add_argument("--chat", action="store_true", default=os.environ.get("MAXPM_CHAT") == "1",
+                   help="a chat app session with no folder or shell (default $MAXPM_CHAT=1): every project, only "
                         "items that need no folder, the result in done --output")
 
     x = sub.add_parser("manage", help="start the manager session (one at a time): what needs attention, and its rules")
     x.add_argument("--takeover", metavar="REASON", help="take over from the active manager")
     x.add_argument("--watch", action="store_true", help="block until a new finding needs the manager (at most manage_every); run it in the background")
     x.add_argument("--step", help="with --watch: return after this long at most (a foreground shell: below its time limit)")
-    x.add_argument("--chat", action="store_true", default=os.environ.get("RIVER_CHAT") == "1",
-                   help="a chat app session with no folder (default $RIVER_CHAT=1)")
+    x.add_argument("--chat", action="store_true", default=os.environ.get("MAXPM_CHAT") == "1",
+                   help="a chat app session with no folder (default $MAXPM_CHAT=1)")
     x = sub.add_parser("plan", help="start a planner session: overview, open questions, and the planner's rules")
     x.add_argument("--project", help="project name(s) to focus on (default: this folder's, else all)")
-    x.add_argument("--chat", action="store_true", default=os.environ.get("RIVER_CHAT") == "1",
-                   help="a chat app session with no folder (default $RIVER_CHAT=1)")
+    x.add_argument("--chat", action="store_true", default=os.environ.get("MAXPM_CHAT") == "1",
+                   help="a chat app session with no folder (default $MAXPM_CHAT=1)")
 
     x = sub.add_parser("launch", help="start an agent session in a new terminal tab, window, or tmux pane, like the page's Start")
     g = x.add_mutually_exclusive_group()
@@ -616,7 +615,7 @@ def build_parser():
     g.add_argument("--tab", dest="launch_in", action="store_const", const="tab")
     g.add_argument("--window", dest="launch_in", action="store_const", const="window")
     g.add_argument("--tmux", dest="launch_in", action="store_const", const="tmux",
-                   help="in a pane of the tmux session 'river' (maxpm view shows them); no Terminal app needed")
+                   help="in a pane of the tmux session 'maxpm' (maxpm view shows them); no Terminal app needed")
     x.add_argument("--dry-run", action="store_true", help="say what it would start; open nothing")
     x = sub.add_parser("view", help="show every agent that runs in tmux (launch_in tmux) side by side in this terminal")
     g = x.add_mutually_exclusive_group()
@@ -795,7 +794,7 @@ def build_parser():
                    help="ask the maxpm serve that runs to start again with the code on disk, and wait until it answers")
     sk = sub.add_parser("skills", help="install the agent guides as Claude Code skills")
     sks = sk.add_subparsers(dest="scmd", required=True)
-    x = sks.add_parser("install", help="link river and river-planner into ~/.claude/skills")
+    x = sks.add_parser("install", help="link the guides (maxpm, maxpm-planner, maxpm-manager) into ~/.claude/skills")
     x.add_argument("--dir", default="~/.claude/skills", help="skills folder (default ~/.claude/skills)")
     x.add_argument("--copy", action="store_true", help="copy the files instead of linking them")
     x.add_argument("--force", action="store_true", help="replace a folder that is not a link (your edits there are lost)")
@@ -806,8 +805,8 @@ def build_parser():
     x.add_argument("--force", action="store_true", help="even when agents were active in the last 10 minutes")
     sub.add_parser("mcp", help="an MCP server on stdin/stdout, for agents that cannot run shell commands")
     x = sub.add_parser("guide", help="how to use MaximizePM: worker loop, planner, or agent setup")
-    x.add_argument("which", nargs="?", default="river",
-                   choices=["river", "planner", "river-planner", "manager", "river-manager", "setup", "decisions"])
+    x.add_argument("which", nargs="?", default="worker",
+                   choices=["worker", "planner", "manager", "setup", "decisions"])
     x = sub.add_parser("setup-agent", help="print (or append) the instructions block for CLAUDE.md / AGENTS.md")
     x.add_argument("--append", metavar="FILE", help="append the block to this file if it is not there yet")
     x.add_argument("--claude-desktop", action="store_true",
@@ -831,22 +830,22 @@ def claude_desktop_config_path():
 
 
 def _toml_river_block(entry):
-    """The [mcp_servers.river] tables for an entry. A JSON string is also a valid TOML basic string."""
-    lines = ["[mcp_servers.river]", f"command = {json.dumps(entry['command'])}",
-             "args = [" + ", ".join(json.dumps(a) for a in entry["args"]) + "]", "", "[mcp_servers.river.env]"]
+    """The [mcp_servers.maxpm] tables for an entry. A JSON string is also a valid TOML basic string."""
+    lines = ["[mcp_servers.maxpm]", f"command = {json.dumps(entry['command'])}",
+             "args = [" + ", ".join(json.dumps(a) for a in entry["args"]) + "]", "", "[mcp_servers.maxpm.env]"]
     lines += [f"{k} = {json.dumps(v)}" for k, v in entry["env"].items()]
     return "\n".join(lines) + "\n"
 
 
 def _toml_without_river(text):
-    """The config text without its [mcp_servers.river] table and subtables; every other line stays."""
+    """The config text without its [mcp_servers.maxpm] table and subtables; every other line stays."""
     import re
     out, skip = [], False
     for line in text.splitlines(keepends=True):
         m = re.match(r"^\s*\[\[?\s*([^\]]+?)\s*\]\]?\s*(#.*)?$", line)
         if m:
             name = m.group(1).replace('"', "").replace("'", "").replace(" ", "")
-            skip = name == "mcp_servers.river" or name.startswith("mcp_servers.river.")
+            skip = name == "mcp_servers.maxpm" or name.startswith("mcp_servers.maxpm.")
         if not skip:
             out.append(line)
     return "".join(out)
@@ -865,29 +864,29 @@ def _toml_load(text, f):
 
 def setup_codex_config(path=None, remove=False):
     """Add (or remove) river in ~/.codex/config.toml, which the ChatGPT desktop app shares with the Codex CLI.
-    Only the [mcp_servers.river] tables change; the old file is kept as config.toml.bak."""
+    Only the [mcp_servers.maxpm] tables change; the old file is kept as config.toml.bak."""
     f = Path(path).expanduser() if path else Path(os.environ.get("CODEX_HOME") or "~/.codex").expanduser() / "config.toml"
     old = f.read_text() if f.exists() else ""
     before = _toml_load(old, f)
-    had = before is not None and "river" in (before.get("mcp_servers") or {}) or "[mcp_servers.river]" in old
+    had = before is not None and "maxpm" in (before.get("mcp_servers") or {}) or "[mcp_servers.maxpm]" in old
     base = _toml_without_river(old)
     if remove:
         if not had:
-            return f"{f} has no river entry; nothing changed"
+            return f"{f} has no MaximizePM entry; nothing changed"
         new = base
     else:
         entry = claude_desktop_entry()
-        if before is not None and (before.get("mcp_servers") or {}).get("river") == entry:
+        if before is not None and (before.get("mcp_servers") or {}).get("maxpm") == entry:
             return f"MaximizePM is already in {f}; nothing changed"
         new = base.rstrip("\n") + ("\n\n" if base.strip() else "") + _toml_river_block(entry)
     after = _toml_load(new, f)
     if after is not None:
         others = lambda d: {k: v for k, v in (d or {}).items() if k != "mcp_servers"}
-        servers = lambda d: {k: v for k, v in ((d or {}).get("mcp_servers") or {}).items() if k != "river"}
+        servers = lambda d: {k: v for k, v in ((d or {}).get("mcp_servers") or {}).items() if k != "maxpm"}
         if others(after) != others(before) or servers(after) != servers(before) or (
-                not remove and after["mcp_servers"]["river"] != entry):
+                not remove and after["mcp_servers"]["maxpm"] != entry):
             raise RiverError(f"MaximizePM could not add its entry to {f} without changing other settings; add it by hand: "
-                             f"codex mcp add river --env RIVER_CHAT=1 -- maxpm mcp")
+                             f"codex mcp add maxpm --env MAXPM_CHAT=1 -- maxpm mcp")
     if old:
         f.with_name(f.name + ".bak").write_text(old)
     f.parent.mkdir(parents=True, exist_ok=True)
@@ -902,17 +901,17 @@ def setup_codex_config(path=None, remove=False):
 
 def claude_desktop_entry():
     """The mcpServers entry: this Python and this river by full path (the app does not have the shell's
-    PATH), the queue this command uses, and RIVER_CHAT=1 (a chat has no folder)."""
+    PATH), the queue this command uses, and MAXPM_CHAT=1 (a chat has no folder)."""
     import shutil
-    script = Path(__file__).resolve().parent.parent / "bin" / "river"
+    script = Path(__file__).resolve().parent.parent / "bin" / "maxpm"
     if script.is_file():
         cmd, args = sys.executable, [str(script), "mcp"]
-    elif shutil.which("river"):
-        cmd, args = str(Path(shutil.which("river")).resolve()), ["mcp"]
+    elif shutil.which("maxpm"):
+        cmd, args = str(Path(shutil.which("maxpm")).resolve()), ["mcp"]
     else:
         raise RiverError("cannot find the maxpm program to give the Claude desktop app; install MaximizePM first")
     return {"command": cmd, "args": args,
-            "env": {"RIVER_DB": str(core.db_path().expanduser().resolve()), "RIVER_CHAT": "1"}}
+            "env": {"MAXPM_DB": str(core.db_path().expanduser().resolve()), "MAXPM_CHAT": "1"}}
 
 
 def setup_claude_desktop(path=None, remove=False):
@@ -928,14 +927,14 @@ def setup_claude_desktop(path=None, remove=False):
         raise RiverError(f"{f}: expected an object with an mcpServers object; fix it first")
     servers = data.setdefault("mcpServers", {})
     if remove:
-        if "river" not in servers:
-            return f"{f} has no river entry; nothing changed"
-        del servers["river"]
+        if "maxpm" not in servers:
+            return f"{f} has no MaximizePM entry; nothing changed"
+        del servers["maxpm"]
     else:
         entry = claude_desktop_entry()
-        if servers.get("river") == entry:
+        if servers.get("maxpm") == entry:
             return f"MaximizePM is already in {f}; nothing changed"
-        servers["river"] = entry
+        servers["maxpm"] = entry
     new = json.dumps(data, indent=2) + "\n"
     if old:
         f.with_name(f.name + ".bak").write_text(old)
@@ -953,7 +952,7 @@ def install_skills(dest, copy=False, force=False):
     import shutil
     dest.mkdir(parents=True, exist_ok=True)
     out = []
-    for name in ("river", "river-planner", "river-manager"):
+    for name in ("maxpm", "maxpm-planner", "maxpm-manager"):
         src, dst = GUIDES / name, dest / name
         if not (src / "SKILL.md").is_file():
             raise RiverError(f"no guide at {src}; reinstall MaximizePM")
@@ -984,8 +983,7 @@ def run(argv=None):
         elif args.which == "decisions":
             print(core.DECISION_FORMAT)
         else:
-            name = ("river-planner" if args.which in ("planner", "river-planner")
-                    else "river-manager" if args.which in ("manager", "river-manager") else "river")
+            name = {"planner": "maxpm-planner", "manager": "maxpm-manager"}.get(args.which, "maxpm")
             text = (GUIDES / name / "SKILL.md").read_text()
             print(text.split("---", 2)[2].strip() if text.startswith("---") else text)
         return 0
@@ -1205,7 +1203,7 @@ def _monitor_lines(m):
     """What happened to the monitor of a deploy that just started."""
     if isinstance(m, dict):
         return [f"monitor #{p['id']}: no session opened ({m['error']}). Start one in a folder of target "
-                f"{p['target']}: RIVER_FOCUS=monitor:{p['id']} claude go   (or another agent: maxpm go reads RIVER_FOCUS)"
+                f"{p['target']}: MAXPM_FOCUS=monitor:{p['id']} claude go   (or another agent: maxpm go reads MAXPM_FOCUS)"
                 for p in m.get("pending", [])]
     return [f"monitor #{x['id']}: " + (f"no session opened: {x['error']}" if x.get("error") else
             f"maxpm serve opened {x['agent']} in {x['project']}" + (f" ({x['model']})" if x.get("model") else "")
@@ -1630,7 +1628,7 @@ def dispatch(conn, a, actor):
     if c == "log":
         return core.completed(conn, a.project, None if a.since == "all" else a.since)
     if c == "go":
-        res = core.go(conn, os.getcwd(), actor, a.project, a.role, a.session, os.environ.get("RIVER_FOCUS"), a.model,
+        res = core.go(conn, os.getcwd(), actor, a.project, a.role, a.session, os.environ.get("MAXPM_FOCUS"), a.model,
                       chat=a.chat, agent_type=core.agent_type_from_env(os.environ))
         # The platform's own messaging reaches this session at once (native_message): record its address.
         core.set_native(conn, res["agent"], *core.native_from_env(conn, os.environ))
@@ -1662,7 +1660,7 @@ def dispatch(conn, a, actor):
                 print(f"  #{x['id']} {_cut(x['title'], 50)}: {x['why']}", file=sys.stderr)
         return res
     if c == "claim":
-        m = os.environ.get("RIVER_MODEL")
+        m = os.environ.get("MAXPM_MODEL")
         if actor and conn.execute("SELECT 1 FROM agents WHERE name=?", (actor,)).fetchone():
             if m:
                 core.set_agent_model(conn, actor, m)
@@ -1771,13 +1769,13 @@ def dispatch(conn, a, actor):
         return res
     if c == "session":
         if not actor:
-            raise RiverError("set RIVER_AGENT or pass --as <name>")
+            raise RiverError("set MAXPM_AGENT or pass --as <name>")
         return core.set_session(conn, actor, " ".join(a.name), a.ref)
     if c == "unregister":
         return core.unregister(conn, a.name, actor)
     if c == "note":
         if not actor:
-            raise RiverError("set RIVER_AGENT or pass --as <name>")
+            raise RiverError("set MAXPM_AGENT or pass --as <name>")
         return core.agent_note(conn, actor, " ".join(a.words))
     if c == "who":
         return core.who(conn, a.item, a.project, a.file, os.getcwd())
@@ -2008,7 +2006,7 @@ def render_plan(b):
 
 def _chat_lines(r, has_item=True):
     """What a chat app session (no folder, no shell) does differently: river's words go to the river tool."""
-    out = ["IN A CHAT (no folder, no shell): call the river tool with the words after `maxpm` "
+    out = ["IN A CHAT (no folder, no shell): call the maxpm tool with the words after `maxpm` "
            "(for example [\"--as\", \"<you>\", \"show\", \"12\"]). You cannot edit a repository, run a check, "
            "commit, or deploy, so MaximizePM gives this chat only items that need no folder."]
     if has_item:
@@ -2021,21 +2019,11 @@ def _chat_lines(r, has_item=True):
     return out
 
 
-def maxpm_on_path():
-    """True when a command finds maxpm here. An install from before the name maxpm has only river on PATH."""
-    import shutil
-    return bool(shutil.which("maxpm"))
-
-
 def render_go(b):
     me = b["agent"]
     r = f"maxpm --as {me}"
     out = []
     out.append(f"You are MaximizePM agent {me}. Role: {b['role'].upper()}. ({b['why']})")
-    if not maxpm_on_path():
-        out.append("The command maxpm is not on PATH on this computer (an install from before that name): type river "
-                   "in place of maxpm in every command below; it is the same command. To add maxpm, a person runs "
-                   "install.sh of the clone again, or the setup guide of the page.")
     if core.queue_note():
         out.append(core.queue_note() + ". Tell the user if that is not what they meant.")
     if b.get("old_blocks"):
@@ -2705,7 +2693,7 @@ def render(a, res):
         print(f"{res['name']}: status note set")
         return
     if c == "register":
-        print(f"{res['name']} ({res['kind']}) registered. Set RIVER_AGENT={res['name']} in your shell.")
+        print(f"{res['name']} ({res['kind']}) registered. Set MAXPM_AGENT={res['name']} in your shell.")
         return
     if c == "session":
         print(f"{res['name']}: session {res['session']}" + (f" [{res['session_ref']}]" if res["session_ref"] else "")
@@ -2724,7 +2712,7 @@ def main():
     try:
         sys.exit(run())
     except RiverError as e:
-        print(f"{core.command_name()}: {e}", file=sys.stderr)
+        print(f"{core.COMMAND}: {e}", file=sys.stderr)
         sys.exit(2)
 
 
