@@ -152,6 +152,11 @@ DEFAULT_SETTINGS = {
     # river serve closes the tmux panes of sessions that are done every tidy_every, as river view --tidy does; a pane
     # it closes by the queue's word (the CLI is still open) must show the same screen for idle_after first. 0s: never.
     "tidy_every": "20m",
+    # river serve starts again by itself when the river code on disk is newer than the code it runs (a commit, a
+    # pull), so no person restarts it: it looks every notify_interval, and starts again when the files stayed the
+    # same for one pass, git shows no change in the code folder that is not committed (an agent in the middle of an
+    # edit), and the new code loads. river serve --restart does it at once. off: only a person restarts it.
+    "serve_reload": "on",
     # A lease does not run out while its agent is busy. An agent is busy when a command runs in its session (a
     # process below the agent CLI that started after the agent's last river command: a test run, a build), when its
     # tmux pane changes, or when its pane shows a prompt for a person. river serve looks every notify_interval and
@@ -886,8 +891,8 @@ def config_set(conn, key, value, project=None, item=None, agent=None, actor=None
         raise RiverError("launch_in is auto, tab, window, or tmux")
     elif key == "auto_continue" and value not in ("on", "off"):
         raise RiverError("auto_continue is on or off")
-    elif key == "fresh_sessions" and value not in ("on", "off"):
-        raise RiverError("fresh_sessions is on or off")
+    elif key in ("fresh_sessions", "serve_reload") and value not in ("on", "off"):
+        raise RiverError(f"{key} is on or off")
     elif key == "default_prerequisite_mode" and value not in ("keep", "release"):
         raise RiverError("default_prerequisite_mode is keep or release")
     elif key in ("email_to", "email_from") and value and not all(

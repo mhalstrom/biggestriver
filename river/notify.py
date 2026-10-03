@@ -294,6 +294,9 @@ def loop(stop, interval_s=None):
             server.auto_tidy(conn)  # every tidy_every: close the tmux panes of sessions that are done
             if core._channels(core.setting(conn, "notify_channels")):
                 run(conn)
+            if SERVE_PORT.get("port") and server.reload_ready(conn):  # river serve only: run the new code
+                conn.close()
+                server.restart_now("the river code changed")
         except Exception as e:  # keep the loop alive; the next pass retries
             print(f"river notify: {e}", flush=True)
         finally:

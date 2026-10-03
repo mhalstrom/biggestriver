@@ -1078,13 +1078,84 @@ def update_status(repo=REPO, fetch=True):
     return out
 
 
-def _restart_soon():
+def _restart_argv():
+    """The command line that starts this server again: the same, without --open (the page is open already)."""
+    return [sys.executable] + [a for a in sys.argv if a != "--open"]
+
+
+def restart_now(why="code changed"):
+    """Replace this process with a new river serve on the same port, which runs the code on disk. Python
+    sockets are not inherited across exec, so the port is free for the new process."""
+    print(f"{why}; restarting", flush=True)
+    os.execv(sys.executable, _restart_argv())
+
+
+def _restart_soon(why="updated"):
     """Start the server process again after the reply goes out, so it runs the new code."""
     def go():
         time.sleep(0.8)
-        print("updated; restarting", flush=True)
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+        restart_now(why)
     threading.Thread(target=go, daemon=True).start()
+
+
+def _code_loads():
+    """None when the river code on disk loads in a new Python, else the last line of its error: a restart
+    onto code that does not start would leave no page at all."""
+    import subprocess
+    try:
+        r = subprocess.run([sys.executable, "-c", "import river.server, river.cli, river.notify, river.mcp"],
+                           cwd=str(REPO), capture_output=True, text=True, timeout=60,
+                           env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+    except (OSError, subprocess.SubprocessError) as e:
+        return str(e)
+    return None if r.returncode == 0 else ((r.stderr or r.stdout).strip().splitlines() or ["it does not load"])[-1]
+
+
+def _code_dirty():
+    """True when git shows a change in the code folder that is not committed: someone is in the middle of an
+    edit. False in a folder that is not a git clone (pip, the app): the files there change all at once."""
+    try:
+        return bool(_git(REPO, "status", "--porcelain", "--", str(PKG), timeout=20))
+    except RiverError:
+        return False
+
+
+# The code id river serve saw on its last pass, and the one that did not load (it waits for the next change).
+RELOAD = {"seen": None, "bad": None}
+
+
+def reload_ready(conn):
+    """One look of the loop of river serve (every notify_interval): the code id to start again for, or None.
+    The code on disk must be newer than the code this server runs (code_stale), the same as on the pass
+    before (nobody writes it now), committed (in a git clone), and it must load. Setting serve_reload."""
+    if DESKTOP or DEV["on"] or core.setting(conn, "serve_reload") != "on":
+        return None  # the app's code changes with the app; dev mode restarts on every change by itself
+    cur = _code_id()
+    if cur == BOOT_CODE:
+        RELOAD["seen"] = None
+        return None
+    if RELOAD["seen"] != cur:
+        RELOAD["seen"] = cur
+        return None
+    if cur == RELOAD["bad"] or _code_dirty():
+        return None
+    why = _code_loads()
+    if why:
+        RELOAD["bad"] = cur
+        print(f"river serve: the new code does not load, so the old code keeps running: {why}", flush=True)
+        return None
+    return cur
+
+
+def serve_restart(conn):
+    """river serve --restart: start again now, when the code on disk loads. The reply goes out first."""
+    if DESKTOP:
+        raise RiverError("the desktop app runs its own copy of the code; start the app again to restart it")
+    why = _code_loads()
+    if why:
+        raise RiverError(f"the code on disk does not load, so river serve keeps the code it runs: {why}")
+    _restart_soon("restart asked")
+    return {"restarting": True, "boot": BOOT, "stale": code_stale()}
 
 
 def update_apply(repo=REPO, restart=_restart_soon):
@@ -1444,6 +1515,8 @@ OPS = {
     "open_chat": lambda c, a, who: open_chat(c, a["agent"]),
     "terminal_keys": lambda c, a, who: terminal_keys(c, a["agent"], a.get("keys"), who),
     "tmux_tidy": lambda c, a, who: tmux_tidy(c),
+    "serve_restart": lambda c, a, who: (_same_queue(a.get("db")), serve_restart(c))[1],
+    "serve_status": lambda c, a, who: {"boot": BOOT, "stale": code_stale()},
     "decline_message": lambda c, a, who: core.decline_message(c, int(a["msg"]), a.get("note"), who),
     "update": lambda c, a, who: _no_update_in_app() or update_apply(),
     "restart": lambda c, a, who: _no_update_in_app() or (_restart_soon(), {"restarting": True})[1],
@@ -1687,11 +1760,10 @@ def _restart_on_change(httpd):
         now = {f: f.stat().st_mtime_ns for f in PKG.glob("*.py")}
         if now != code:
             print("code changed; restarting", flush=True)
-            # Replace the process in place. Python sockets are not inherited across exec,
-            # so the port is free for the new process. Shutting down first would let the
-            # main thread exit before this line runs.
+            # Replace the process in place. Shutting down first would let the main thread exit before this
+            # line runs.
             time.sleep(0.3)  # let an editor finish writing
-            os.execv(sys.executable, [sys.executable] + sys.argv)
+            os.execv(sys.executable, _restart_argv())
 
 
 class _Server(ThreadingHTTPServer):

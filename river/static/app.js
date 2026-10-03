@@ -1144,7 +1144,7 @@ async function checkUpdate() {
   b.textContent = u.behind ? `Update · ${u.behind} new` : u.stale ? "Restart · new code" : "Update";
   b.title = u.behind ? "New in MaximizePM:\n" + u.commits.join("\n")
       + (u.ahead ? `\n\nThis clone also has ${u.ahead} commit(s) of its own, so it cannot fast-forward: push or rebase them first.` : "")
-    : u.stale ? "MaximizePM's code changed since this server started. Restart the server to run it."
+    : u.stale ? "MaximizePM's code changed since this server started. The server starts again by itself within a minute of the commit; river serve --restart does it now."
     : u.fetch_error ? "Could not check for updates: " + u.fetch_error
     : `Up to date (${u.head})` + (u.ahead ? `; this clone has ${u.ahead} commit(s) not on ${u.upstream} yet` : "");
 }

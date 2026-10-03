@@ -13,3 +13,7 @@ When the user says "plan", run `river plan` and follow its briefing.
 - The repository is public. Keep names, paths, and plans from other projects
   out of it; local queue data lives in `data/` and `private/`, which git ignores.
 - When you finish a queue item, put the commit id in `river done <id> --output`.
+- After a commit that changes `river/*.py`, `river serve` starts again by itself
+  within a minute or two and runs the new code. To have it at once, run
+  `river serve --restart`: it waits until the page answers. Never add an item
+  for a person to restart `river serve`.

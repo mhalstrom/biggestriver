@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 from . import __version__, core
@@ -759,6 +760,8 @@ def build_parser():
     x = sub.add_parser("serve", help="the web page on 127.0.0.1")
     x.add_argument("--port", type=int); x.add_argument("--open", action="store_true")
     x.add_argument("--dev", action="store_true", help="restart on code change; the page reloads itself")
+    x.add_argument("--restart", action="store_true",
+                   help="ask the river serve that runs to start again with the code on disk, and wait until it answers")
     sk = sub.add_parser("skills", help="install the agent guides as Claude Code skills")
     sks = sk.add_subparsers(dest="scmd", required=True)
     x = sks.add_parser("install", help="link river and river-planner into ~/.claude/skills")
@@ -1002,6 +1005,13 @@ def run(argv=None):
 
 
 def _run(args, conn):
+    if args.cmd == "serve" and args.restart:
+        res = serve_restart(conn)
+        print(f"river serve started again and answers on port {core.setting(conn, 'serve_port')}"
+              + ("" if not res["stale"] else "; the code changed again since: run it once more")
+              if res["restarted"] else
+              "river serve took the request but did not answer again within 60s: look at its terminal")
+        return 0 if res["restarted"] else 1
     if args.cmd == "serve":
         from . import server
         port = args.port or int(core.setting(conn, "serve_port"))
@@ -1076,7 +1086,10 @@ def in_sandbox():
     return bool(os.environ.get("SANDBOX_RUNTIME") or os.environ.get("CODEX_SANDBOX"))
 
 
-def ask_server(conn, op, args, actor=None, timeout=5):
+RETRY_WAIT = 1.0  # seconds between two tries to reach a river serve that does not listen
+
+
+def ask_server(conn, op, args, actor=None, timeout=5, retries=3):
     """Ask the river serve of this queue to do one page action (server.OPS) and return its result; RiverError
     says why not. The server runs outside any sandbox. A sandbox refuses a direct connection to this computer;
     its HTTP proxy passes the request when the sandbox allows the host, so the sandbox still decides."""
@@ -1112,7 +1125,7 @@ def ask_server(conn, op, args, actor=None, timeout=5):
                                  f"command and run it again (Claude Code: the command's allowed_domains), or run it "
                                  f"outside the sandbox")
             raise RiverError(why or f"no river serve answers on port {port} (HTTP {e.code}): start it with `river serve`")
-    try:
+    def ask():
         try:
             return post()
         except OSError as e:
@@ -1124,8 +1137,34 @@ def ask_server(conn, op, args, actor=None, timeout=5):
                 raise RiverError(f"the sandbox around this session refused the connection to river serve on {host}. "
                                  f"Allow the host {host} for this command, or run it outside the sandbox")
             return post(proxy)
+    try:
+        for left in range(retries, -1, -1):
+            try:
+                return ask()
+            except OSError as e:
+                # Nobody listens: river serve may start again just now (new code); it is back in a second or two.
+                if not left or not isinstance(getattr(e, "reason", e), ConnectionRefusedError):
+                    raise
+                time.sleep(RETRY_WAIT)
     except (OSError, ValueError, KeyError) as e:
         raise RiverError(f"no river serve answers on port {port} ({e.__class__.__name__}): start it with `river serve`")
+
+
+def serve_restart(conn, wait=60, sleep=None):
+    """river serve --restart: ask the river serve of this queue to start again with the code on disk (it
+    refuses code that does not load), then wait until the new one answers. An agent runs this after a
+    commit that changes river's code; with no command, river serve does it by itself within a pass or two."""
+    sleep = sleep or time.sleep
+    old = ask_server(conn, "serve_restart", {}, timeout=90)["boot"]
+    for _ in range(int(wait)):
+        sleep(1)
+        try:
+            st = ask_server(conn, "serve_status", {}, retries=0)
+        except RiverError:
+            continue  # it starts
+        if st["boot"] != old:
+            return {"restarted": True, "stale": st["stale"]}
+    return {"restarted": False, "stale": True}
 
 
 def _monitor_lines(m):

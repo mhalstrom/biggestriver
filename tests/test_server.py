@@ -1,9 +1,12 @@
+import contextlib
+import io
 import json
 import os
 import random
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -2015,6 +2018,153 @@ class StartPushesToWaiting(unittest.TestCase):
         t = server.launch_agent(self.c, runner=sent.append)
         self.assertEqual((t["pushed_to"], len(sent)), ("w", 1))
         self.assertEqual(core.item_show(self.c, x)["reserved_for"], "w")
+
+
+class ServeReload(unittest.TestCase):
+    """river serve runs new code without a person: it starts again by itself, or when river serve --restart asks."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        os.environ["RIVER_DB"] = os.path.join(self.dir.name, "t.db")
+        self.c = core.connect()
+        self.addCleanup(server.RELOAD.update, {"seen": None, "bad": None})
+
+    def tearDown(self):
+        self.c.close()
+        os.environ.pop("RIVER_DB", None)
+        self.dir.cleanup()
+
+    def test_serve_starts_again_for_code_that_stayed_is_committed_and_loads(self):
+        code, dirty, loads, asked = [server.BOOT_CODE], [False], [None], []
+        with mock.patch.object(server, "_code_id", lambda: code[0]), \
+                mock.patch.object(server, "_code_dirty", lambda: dirty[0]), \
+                mock.patch.object(server, "_code_loads", lambda: (asked.append(code[0]), loads[0])[1]):
+            ready = lambda: server.reload_ready(self.c)
+            self.assertEqual((ready(), ready()), (None, None))  # the code it runs
+            # A commit: the files must stay the same for one pass (nobody writes them now), then it starts again.
+            code[0] = "2"
+            self.assertEqual((ready(), ready()), (None, "2"))
+            code[0] = "3"  # a second change in between: wait again
+            self.assertEqual((ready(), ready()), (None, "3"))
+            # An agent is in the middle of an edit (git shows a change that is not committed): the old code stays.
+            code[0], dirty[0] = "4", True
+            self.assertEqual((ready(), ready(), ready()), (None, None, None))
+            dirty[0] = False
+            self.assertEqual(ready(), "4")
+            # Code that does not load never replaces the server; river asks once for each change.
+            code[0], loads[0] = "5", "SyntaxError: invalid syntax"
+            asked.clear()
+            said = io.StringIO()
+            with contextlib.redirect_stdout(said):
+                self.assertEqual((ready(), ready(), ready(), asked), (None, None, None, ["5"]))
+            self.assertEqual(said.getvalue().count("the new code does not load, so the old code keeps running"), 1)
+            code[0], loads[0] = "6", None
+            self.assertEqual((ready(), ready()), (None, "6"))
+            # Dev mode restarts by itself, the app's code changes with the app, and the setting turns it off.
+            with mock.patch.dict(server.DEV, {"on": True}):
+                self.assertIsNone(ready())
+            with mock.patch.object(server, "DESKTOP", True):
+                self.assertIsNone(ready())
+            core.config_set(self.c, "serve_reload", "off")
+            self.assertIsNone(ready())
+            with self.assertRaisesRegex(RiverError, "serve_reload is on or off"):
+                core.config_set(self.c, "serve_reload", "maybe")
+
+    def test_the_new_server_keeps_the_arguments_but_does_not_open_the_page_again(self):
+        with mock.patch.object(sys, "argv", ["/x/bin/river", "serve", "--port", "8765", "--open"]):
+            self.assertEqual(server._restart_argv(), [sys.executable, "/x/bin/river", "serve", "--port", "8765"])
+            ran = []
+            with mock.patch.object(os, "execv", lambda exe, argv: ran.append((exe, argv))), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                server.restart_now()
+            self.assertEqual(ran, [(sys.executable, [sys.executable, "/x/bin/river", "serve", "--port", "8765"])])
+
+    def test_only_the_loop_of_river_serve_starts_again(self):
+        import threading
+        from river import notify
+        for port, want in ((8765, ["restart"]), (None, [])):  # river notify run has the same loop, and no page
+            stop, did = threading.Event(), []
+            with mock.patch.dict(notify.SERVE_PORT, {"port": port}), \
+                    mock.patch.object(server, "watch_prompts", lambda c: stop.set()), \
+                    mock.patch.object(server, "reload_ready", lambda c: "2"), \
+                    mock.patch.object(server, "restart_now", lambda why: did.append("restart")):
+                notify.loop(stop, interval_s=1)
+            self.assertEqual(did, want)
+
+    def test_the_code_on_disk_loads_or_says_why_not(self):
+        self.assertIsNone(server._code_loads())  # this clone
+        bad = os.path.join(self.dir.name, "clone")
+        os.makedirs(os.path.join(bad, "river"))
+        open(os.path.join(bad, "river", "__init__.py"), "w").close()
+        with open(os.path.join(bad, "river", "server.py"), "w") as f:
+            f.write("def half(:\n")
+        with mock.patch.object(server, "REPO", Path(bad)), mock.patch.object(server, "PKG", Path(bad, "river")):
+            self.assertIn("SyntaxError", server._code_loads())
+            self.assertFalse(server._code_dirty())  # not a git clone: nothing says that someone edits
+        with mock.patch.object(server, "_code_loads", lambda: "SyntaxError: invalid syntax"):
+            with self.assertRaisesRegex(RiverError, "does not load, so river serve keeps the code it runs"):
+                server.OPS["serve_restart"](self.c, {}, None)
+        with self.assertRaisesRegex(RiverError, "another queue"):
+            server.OPS["serve_restart"](self.c, {"db": "/somewhere/else.db"}, None)
+        started = []
+        with mock.patch.object(server, "_code_loads", lambda: None), \
+                mock.patch.object(server, "_restart_soon", lambda why: started.append(why)):
+            r = server.OPS["serve_restart"](self.c, {"db": str(core.db_path())}, None)
+        self.assertEqual((r["restarting"], r["boot"], started), (True, server.BOOT, ["restart asked"]))
+        self.assertEqual(server.OPS["serve_status"](self.c, {}, None), {"boot": server.BOOT, "stale": server.code_stale()})
+
+    def test_river_serve_restart_waits_until_the_new_server_answers(self):
+        from river import cli
+        answers = [{"boot": "1", "stale": True}, RiverError("no river serve answers"), RiverError("no river serve answers"),
+                   {"boot": "1", "stale": True}, {"boot": "2", "stale": False}]
+        ops = []
+
+        def ask(conn, op, args, **kw):
+            ops.append(op)
+            a = answers.pop(0)
+            if isinstance(a, Exception):
+                raise a
+            return a
+        with mock.patch.object(cli, "ask_server", ask):
+            self.assertEqual(cli.serve_restart(self.c, sleep=lambda s: None), {"restarted": True, "stale": False})
+        self.assertEqual(ops, ["serve_restart", "serve_status", "serve_status", "serve_status", "serve_status"])
+        # No answer in time: the command says so and fails.
+        with mock.patch.object(cli, "ask_server", lambda conn, op, args, **kw: {"boot": "1", "stale": True}):
+            self.assertEqual(cli.serve_restart(self.c, wait=3, sleep=lambda s: None), {"restarted": False, "stale": True})
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), mock.patch.object(cli, "serve_restart", lambda conn: {"restarted": False, "stale": True}):
+                self.assertEqual(cli.run(["serve", "--restart"]), 1)
+            self.assertIn("did not answer again", out.getvalue())
+            with contextlib.redirect_stdout(out), mock.patch.object(cli, "serve_restart", lambda conn: {"restarted": True, "stale": False}):
+                self.assertEqual(cli.run(["serve", "--restart"]), 0)
+            self.assertIn("river serve started again and answers on port", out.getvalue())
+
+    def test_a_command_reaches_a_server_that_starts_again_just_now(self):
+        import urllib.error
+        import urllib.request
+        from river import cli
+        tries = []
+
+        class Answer(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        class Opener:
+            def open(self, req, timeout=None):
+                tries.append(req.full_url)
+                if len(tries) < 3:
+                    raise urllib.error.URLError(ConnectionRefusedError(61, "Connection refused"))
+                return Answer(b'{"result": {"ok": true}}')
+        with mock.patch.object(urllib.request, "build_opener", lambda *a: Opener()), mock.patch.object(cli, "RETRY_WAIT", 0):
+            self.assertEqual(cli.ask_server(self.c, "serve_status", {}), {"ok": True})
+            self.assertEqual(len(tries), 3)
+            tries.clear()
+            with self.assertRaisesRegex(RiverError, "no river serve answers"):
+                cli.ask_server(self.c, "serve_status", {}, retries=1)
+            self.assertEqual(len(tries), 2)
 
 
 class PageUpdate(unittest.TestCase):
