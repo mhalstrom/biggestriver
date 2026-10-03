@@ -124,14 +124,14 @@ def dispatch_item(conn, item_id, runner=None, agent=None, actor=None, model=None
     return _start_for_item(conn, t, runner, actor, "Dispatch started this session for it")
 
 
-def _start_for_item(conn, t, runner, actor, why):
+def _start_for_item(conn, t, runner, actor, why, by="the page"):
     """Name a new session, reserve the item for it (push), and open the agent with RIVER_AGENT and
     RIVER_FOCUS=item:<id>: its first river go claims that item, or says why not. A session that never runs
     a river command is a manager finding (not connected) and does not count as the project's agent."""
     import secrets
     name = f"{t['project']}-{secrets.token_hex(2)}"
     core.register(conn, name, note=f"{core.STARTED_NOTE} #{t['item']['id']}")
-    core.push(conn, t["item"]["id"], name, f"from the page: {why}", actor)
+    core.push(conn, t["item"]["id"], name, f"from {by}: {why}", actor)
     _open_terminal(t, {"RIVER_AGENT": name, "RIVER_FOCUS": f"item:{t['item']['id']}", **t["env"]}, runner)
     return {**t, "session_name": name}
 
@@ -801,64 +801,28 @@ def watch_prompts(conn):
     return {"waiting": {a: b[len(core.PROMPT_NOTE) + 2:] for a, (b, _) in waiting.items()}, "told": told, "closed": closed}
 
 
-# An agent that ended its turn at its CLI's prompt runs no river command, so news for it (a note, an answer, a
-# queue entry) stays unread until a person looks. WAKES remembers, for each agent with news, the screen of its
-# pane and since when that screen has not changed.
-WAKES = {}
+# An agent idle at its prompt runs no river command, and river never types into its pane: a stale session would
+# continue a large context. River starts fresh sessions for its work, and ends it (fresh_sessions, idle_end).
+# IDLE remembers, for each agent river looks at, the screen of its pane and since when that screen has not changed.
+IDLE = {}
 
 
-def _news(conn):
-    """{agent: {"messages": [rows], "entries": [rows]}}: the unread messages and queue entries for each agent
-    that came after its last river command and did not wake it yet. A message that reached the session through
-    native_message is not news here."""
-    news = {}
-    for a in conn.execute("SELECT name, last_seen FROM agents WHERE kind='ai' AND stop_at IS NULL"):
-        msgs = [dict(r) for r in conn.execute(
-            f"SELECT m.id, m.kind, m.from_agent FROM messages m WHERE {core._TO_ME} AND m.from_agent<>? "
-            f"AND m.read_at IS NULL AND m.woken_at IS NULL AND m.created_at > ? "
-            f"AND (m.native_status IS NULL OR m.native_status<>'sent') ORDER BY m.id",
-            (a["name"], a["name"], a["name"], a["last_seen"]))]
-        entries = [dict(r) for r in conn.execute(
-            "SELECT id, kind FROM queue_entries WHERE agent=? AND delivered_at IS NULL AND woken_at IS NULL "
-            "AND created_at > ? AND (native_status IS NULL OR native_status<>'sent') ORDER BY id", (a["name"], a["last_seen"]))]
-        if msgs or entries:
-            news[a["name"]] = {"messages": msgs, "entries": entries, "last_seen": a["last_seen"]}
-    return news
-
-
-def _wake_line(agent, n):
-    """The line river types into an idle agent's pane: what came, and the command that shows it."""
-    what = [f"{m['kind']} #{m['id']} from {m['from_agent']}" for m in n["messages"][:3]]
-    if len(n["messages"]) > 3:
-        what.append(f"{len(n['messages']) - 3} more")
-    if n["entries"]:
-        what.append("an entry in your queue" if len(n["entries"]) == 1 else f"{len(n['entries'])} entries in your queue")
-    run = (f"river --as {agent} inbox" + (f", then river --as {agent} go" if n["entries"] else "")) if n["messages"] \
-        else f"river --as {agent} go"
-    return f"river: new for you: {', '.join(what)}. Run {run}"
-
-
-def wake_idle(conn):
-    """One look at the panes of the agents with news (the notify loop of river serve, every notify_interval):
-    when the pane shows the agent CLI (not a shell) with no prompt (prompt_pattern) and the same screen for
-    wake_after, and the agent ran no river command for wake_after, river types one line into the pane and
-    Enter: the agent's next turn begins with it. Each message and queue entry wakes once. A pane that waits on a
-    permission prompt gets nothing: the prompt watch tells the person. Returns {"woke": {agent: line}}."""
+def _idle_panes(conn, names, after):
+    """{agent: pane} for the agents among names whose tmux pane shows the agent CLI (not a shell) with no prompt
+    (prompt_pattern: a person answers that) and the same screen for `after`. One look per pass of the loop."""
     import re
-    after = core.parse_duration(core.setting(conn, "wake_after"))
-    news = _news(conn) if after.total_seconds() else {}
-    for agent in [a for a in WAKES if a not in news]:
-        del WAKES[agent]
-    if not news:
-        return {"woke": {}}  # the usual pass: no tmux command at all
+    for agent in [a for a in IDLE if a not in names]:
+        del IDLE[agent]
+    if not names:
+        return {}  # the usual pass: no tmux command at all
     terminals = agent_terminals(conn)
     pattern = core.setting(conn, "prompt_pattern").strip()
     rx = re.compile(pattern) if pattern else None
-    t, woke = core.now(), {}
-    for agent, n in sorted(news.items()):
+    t, out = core.now(), {}
+    for agent in sorted(names):
         pane = terminals.get(agent)
         if not pane:
-            WAKES.pop(agent, None)
+            IDLE.pop(agent, None)
             continue
         try:
             screen = _pane_screen(agent, pane)
@@ -866,29 +830,88 @@ def wake_idle(conn):
             continue  # the pane closed since the list
         text = _plain(screen["text"])
         if screen["ended"] or (rx and any(rx.search(x) for x in _prompt_tail(text))):
-            WAKES.pop(agent, None)  # a shell, or a prompt that a person answers
+            IDLE.pop(agent, None)  # a shell, or a prompt that a person answers
             continue
-        st = WAKES.get(agent)
+        st = IDLE.get(agent)
         if not st or st["sig"] != text:
-            WAKES[agent] = {"sig": text, "since": t}
+            IDLE[agent] = {"sig": text, "since": t}
+        elif t - st["since"] >= after:
+            out[agent] = pane
+    return out
+
+
+def start_fresh(conn, item_id, why, runner=None):
+    """Start a new session for one ready item, with the item's model and effort: river names it, reserves the
+    item for it, and opens the agent in the project folder (launch_in). The item's notes are its context."""
+    it = core.annotate(conn)[item_id]
+    p = core._project(conn, it["project"])
+    label = core.agent_for_type(conn, it["agent"], p["id"]) if it["agent"] else _agent_for(conn, it["model"])[0]
+    opt = next((o for o in core.launch_options(conn) if o["label"] == label), None)
+    model = it["model"] if opt and any(x["name"] == it["model"] for x in opt["models"]) else None
+    effort = it["effort"] if opt and it["effort"] in opt["efforts"] else None
+    t = core.launch_target(conn, agent=label, item=item_id, model=model, effort=effort)
+    _can_open_terminal(runner, f"cd {t['path']} && RIVER_FOCUS=item:{item_id} claude go", t["launch_in"])
+    return _start_for_item(conn, t, runner, "river", why, by="river serve")
+
+
+def fresh_sessions(conn, runner=None):
+    """One pass of the loop of river serve (every notify_interval):
+    - fresh_sessions on: start a fresh session for each item an answer came for (core.fresh_items).
+    - An agent idle at its prompt (_idle_panes, idle_after) with news (core.idle_news): its work goes to fresh
+      sessions (core.hand_over), and it ends.
+    - An agent idle at its prompt with nothing in hand and no river command for idle_end: it ends.
+    An agent that ends is unregistered, and the tmux pane river started for it closes.
+    Managers and planners are left alone: they wait at their prompt for a person or a watch command.
+    Returns {"started": {item: session}, "ended": {agent: why}, "failed": {item: why}}."""
+    out = {"started": {}, "ended": {}, "failed": {}}
+    fresh = core.setting(conn, "fresh_sessions") == "on"
+    after = core.parse_duration(core.setting(conn, "idle_after"))
+    end = core.parse_duration(core.setting(conn, "idle_end"))
+
+    def start(ids, why):
+        for i in ids:
+            try:
+                out["started"][i] = start_fresh(conn, i, why, runner)["session_name"]
+            except (RiverError, StopIteration) as e:
+                out["failed"][i] = str(e)
+                with core.tx(conn):
+                    core._event(conn, i, "river", f"no fresh session: {e}; the item waits in the queue")
+    if fresh:
+        start(core.fresh_items(conn), "an answer came for it")
+    if not after.total_seconds():
+        return out
+    t, cands = core.now(), {}
+    for a in conn.execute("SELECT name, last_seen, registered_at, role FROM agents WHERE kind='ai' AND stop_at IS NULL "
+                          "AND COALESCE(role, '') NOT IN ('manager', 'planner')").fetchall():
+        idle = t - core.parse_iso(a["last_seen"])
+        if a["last_seen"] == a["registered_at"] or idle < after:
+            continue  # it never connected (the manager finds that), or it ran a river command just now
+        news = core.idle_news(conn, a["name"], a["last_seen"]) if fresh else None
+        holds = conn.execute("SELECT 1 FROM items WHERE assignee=? AND status IN ('in_progress','held')",
+                             (a["name"],)).fetchone()
+        if news or (end.total_seconds() and idle >= end and not holds):
+            cands[a["name"]] = news
+    for agent, pane in _idle_panes(conn, cands, after).items():
+        news, why = cands[agent], f"idle at its prompt with nothing in hand for {core.setting(conn, 'idle_end')}"
+        if news:
+            ids = core.hand_over(conn, agent, news)
+            ann = core.annotate(conn)
+            start([i for i in ids if ann[i]["ready"]], f"{agent} was idle at its prompt")
+            if ids:
+                why = "idle at its prompt; fresh sessions took its work"
+            elif not end.total_seconds() or t - core.parse_iso(conn.execute(
+                    "SELECT last_seen FROM agents WHERE name=?", (agent,)).fetchone()["last_seen"]) < end:
+                continue  # only messages and no work: it ends after idle_end, and their senders hear it
+        try:
+            if not core.end_idle(conn, agent, why):
+                continue
+        except RiverError:
             continue
-        if t - st["since"] < after or t - core.parse_iso(n["last_seen"]) < after:
-            continue
-        line = _wake_line(agent, n)
-        _tmux("send-keys", "-t", pane, "-l", "--", line)
-        _tmux("send-keys", "-t", pane, "Enter")
-        with core.tx(conn):
-            stamp = core.iso(t)
-            for m in n["messages"]:
-                conn.execute("UPDATE messages SET woken_at=? WHERE id=?", (stamp, m["id"]))
-            for e in n["entries"]:
-                conn.execute("UPDATE queue_entries SET woken_at=? WHERE id=?", (stamp, e["id"]))
-            held = conn.execute("SELECT id FROM items WHERE assignee=? AND status IN ('in_progress','held') ORDER BY id",
-                                (agent,)).fetchone()
-            core._event(conn, held and held["id"], "river", f"woke {agent} at its prompt: {line}")
-        WAKES.pop(agent, None)
-        woke[agent] = line
-    return {"woke": woke}
+        IDLE.pop(agent, None)
+        out["ended"][agent] = why
+        if any(p["pane"] == pane and p["agent"] == agent for p in _tmux_panes(everywhere=True)):
+            _tmux("kill-pane", "-t", pane, check=False)  # a pane river started for it; a person's own pane stays
+    return out
 
 
 def terminal_keys(conn, agent, keys, who=None):

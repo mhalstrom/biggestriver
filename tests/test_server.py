@@ -1131,84 +1131,148 @@ class LaunchInTmux(unittest.TestCase):
             notify.loop(stop, interval_s=1)
         self.assertEqual(looks, [1])
 
-    def test_news_wakes_an_agent_that_is_idle_at_its_prompt(self):
+    def test_work_for_an_agent_idle_at_its_prompt_goes_to_a_fresh_session(self):
         import threading
         from unittest import mock
         from river import notify
         core.config_set(self.c, "launch_in", "tmux")
         core.register(self.c, "mark", human=True)
-        core.item_add(self.c, "shop", "work")
+        first = core.item_add(self.c, "shop", "first")["id"]
         name = server.launch_agent(self.c)["session_name"]
-        core.register(self.c, name)
         pane, clock = self.tmux.panes[0], [core.now()]
-        self.addCleanup(server.WAKES.clear)
+        self.addCleanup(server.IDLE.clear)
         fake_now = mock.patch.object(core, "now", lambda: clock[0])
         fake_now.start()
         self.addCleanup(fake_now.stop)
-        typed = lambda: pane["keys"][2:]  # the first two are the command line river typed at the launch
-
-        def wake(after=30):
-            clock[0] += core.timedelta(seconds=after)
-            return server.wake_idle(self.c)["woke"]
-
-        def note(text):
-            clock[0] += core.timedelta(seconds=1)
-            return core.send(self.c, "note", text, to=name, actor="mark")["id"]
-        woken = lambda mid: self.c.execute("SELECT woken_at FROM messages WHERE id=?", (mid,)).fetchone()[0]
         idle = "⏺ Done: the item is finished and pushed.\n\n╭────╮\n│ >  │\n╰────╯\n  ? for shortcuts"
         pane["screen"] = idle
-        # No news for the agent: no tmux command at all.
+        sent = lambda p: [k for k in p["keys"][2:]]  # the first two are the command line river typed at the launch
+        agents = lambda: {r["name"] for r in self.c.execute("SELECT name FROM agents WHERE kind='ai'")}
+
+        def tick(after=30):
+            clock[0] += core.timedelta(seconds=after)
+            return server.fresh_sessions(self.c)
+
+        def command(agent):  # the agent runs a river command
+            clock[0] += core.timedelta(seconds=1)
+            core.activity(self.c, agent)
+        nothing = {"started": {}, "ended": {}, "failed": {}}
+        # A session that never ran a river command is not idle at its prompt: the manager finds it (not connected).
+        self.assertEqual([tick(300) for _ in range(4)], [nothing] * 4)
+        # It connects, finishes its item, and stops at its prompt with nothing in hand. Within idle_end (15m) it
+        # stays, and with no news river runs no tmux command at all.
+        command(name)
+        core.claim(self.c, first, name)
+        core.done(self.c, first, "ok", actor=name)
         calls = len(self.tmux.calls)
-        self.assertEqual(wake(), {})
+        self.assertEqual([tick(60) for _ in range(5)], [nothing] * 5)
         self.assertEqual(len(self.tmux.calls), calls)
-        # A note after the agent's last river command: river types one line when the screen stays the same for
-        # wake_after (1m), and Enter, which starts the agent's next turn.
-        mid = note("mark chose O2: export now")
-        line = f"river: new for you: note #{mid} from mark. Run river --as {name} inbox"
-        self.assertEqual((wake(), wake()), ({}, {}))
-        self.assertEqual(wake(), {name: line})
-        self.assertEqual(typed(), [line, "Enter"])
-        self.assertIsNotNone(woken(mid))
-        # Each message wakes once.
-        self.assertEqual((wake(), wake(), wake(), len(typed())), ({}, {}, {}, 2))
-        # A screen that changes (the agent works) waits, and so does a prompt: the prompt watch tells the person.
-        mid = note("one more thing")
-        for screen in ("✻ Working… (3s)", "✻ Working… (33s)", "✻ Working… (63s)"):
-            pane["screen"] = screen
-            self.assertEqual(wake(), {})
-        pane["screen"] = "Bash command\n  rm -rf build\nDo you want to proceed?\n❯ 1. Yes\n  2. No"
-        self.assertEqual((wake(), wake(), wake(), wake()), ({}, {}, {}, {}))
-        pane["screen"], pane["running"] = idle, "zsh"  # the agent CLI ended: a shell must not get the line
-        self.assertEqual((wake(), wake(), wake()), ({}, {}, {}))
-        pane["running"] = "claude"
-        self.assertEqual((wake(), wake(), wake()), ({}, {}, {name: f"river: new for you: note #{mid} from mark. Run river --as {name} inbox"}))
-        # A message the agent saw: it came before its last river command (the agent works, and reads its inbox).
-        mid = note("the agent is at work")
+        # Work for it: river does not type into its pane. When the screen stays the same for idle_after (2m), river
+        # takes the push back, starts a fresh session for the item, and ends the idle agent: its pane closes.
+        second = core.item_add(self.c, "shop", "second", models={"model": "opus", "effort": "high"})["id"]
         clock[0] += core.timedelta(seconds=1)
-        self.c.execute("UPDATE agents SET last_seen=? WHERE name=?", (core.iso(clock[0]), name))
-        self.assertEqual((wake(), wake(), wake(), wake()), ({}, {}, {}, {}))
-        self.assertIsNone(woken(mid))
-        # An entry in the agent's queue wakes it too, and the line says river go. Several news: one line.
+        core.push(self.c, second, name, "take this one", "mark")
+        self.assertEqual([tick()["started"] for _ in range(4)], [{}] * 4)
+        r = tick()
+        (fresh,) = r["started"].values()
+        self.assertEqual((list(r["started"]), r["ended"]), ([second], {name: "idle at its prompt; fresh sessions took its work"}))
+        self.assertEqual((sent(pane), pane in self.tmux.panes, name in agents()), ([], False, False))
+        new = self.tmux.panes[-1]
+        self.assertIn(f"RIVER_AGENT={fresh} RIVER_FOCUS=item:{second} ", new["keys"][0])
+        self.assertIn("--model opus --effort high", new["keys"][0])  # the item's model and effort
+        self.assertEqual(core.item_show(self.c, second)["reserved_for"], fresh)
+        # A working screen, and a prompt that a person answers, are not idle; a shell is not the agent CLI.
+        command(fresh)
+        core.claim(self.c, second, fresh)
+        q = core.send(self.c, "question", "export now or later?", to="mark", item=second, actor=fresh)["id"]
         clock[0] += core.timedelta(seconds=1)
-        self.c.execute("INSERT INTO queue_entries(agent,pos,body,kind,added_by,created_at) VALUES (?,1,'take #7 next','message','mark',?)",
-                       (name, core.iso(clock[0])))
-        self.assertEqual((wake(), wake(), wake()), ({}, {}, {name: f"river: new for you: an entry in your queue. Run river --as {name} go"}))
-        ids = [note(f"note {n}") for n in range(5)]
-        self.assertEqual((wake(), wake())[1], {})
-        self.assertEqual(wake()[name], f"river: new for you: note #{ids[0]} from mark, note #{ids[1]} from mark, "
-                                       f"note #{ids[2]} from mark, 2 more. Run river --as {name} inbox")
-        # wake_after 0s turns it off; it is a duration like the others.
-        core.config_set(self.c, "wake_after", "0s")
-        note("no wake")
-        self.assertEqual((wake(), wake(), wake(), wake()), ({}, {}, {}, {}))
-        with self.assertRaisesRegex(RiverError, "bad duration"):
-            core.config_set(self.c, "wake_after", "soon")
-        # The loop of river serve looks on every pass.
+        core.answer(self.c, q, "now", actor="mark")
+        for screen in ("✻ Working… (3s)", "✻ Working… (33s)", "✻ Working… (63s)", "✻ Working… (93s)", "✻ Working… (123s)"):
+            new["screen"] = screen
+            self.assertEqual(tick(), nothing)
+        new["screen"] = "Bash command\n  rm -rf build\nDo you want to proceed?\n❯ 1. Yes\n  2. No"
+        self.assertEqual([tick() for _ in range(6)], [nothing] * 6)
+        new["screen"], new["running"] = idle, "zsh"
+        self.assertEqual([tick() for _ in range(6)], [nothing] * 6)
+        # At its prompt, with the answer for its item: the item goes to a fresh session with the answer in its notes,
+        # and the next session checks first what the idle one left in the folder.
+        new["running"] = "claude"
+        r = [tick() for _ in range(5)][-1]
+        (third,) = r["started"].values()
+        self.assertEqual((list(r["started"]), list(r["ended"]), sent(new)), ([second], [fresh], []))
+        it = core.item_show(self.c, second)
+        self.assertIn(f"[answer #{q + 1} from mark to {fresh}] now", it["notes"])
+        self.assertIn("Check git status", it["notes"])
+        self.assertEqual((it["needs_check"], it["reserved_for"]), (1, third))
+        # Idle with nothing in hand for idle_end: the agent ends, and the sender of what it never read hears it.
+        command(third)
+        clock[0] += core.timedelta(seconds=1)
+        note = core.send(self.c, "note", "fyi", to=third, actor="mark")["id"]
+        command(third)
+        self.tmux.panes[-1]["screen"] = idle
+        r = [tick(60) for _ in range(18)]  # idle_end, then idle_after with the same screen
+        self.assertEqual([x["ended"] for x in r if x["ended"]], [{third: "idle at its prompt with nothing in hand for 15m"}])
+        self.assertNotIn(third, agents())
+        told = self.c.execute("SELECT body FROM messages WHERE to_agent='mark' AND reply_to=?", (note,)).fetchone()[0]
+        self.assertIn(f"{third} ended (idle at its prompt with nothing in hand for 15m) before it read your note #{note}", told)
+        # A manager or a planner waits at its prompt for a person or a watch: never ended.
+        core.register(self.c, "boss")
+        self.c.execute("UPDATE agents SET role='manager', last_seen=? WHERE name='boss'", (core.iso(clock[0] + core.timedelta(seconds=1)),))
+        self.assertEqual([tick(300) for _ in range(6)], [nothing] * 6)
+        # The settings: durations, and on or off.
+        for key, bad in (("idle_after", "soon"), ("idle_end", "soon"), ("fresh_sessions", "maybe")):
+            with self.assertRaisesRegex(RiverError, "bad duration|on or off"):
+                core.config_set(self.c, key, bad)
+        # The loop of river serve runs the pass every time.
         stop, looks = threading.Event(), []
         with mock.patch.object(server, "watch_prompts", lambda c: None), \
-                mock.patch.object(server, "wake_idle", lambda c: (looks.append(1), stop.set())):
+                mock.patch.object(server, "fresh_sessions", lambda c: (looks.append(1), stop.set())):
             notify.loop(stop, interval_s=1)
         self.assertEqual(looks, [1])
+
+    def test_an_answer_for_an_agent_that_ended_starts_a_fresh_session(self):
+        from unittest import mock
+        core.config_set(self.c, "launch_in", "tmux")
+        core.register(self.c, "mark", human=True)
+        core.register(self.c, "ann")
+        x = core.item_add(self.c, "shop", "export the report")["id"]
+        y = core.item_add(self.c, "shop", "send the invoice")["id"]
+        plain = core.item_add(self.c, "shop", "planned after the person's step")["id"]
+        # ann needs the person: it files a person's item, releases its item, and ends.
+        core.claim(self.c, x, "ann")
+        h = core.item_add(self.c, "shop", "Pick the format", doer="human", blocks=x, mode="release", actor="ann")["id"]
+        core.item_add(self.c, "shop", "a step first", doer="human", blocks=plain, actor="mark")
+        core.claim(self.c, y, "ann")
+        q = core.send(self.c, "question", "which customer?", to="mark", item=y, actor="ann")["id"]
+        core.release(self.c, y, actor="ann")
+        core.unregister(self.c, "ann")
+        # The person answers both: each item starts in a fresh session, with the answer in its notes.
+        core.done(self.c, h, "CSV", actor="mark")
+        core.answer(self.c, q, "ACME", actor="mark")
+        # A session that waits for work does not take them: river serve starts them within a pass or two.
+        core.register(self.c, "cy")
+        ids = lambda: [a["id"] for a in core.next_item(self.c, "shop", actor="cy", limit=9)]
+        self.assertFalse({x, y} & set(ids()))
+        with mock.patch.object(core, "now", lambda: core.datetime.now(core.timezone.utc) + core.FRESH_GRACE * 2):
+            self.assertTrue({x, y} <= set(ids()))  # with no river serve, after FRESH_GRACE go takes them
+        started = server.fresh_sessions(self.c)["started"]
+        self.assertEqual(sorted(started), [x, y])
+        self.assertIn(f"[#{h} Pick the format: done by mark] CSV", core.item_show(self.c, x)["notes"])
+        self.assertIn("[question", core.item_show(self.c, y)["notes"])
+        self.assertIn("[answer from mark] ACME", core.item_show(self.c, y)["notes"])
+        self.assertEqual({p["agent"] for p in self.tmux.panes}, set(started.values()))
+        # An item no agent worked on yet waits for go as before; each item starts once.
+        self.assertEqual(server.fresh_sessions(self.c)["started"], {})
+        # fresh_sessions off: the answer goes in the notes, and whoever runs go next takes the item.
+        core.config_set(self.c, "fresh_sessions", "off")
+        core.register(self.c, "bo")
+        z = core.item_add(self.c, "shop", "third")["id"]
+        core.claim(self.c, z, "bo")
+        h2 = core.item_add(self.c, "shop", "Approve", doer="human", blocks=z, mode="release", actor="bo")["id"]
+        core.done(self.c, h2, "yes", actor="mark")
+        self.assertEqual((server.fresh_sessions(self.c)["started"], core.item_show(self.c, z)["ready"]), ({}, True))
+        self.assertIn(z, ids())
+        self.assertIn("done by mark] yes", core.item_show(self.c, z)["notes"])
 
     def test_with_a_real_tmux_server(self):
         """The same commands against tmux itself, on a server of its own (never the user's)."""
@@ -1269,29 +1333,37 @@ class LaunchInTmux(unittest.TestCase):
             time.sleep(0.1)
         self.assertIn("\x1b[31mriver-42", scr["text"])  # the colours come with the text
         self.assertEqual((scr["name"], scr["ended"], scr["width"] > 20), ("#1 first: a | b", True, True))
-        # An agent idle at its prompt with news gets one line typed into its pane (cat stands for the agent CLI).
+        # An agent idle at its prompt with work for it: river types nothing into its pane. It closes the pane and starts
+        # a fresh session for the work (a script stands for the agent CLI).
         from unittest import mock
-        server._open_terminal({"project": "shop", "path": self.dir.name, "session_title": "#6 sixth", "command": "cat",
+        fake = Path(self.dir.name, "fake-agent")
+        fake.write_text('#!/bin/sh\necho "fake agent: $RIVER_AGENT $RIVER_FOCUS"\nexec sleep 60\n')
+        fake.chmod(0o755)
+        core.config_set(self.c, "launch_agents", f"Fake={fake}")
+        core.config_set(self.c, "launch_in", "tmux")
+        server._open_terminal({"project": "shop", "path": self.dir.name, "session_title": "#6 sixth", "command": str(fake),
                                "launch_in": "tmux"}, {"RIVER_AGENT": "shop-cccc"})
-        sixth = panes(lambda p: p["name"] != "#6 sixth" or p["running"] == "cat")["#6 sixth"]["pane"]
+        sixth = panes(lambda p: p["name"] != "#6 sixth" or p["running"] == "sleep")["#6 sixth"]["pane"]
         core.register(self.c, "shop-cccc")
         core.register(self.c, "mark", human=True)
         clock = [core.now() + core.timedelta(seconds=1)]
-        self.addCleanup(server.WAKES.clear)
+        self.addCleanup(server.IDLE.clear)
         with mock.patch.object(core, "now", lambda: clock[0]):
-            mid = core.send(self.c, "note", "wake up", to="shop-cccc", actor="mark")["id"]
-            woke = []
-            for _ in range(4):
+            core.activity(self.c, "shop-cccc")
+            seventh = core.item_add(self.c, "shop", "seventh")["id"]
+            clock[0] += core.timedelta(seconds=1)
+            core.push(self.c, seventh, "shop-cccc", "take it", "mark")
+            runs = []
+            for _ in range(6):
                 clock[0] += core.timedelta(seconds=40)
-                woke.append(server.wake_idle(self.c)["woke"])
-        self.assertEqual(woke[:2], [{}, {}])
-        self.assertEqual(woke[2], {"shop-cccc": f"river: new for you: note #{mid} from mark. Run river --as shop-cccc inbox"})
-        for _ in range(100):
-            if f"note #{mid} from mark" in server._pane_texts([sixth])[sixth]:
-                break
-            time.sleep(0.1)
-        self.assertIn(f"river: new for you: note #{mid} from mark", server._pane_texts([sixth])[sixth])
-        server._tmux("kill-pane", "-t", sixth)
+                runs.append(server.fresh_sessions(self.c))
+        (fresh,) = [r["started"][seventh] for r in runs if r["started"]]
+        self.assertEqual([r["ended"] for r in runs if r["ended"]], [{"shop-cccc": "idle at its prompt; fresh sessions took its work"}])
+        self.assertNotIn(sixth, [p["pane"] for p in server._tmux_panes()])
+        (new,) = [p for p in panes(lambda p: p["agent"] != fresh or p["running"] == "sleep").values() if p["agent"] == fresh]
+        self.assertEqual(new["name"], f"#{seventh} seventh")
+        self.assertIn(f"fake agent: {fresh} item:{seventh}", server._pane_texts([new["pane"]])[new["pane"]])
+        server._tmux("kill-pane", "-t", new["pane"])
         # A session that left the queue while its command still runs is done; not while its pane shows a prompt.
         # One tmux command reads the panes that may be done, and gives nothing when one of them closed meanwhile.
         server._open_terminal({"project": "shop", "path": self.dir.name, "session_title": "#5 fifth", "command": "sleep 60",

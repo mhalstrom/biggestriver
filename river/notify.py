@@ -289,7 +289,7 @@ def loop(stop, interval_s=None):
             wait = interval_s or core.parse_duration(core.setting(conn, "notify_interval")).total_seconds()
             from . import server
             server.watch_prompts(conn)  # an agent that waits on a prompt in its tmux pane: tell the person
-            server.wake_idle(conn)  # an agent idle at its prompt with news: type one line into its pane
+            server.fresh_sessions(conn)  # work for an agent idle at its prompt goes to a fresh session
             if core._channels(core.setting(conn, "notify_channels")):
                 run(conn)
         except Exception as e:  # keep the loop alive; the next pass retries

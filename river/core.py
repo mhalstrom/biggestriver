@@ -108,9 +108,10 @@ DEFAULT_SETTINGS = {
     # what tool, e.g. "github owner/shop via gh" or "jira PROJ via the Jira MCP server". Set it per
     # project (river project tracker). River has no tracker API code: agents use their own tools.
     "tracker": "",
-    # A session with no work runs river wait: it takes new work when it comes, and ends after wait_max
-    # without any (0: end at once). One river wait call returns after wait_step, below a shell time limit.
-    "wait_max": "30m",
+    # A session with no work runs river wait in the foreground (a blocking command costs no tokens), never idle at
+    # its prompt: it takes new work when it comes, and ends after wait_max without any (0: end at once). One
+    # river wait call returns after wait_step, below a shell time limit.
+    "wait_max": "45m",
     "wait_step": "9m",
     # The manager (river manage): an agent that waits for work longer than wait_too_long is a finding, and
     # river manage --watch returns on a new finding, or after manage_every with nothing new (it runs as a
@@ -126,13 +127,20 @@ DEFAULT_SETTINGS = {
     # Claude Code and Codex; add the words of another CLI or a new version with | (river config set).
     "prompt_pattern": r"Do you (want to|trust)|Would you like to|[Ee]nter to confirm|[❯›]\s*\d+\.\s",
     "prompt_wait": "20s",
-    # An agent that ended its turn at its CLI's prompt runs no river command, so a note, an answer, or a queue
-    # entry for it waits unread. river serve looks at each agent's tmux pane every notify_interval: when the agent
-    # has news that came after its last river command, and its pane shows the agent CLI with the same screen for
-    # wake_after and no prompt (prompt_pattern), river types one line into the pane ("river: note #12 from ...
-    # for you: run river --as <you> inbox"), which starts the agent's next turn. Each message wakes once.
-    # A message that reached the session through native_message needs no wake. 0s turns this off.
-    "wake_after": "1m",
+    # An agent that ended its turn at its CLI's prompt runs no river command. river serve never types into its
+    # pane (a stale session continues a large context); it starts fresh sessions instead. An agent is idle at its
+    # prompt when its tmux pane shows the agent CLI with the same screen and no prompt (prompt_pattern) for
+    # idle_after, and it ran no river command for idle_after.
+    # fresh_sessions on: work or an answer for an idle agent (a push, an item in its queue, a message, a
+    # prerequisite done) goes to a new session: river takes the agent's items back, puts the news in their notes,
+    # starts one session for each ready item (the item's model and effort), and ends the idle agent. A person who
+    # finishes an item that an agent's item waited on, or answers the question of an agent that ended, also
+    # starts a fresh session for that item. off: the news waits in the queue.
+    # idle_end: an agent idle at its prompt with nothing in hand ends after this long without a river command
+    # (river unregisters it and closes the tmux pane river started for it). 0s: never.
+    "idle_after": "2m",
+    "fresh_sessions": "on",
+    "idle_end": "15m",
     "manage_every": "30m",
     # river cleanup lists a ready item that nobody claimed for this long.
     "stale_after": "14d",
@@ -262,6 +270,7 @@ CREATE TABLE IF NOT EXISTS items (
   takeover_at       TEXT,
   takeover_seen     INTEGER NOT NULL DEFAULT 0,
   needs_check       INTEGER NOT NULL DEFAULT 0,
+  fresh_start       TEXT,                     -- river serve starts a fresh session for it (an answer came)
   model             TEXT,                     -- recommended model (NULL: the default_model setting)
   effort            TEXT,                     -- recommended effort level (NULL: default_effort)
   min_model         TEXT,                     -- hard limits, one model per family, comma list
@@ -320,8 +329,7 @@ CREATE TABLE IF NOT EXISTS queue_entries (
   added_by      TEXT,
   created_at    TEXT NOT NULL,
   delivered_at  TEXT,
-  native_status TEXT,                         -- native delivery: sent, failed: <why>, or no native channel
-  woken_at      TEXT                          -- river typed a line into the agent's idle tmux pane for it
+  native_status TEXT                          -- native delivery: sent, failed: <why>, or no native channel
 );
 CREATE UNIQUE INDEX IF NOT EXISTS queue_item ON queue_entries(item_id) WHERE item_id IS NOT NULL;
 
@@ -388,8 +396,7 @@ CREATE TABLE IF NOT EXISTS messages (
   read_at     TEXT,
   closed_at   TEXT,
   nudged_at   TEXT,
-  native_status TEXT,
-  woken_at    TEXT
+  native_status TEXT
 );
 
 -- Something needs a person: a human item became ready, or a question or alert went to a human.
@@ -712,9 +719,9 @@ def _migrate(conn):
         conn.execute("ALTER TABLE queue_entries ADD COLUMN native_status TEXT")
     if "native_status" not in {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}:
         conn.execute("ALTER TABLE messages ADD COLUMN native_status TEXT")
-    for table in ("messages", "queue_entries"):
-        if "woken_at" not in {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}:
-            conn.execute(f"ALTER TABLE {table} ADD COLUMN woken_at TEXT")
+    if "fresh_start" not in icols:
+        conn.execute("ALTER TABLE items ADD COLUMN fresh_start TEXT")
+        conn.execute("DELETE FROM settings WHERE key='wake_after'")  # the pane wake of #729 is gone (#758)
     if "synced_at" not in {r["name"] for r in conn.execute("PRAGMA table_info(item_refs)")}:
         conn.execute("ALTER TABLE item_refs ADD COLUMN synced_at TEXT")
     if "reserved_for" not in icols:
@@ -809,7 +816,7 @@ def config_set(conn, key, value, project=None, item=None, agent=None, actor=None
         raise RiverError(f"unknown setting {key!r}; known: {', '.join(sorted(DEFAULT_SETTINGS))}")
     if key.endswith(("_ttl", "_after", "_before", "_interval", "_window")) or key in (
             "wait_max", "wait_step", "human_wait_max", "goal_lease", "wait_too_long", "manage_every", "connect_within",
-            "prompt_wait"):
+            "prompt_wait", "idle_end"):
         parse_duration(value)
     elif key == "prompt_pattern":
         try:
@@ -848,6 +855,8 @@ def config_set(conn, key, value, project=None, item=None, agent=None, actor=None
         raise RiverError("launch_in is tab, window, or tmux")
     elif key == "auto_continue" and value not in ("on", "off"):
         raise RiverError("auto_continue is on or off")
+    elif key == "fresh_sessions" and value not in ("on", "off"):
+        raise RiverError("fresh_sessions is on or off")
     elif key == "default_prerequisite_mode" and value not in ("keep", "release"):
         raise RiverError("default_prerequisite_mode is keep or release")
     elif key in ("email_to", "email_from") and value and not all(
@@ -4169,7 +4178,7 @@ def _claim_row(conn, item_id, actor):
     ttl = _lease_for(conn, item_id, actor)
     t = now()
     cur = conn.execute(
-        "UPDATE items SET status='in_progress', assignee=?, claimed_at=?, lease_expires_at=? "
+        "UPDATE items SET status='in_progress', assignee=?, claimed_at=?, lease_expires_at=?, fresh_start=NULL "
         "WHERE id=? AND status='open'", (actor, iso(t), iso(t + ttl), item_id))
     if cur.rowcount != 1:
         raise RiverError(f"item {item_id} is no longer open")
@@ -4236,8 +4245,12 @@ def next_item(conn, project=None, unblocks=None, claim=False, actor=None, limit=
         if not actor:
             return fits(pool)
         owned = {r["name"] for r in conn.execute("SELECT name FROM targets WHERE owner=?", (actor,))}
+        # An item an answer just came for goes to a fresh session (river serve starts it within a pass or two),
+        # not to a session that waits; with no river serve, the next go takes it after FRESH_GRACE.
+        fresh = {r["id"] for r in conn.execute("SELECT id FROM items WHERE fresh_start > ?",
+                                               (iso(now() - FRESH_GRACE),))}
         pool = [a for a in pool if (a["kind"] != "deploy" or a["target"] in owned)
-                and a["reserved_for"] in (None, actor)]
+                and a["reserved_for"] in (None, actor) and a["id"] not in fresh]
         # The agent's own queue comes first, in its order and from any project; then items pushed to it.
         # The sort is stable, so graph order holds inside each group.
         qpos = {r["item_id"]: n for n, r in enumerate(conn.execute(
@@ -4326,6 +4339,11 @@ def _close(conn, item_id, status, actor, output=None, note=None, force=None):
             resumed = _resume_holds(conn, it["id"])
             ann = annotate(conn)
             newly = [d for d in ann[it["id"]]["unblocks"] if ann[d]["ready"]]
+            # A person answered: an agent item that waited on this person's item starts in a fresh session.
+            if it["doer"] == "human":
+                for d in newly:
+                    _want_fresh(conn, d, f"[#{it['id']} {it['title']}: {status} by {actor or 'a person'}]"
+                                + (f" {output}" if output else "") + (f" ({note})" if note else ""))
             # Tell whoever holds an item that waits on this one (design 7.4: "a prerequisite you waited on is done").
             for d in ann[it["id"]]["unblocks"]:
                 a = ann[d]
@@ -5088,6 +5106,10 @@ def answer(conn, msg_id, body, actor=None):
                      "to_agent=COALESCE(to_agent, ?) WHERE id=?", (t, t, actor, q["id"]))
         if q["item_id"] is not None:
             _event(conn, q["item_id"], actor, f"answered question #{q['id']}")
+            # The asker ended (it filed its question and stopped): a fresh session takes the item, with the answer.
+            if not conn.execute("SELECT 1 FROM agents WHERE name=?", (q["from_agent"],)).fetchone():
+                _want_fresh(conn, q["item_id"], f"[question #{q['id']} from {q['from_agent']}] {q['body']}\n"
+                            f"[answer from {actor}] {body.strip()}")
     return message_show(conn, mid)
 
 
@@ -6163,6 +6185,7 @@ def _go(conn, cwd, actor=None, project=None, role=None, session=None, focus=None
              "auto_continue": setting(conn, "auto_continue", agent=actor) == "on",
              "session": _agent(conn, actor)["session"],
              "human_wait_max": setting(conn, "human_wait_max", agent=actor),
+             "fresh_sessions": setting(conn, "fresh_sessions", agent=actor) == "on",
              "messages": unread(conn, actor),
              "humans": [r["name"] for r in conn.execute("SELECT name FROM agents WHERE kind='human' ORDER BY name")],
              "chat": chat}
@@ -6559,6 +6582,130 @@ def wait(conn, cwd, actor, project=None, step=None, sleep=None, poll=3.0):
     except RiverError as e:  # it owns a deploy target: keep it registered, and say so
         return {"result": "end", "agent": actor, "waited": _short(limit), "kept": str(e)}
     return {"result": "end", "agent": actor, "waited": _short(limit)}
+
+
+# ---------------------------------------------------------------- fresh sessions
+
+FRESH_GRACE = timedelta(minutes=2)
+
+def _add_note(conn, item_id, text):
+    it = _item(conn, item_id)
+    conn.execute("UPDATE items SET notes=? WHERE id=?", ((it["notes"] + "\n" if it["notes"] else "") + text, item_id))
+
+
+def _want_fresh(conn, item_id, note):
+    """An answer came for an agent item that an agent worked on before and nobody holds now (the agent filed a
+    person's item and ended, or asked a question and ended): put the answer in the item's notes, and mark it
+    for river serve, which starts a fresh session for it (fresh_sessions). Inside a tx."""
+    it = _item(conn, item_id)
+    if (it["status"] != "open" or it["doer"] == "human" or it["kind"] != "work" or it["reserved_for"]
+            or not conn.execute("SELECT 1 FROM events WHERE item_id=? AND change LIKE 'claimed%'", (item_id,)).fetchone()):
+        return False
+    _add_note(conn, item_id, note)
+    if setting(conn, "fresh_sessions", item_id=item_id) != "on":
+        return False  # the answer is in the notes; whoever runs go next takes the item
+    conn.execute("UPDATE items SET fresh_start=? WHERE id=?", (iso(now()), item_id))
+    _event(conn, item_id, "river", "an answer came: a fresh session takes it (fresh_sessions)")
+    return True
+
+
+def fresh_items(conn):
+    """The items river serve starts a fresh session for now; it clears the mark of an item that is not ready
+    for a new session any more (claimed, closed, reserved, waits again)."""
+    rows = conn.execute("SELECT id FROM items WHERE fresh_start IS NOT NULL ORDER BY fresh_start, id").fetchall()
+    if not rows:
+        return []
+    ann, out = annotate(conn), []
+    with tx(conn):
+        for r in rows:
+            a = ann.get(r["id"])
+            if a and a["status"] == "open" and a["ready"] and not a["reserved_for"]:
+                out.append(r["id"])
+            conn.execute("UPDATE items SET fresh_start=NULL WHERE id=?", (r["id"],))
+    return out
+
+
+def idle_news(conn, agent, since):
+    """What came for an agent after its last river command (since): unread messages to it or to the holder of
+    its items, that native_message did not deliver (from a sender other than river, or about an item it holds
+    or that is reserved for it), and entries of its queue."""
+    msgs = [dict(r) for r in conn.execute(
+        f"SELECT m.id, m.kind, m.from_agent, m.item_id, m.body FROM messages m WHERE {_TO_ME} AND m.from_agent<>? "
+        "AND m.read_at IS NULL AND m.created_at > ? AND (m.native_status IS NULL OR m.native_status<>'sent') "
+        "AND (m.from_agent<>'river' OR m.item_id IN (SELECT id FROM items WHERE assignee=? OR reserved_for=?)) "
+        "ORDER BY m.id", (agent, agent, agent, since, agent, agent))]
+    entries = [dict(r) for r in conn.execute(
+        "SELECT id, kind, item_id, body, added_by FROM queue_entries WHERE agent=? AND delivered_at IS NULL "
+        "AND created_at > ? AND (native_status IS NULL OR native_status<>'sent') ORDER BY pos, id", (agent, since))]
+    return {"messages": msgs, "entries": entries} if msgs or entries else None
+
+
+def hand_over(conn, agent, news):
+    """An agent idle at its prompt got news (idle_news): take its work back so fresh sessions do it. Its held
+    items are released (to check first: its changes may be in the folder), its pushes and reservations end, its
+    queued items leave its queue, and the news goes into the notes of each item (a message about an item into
+    that item's, other news into all). Returns the ids of the items, in order; river serve starts a session for
+    each that is ready."""
+    with tx(conn):
+        ids = []
+        add = lambda i: ids.append(i) if i not in ids else None
+        for r in conn.execute("SELECT id FROM items WHERE assignee=? AND status IN ('in_progress','held') ORDER BY id",
+                              (agent,)).fetchall():
+            _unhold(conn, r["id"], "river", f"released: {agent} stopped at its prompt with news for it; "
+                    f"a fresh session takes the item (fresh_sessions)")
+            conn.execute("UPDATE items SET needs_check=1 WHERE id=?", (r["id"],))
+            _add_note(conn, r["id"], f"[river] {agent} worked on this and stopped at its prompt: its changes may be "
+                      f"in the folder, not committed. Check git status and git log first.")
+            add(r["id"])
+        for e in news["entries"]:
+            if e["item_id"] is not None:
+                conn.execute("DELETE FROM queue_entries WHERE id=?", (e["id"],))
+                _event(conn, e["item_id"], "river", f"left the queue of {agent}: it is idle at its prompt; "
+                       f"a fresh session takes the item")
+                add(e["item_id"])
+        for i in _free_reservations(conn, agent, f"{agent} is idle at its prompt; a fresh session takes it"):
+            add(i)
+        for m in news["messages"]:
+            if m["item_id"] is not None and _item(conn, m["item_id"])["status"] == "open":
+                add(m["item_id"])
+        ids = [i for i in ids if _item(conn, i)["status"] == "open" and _item(conn, i)["doer"] != "human"]
+        if ids:
+            gone = {r["id"] for r in conn.execute("SELECT id FROM messages WHERE state='declined' AND to_agent=?", (agent,))}
+            for m in news["messages"]:
+                if m["id"] in gone:
+                    continue  # the alert of a push taken back above: the item itself is the news
+                for i in ([m["item_id"]] if m["item_id"] in ids else ids):
+                    _add_note(conn, i, f"[{m['kind']} #{m['id']} from {m['from_agent']} to {agent}] {m['body']}")
+            _mark_read(conn, [m["id"] for m in news["messages"]])
+            for e in news["entries"]:
+                if e["item_id"] is None and e["kind"] != "stop":
+                    for i in ids:
+                        _add_note(conn, i, f"[instruction for {agent} from {e['added_by']}] {e['body']}")
+                    conn.execute("DELETE FROM queue_entries WHERE id=?", (e["id"],))
+    return ids
+
+
+def end_idle(conn, agent, why):
+    """End an agent that is idle at its prompt and holds nothing: tell the senders of what it never read (a
+    message, an instruction in its queue), release its goals, and unregister it. Returns None when it holds an
+    item or owns a target (it stays)."""
+    with tx(conn):
+        if conn.execute("SELECT 1 FROM items WHERE assignee=? AND status IN ('in_progress','held')", (agent,)).fetchone() \
+                or conn.execute("SELECT 1 FROM targets WHERE owner=?", (agent,)).fetchone():
+            return None
+        unread = conn.execute("SELECT id, kind, from_agent, item_id FROM messages WHERE to_agent=? AND from_agent<>'river' "
+                              "AND (read_at IS NULL OR (kind='question' AND state='open'))", (agent,)).fetchall()
+        for m in unread:
+            _send(conn, "notice", "river", f"{agent} ended ({why}) before it read your {m['kind']} #{m['id']}. Send it "
+                  f"to another agent (river who), or add an item for it", to=m["from_agent"], item_id=m["item_id"],
+                  reply_to=m["id"])
+        for e in conn.execute("SELECT body, added_by FROM queue_entries WHERE agent=? AND item_id IS NULL "
+                              "AND kind<>'stop' AND added_by IS NOT NULL", (agent,)).fetchall():
+            _send(conn, "notice", "river", f"{agent} ended ({why}) before it took your instruction: {e['body']}. "
+                  f"Add an item for it, or queue it for another agent", to=e["added_by"])
+        _event(conn, None, "river", f"{agent} ended: {why}")
+    unregister(conn, agent, "river")
+    return {"ended": agent, "why": why}
 
 
 def active_manager(conn, but=None):

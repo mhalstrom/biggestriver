@@ -2090,9 +2090,12 @@ def render_go(b):
                 f"  - You find other work: {r} add \"<title>\" --found-during {it['id']}. Do not do it now.",
                 f"  - Waiting on something outside the queue: {r} blocked {it['id']} --reason \"<what>\", release, run go again.",
                 f"  - You need the user (a decision, an approval, an account or payment step): put it in the queue, not only in chat:",
-                f"    {r} add \"<what to decide or do>\" --doer human --context \"<exactly what, where the material is>\" --blocks {it['id']}",
-                f"    With --keep you wait for the answer at most {b.get('human_wait_max', '30m')} (human_wait_max); then river "
-                f"releases #{it['id']} and you take other work.",
+                f"    {r} add \"<what to decide or do>\" --doer human --context \"<exactly what, where the material is>\" --blocks {it['id']} --release",
+                *([f"    Commit what is finished, and say in the item's --context what is left. Then run go again: take other work, or",
+                   f"    wait in river wait. When the person answers, river starts a fresh session for #{it['id']} with the answer in its notes."]
+                  if b.get("fresh_sessions") else []),
+                f"    With --keep you hold #{it['id']} and wait for the answer at most {b.get('human_wait_max', '30m')} (human_wait_max); "
+                f"then river releases it and you take other work.",
                 f"    When you ask the user in chat, one decision at a time in this form: river guide decisions",
                 f"    That is what notifies them. A quick question instead: {r} send question --to "
                 + ("|".join(b.get("humans") or []) or "<person>") + " \"...\" --item " + str(it["id"]),
@@ -2147,6 +2150,8 @@ def render_go(b):
         out += [
             "",
             f"Wait for work: {r} wait",
+            "  Run it in the foreground, not as a background command, and never end your turn at your prompt: a",
+            "  blocking wait costs no tokens, and river ends an agent that sits idle at its prompt.",
             "  It returns when work is pushed to you, an item gets ready here, or a message comes (give the shell",
             "  command a 10-minute time limit). Then do what it prints: WORK: run go. No work yet: run wait again.",
             "  END: no work came within wait_max; stop, tell the user this session has ended, and report",

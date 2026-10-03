@@ -19,11 +19,16 @@ name once (`river --as <your-name> session "<name>" --ref <ref>`; ListAgents
 prints `This session is <name> [<ref>]`, and names can repeat, so keep the ref), so
 people and agents can message your session directly. After `river done`, run `river --as <your-name> go` again
 at once, in the same turn: do not stop to report between items. When go gives
-you no item (role IDLE), run `river --as <your-name> wait` (give the shell
-command a 10-minute limit). It prints WORK (run go), no work yet (run wait
-again), or END: no work came within `wait_max` (30m), river unregistered you,
-and you stop. Stop also when you need the user; then report everything you
-finished. A person turns this off with `river config set auto_continue off`.
+you no item (role IDLE), run `river --as <your-name> wait` in the foreground
+(not as a background command; give the shell command a 10-minute limit). A
+blocking wait costs no tokens, and it keeps you available for new work. It
+prints WORK (run go), no work yet (run wait again), or END: no work came
+within `wait_max` (45m), river unregistered you, and you stop. After each
+item, end in `river wait`, never at your prompt. Stop also when you need the user (file a human item first; see
+below); then report everything you finished. A person turns this off with
+`river config set auto_continue off`. River never types into your terminal:
+when you sit idle at your prompt, `river serve` gives new work or an answer for
+you to a fresh session, and ends you after `idle_end` (15m) with nothing in hand.
 
 ## Identity (by hand)
 
@@ -198,18 +203,22 @@ The queue is what notifies them (`river needs-you`, phone, mail), and it keeps
 the step visible after the chat ends.
 
 ```
-river add "Approve the refund policy draft" --doer human --blocks <your-id> \
+river add "Approve the refund policy draft" --doer human --blocks <your-id> --release \
   --context "Five decisions at the end of docs/legal/refund-draft.md; answer each yes/no"
 ```
 
 - Say exactly what to decide or do and where the material is, so the user can
   act without asking you.
-- Link it: `--blocks <id>` when your item waits on it (add `--release` and run
-  `river go` again if you cannot continue), `--found-during <id>` otherwise.
+- Link it: `--blocks <id>` when your item waits on it, `--found-during <id>` otherwise.
+- Do not wait at your prompt for the answer. Commit what is finished, say in
+  `--context` what is left, release (`--release`), and run `river go` again:
+  you take other work, or wait in `river wait`. When the person answers (marks their item done,
+  or answers your question), `river serve` starts a fresh session for your
+  item, with the answer in its notes (setting `fresh_sessions`).
 - A short question that needs no item: `river send question --to <person> "..." --item <id>`.
   The go briefing lists the people by name.
 - Then tell the user in chat too, with the item id.
-- With `--keep` you hold your item while you wait for the answer, but at most
+- With `--keep` (only for an answer that comes in minutes) you hold your item while you wait for the answer, but at most
   `human_wait_max` (30m). Then river releases your item (it still waits on the
   person's item), reminds the person, and tells you to take other work:
   run `river go`. When the person finishes, the item is ready for whoever runs go.
