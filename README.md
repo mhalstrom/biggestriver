@@ -299,9 +299,11 @@ placeholder drops out. MaximizePM turned an older Claude Code or Codex command
 that a profile builds exactly into a profile once; `maxpm config get
 launch_agents` says what changed.
 From the command line, `maxpm launch [--project P | --item N] [--agent A]
-[--model M] [--effort E] [--option NAME=VALUE] [--tab|--window|--tmux] [--dry-run]` does the same as the
+[--model M] [--effort E] [--option NAME=VALUE] [--prompt TEXT] [--tab|--window|--tmux] [--dry-run]` does the same as the
 dialog (a manager session uses it); `--dry-run` prints the project, the item,
 and the command without opening a terminal.
+`--prompt` gives the new session its own first instruction: the agent gets
+the profile's prompt (go), a blank line, then the text, at most 4000 characters.
 Start with the work left at "Next" spreads sessions: first the project with
 ready agent work and no agent yet whose top item is most important, and only
 when every such project has an agent, the top item. Start names the new
