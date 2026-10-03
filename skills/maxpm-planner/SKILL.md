@@ -58,7 +58,7 @@ maxpm project add <name> [--rank N] --description "..."   # lower-case name
 maxpm project describe <name> "..."
 maxpm project show <name>
 maxpm project rank <name> <N>                          # 1 = most important overall
-maxpm project rename <name> <new>                      # all of it follows; the old name works 90 more days
+maxpm project rename <name> <new>                      # all of it follows; the old name stops at once
 maxpm project list
 maxpm target add <name> --description "how it deploys"  # where projects ship to
 maxpm project target <name> <target>                   # each project has at most one

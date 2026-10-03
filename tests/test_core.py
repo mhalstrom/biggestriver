@@ -3453,11 +3453,10 @@ class BusyLease(Base):
 
 
 class Rename(Base):
-    """maxpm project rename and maxpm target rename: everything follows, and the old name is an alias."""
+    """maxpm project rename and maxpm target rename: everything follows, and the old name stops at once."""
 
     def setUp(self):
         super().setUp()
-        core.ALIASES_USED.clear()
         self.folder = os.path.realpath(self.dir.name)
         core.target_add(self.c, "site", "push to main")
         core.project_add(self.c, "old", notes="the tool", path=self.folder, target="site")
@@ -3491,33 +3490,16 @@ class Rename(Base):
         self.assertTrue(core.go(self.c, self.folder)["agent"].startswith("new-"))
         self.assertEqual(core.go(self.c, self.folder, "old-1a2b")["agent"], "old-1a2b")
 
-    def test_the_old_name_finds_the_project_until_its_time_ends(self):
+    def test_the_old_name_is_unknown_at_once(self):
         res = core.project_rename(self.c, "old", "new", "t")
-        self.assertEqual(core.project_show(self.c, "new")["aliases"], [{"name": "old", "until": res["alias_until"]}])
-        self.assertEqual(core.project_show(self.c, "old")["name"], "new")
-        self.assertEqual(core.ALIASES_USED, {("project", "old"): ("new", res["alias_until"])})
-        added = core.item_add(self.c, "old", "more", actor="t")
-        self.assertEqual(added["project"], "new")
-        self.assertEqual(len(core.item_list(self.c, "old")), 2)
-        self.assertEqual({a["project"] for a in core.ready_list(self.c, "other,old")}, {"new"})
-        self.assertEqual(core.next_item(self.c, "old", claim=True, actor="w1")[0]["project"], "new")
-        self.assertEqual(core.go(self.c, "/", "w1", project="old")["projects"], ["new"])
-        self.assertEqual(core.plan(self.c, "/", project="old")["projects"], ["new"])
-        self.assertEqual(core.config_set(self.c, "lease_ttl", "1h", project="old")["scope"], "project:new")
-        self.assertEqual(core.project_describe(self.c, "old", "the tool, renamed")["description"], "the tool, renamed")
-        self.assertEqual(core.project_known(self.c, "old"), "new")
-        self.assertEqual([p["name"] for p in core.project_list(self.c) if p["aliases"]], ["new"])
-        with self.assertRaisesRegex(RiverError, "old name of project new"):
-            core.project_add(self.c, "old")
-        with self.assertRaisesRegex(RiverError, "old name of project new"):
-            core.project_rename(self.c, "other", "old")
-        # After the alias time (90 days) the old name is refused with the new name, and it is free again.
-        with mock.patch.object(core, "now", lambda t=core.now(): t + timedelta(days=91)):
-            with self.assertRaisesRegex(RiverError, "project old is now new: use the new name"):
-                core.item_list(self.c, "old")
-            self.assertEqual(core.project_show(self.c, "new")["aliases"], [])
-            self.assertIsNone(core.project_known(self.c, "old"))
-            self.assertEqual(core.project_add(self.c, "old")["name"], "old")
+        self.assertNotIn("alias_until", res)
+        self.assertNotIn("aliases", core.project_show(self.c, "new"))
+        for call in (lambda: core.project_show(self.c, "old"), lambda: core.item_list(self.c, "old"),
+                     lambda: core.item_add(self.c, "old", "more", actor="t")):
+            with self.assertRaisesRegex(RiverError, "no project 'old'"):
+                call()
+        # The old name is free at once, for a new project or for a rename.
+        self.assertEqual(core.project_add(self.c, "old")["name"], "old")
         self.assertEqual(core.item_list(self.c, "old"), [])
 
     def test_a_rename_needs_a_free_name_and_can_go_back(self):
@@ -3526,19 +3508,21 @@ class Rename(Base):
                 core.project_rename(self.c, "old", new)
         with self.assertRaisesRegex(RiverError, "no project 'gone'"):
             core.project_rename(self.c, "gone", "new")
-        self.assertEqual(core.project_rename(self.c, "old", "new", alias_for="0")["alias_until"], None)
-        # --alias-for 0: the old name stops at once.
-        with self.assertRaisesRegex(RiverError, "no project 'old'"):
-            core.item_list(self.c, "old")
-        with self.assertRaisesRegex(RiverError, "bad duration"):
-            core.project_rename(self.c, "new", "newer", alias_for="soon")
-        # Back to the first name: the name it takes back is its own alias, and the other name becomes one.
-        core.project_rename(self.c, "new", "newer", alias_for="7d")
+        core.project_rename(self.c, "old", "new")
         core.project_rename(self.c, "new", "old")
-        self.assertEqual(sorted(a["name"] for a in core.project_show(self.c, "old")["aliases"]), ["new", "newer"])
-        core.project_rename(self.c, "newer", "new")
-        self.assertEqual([a["name"] for a in core.project_show(self.c, "new")["aliases"]], ["newer", "old"])
         self.assertEqual([i["id"] for i in core.item_list(self.c, "old")], [self.item])
+        with self.assertRaisesRegex(RiverError, "no project 'new'"):
+            core.item_list(self.c, "new")
+
+    def test_an_old_queue_loses_its_aliases_table(self):
+        self.c.execute("CREATE TABLE aliases (kind TEXT NOT NULL, alias TEXT NOT NULL, ref_id INTEGER NOT NULL, "
+                       "created_at TEXT NOT NULL, until TEXT, PRIMARY KEY (kind, alias))")
+        self.c.execute("INSERT INTO aliases VALUES ('project', 'older', 1, '2026-10-01T00:00:00Z', '2027-01-01T00:00:00Z')")
+        self.c.commit()
+        self.c.close()
+        self.c = core.connect(self.path)
+        self.assertIsNone(self.c.execute("SELECT 1 FROM sqlite_master WHERE name='aliases'").fetchone())
+        self.assertEqual(core.project_show(self.c, "old")["name"], "old")
 
     def test_a_target_takes_its_projects_its_items_and_its_deploy_project(self):
         dep = core.ship(self.c, self.item, "t")
@@ -3559,39 +3543,42 @@ class Rename(Base):
         self.assertEqual(core.project_show(self.c, "old")["target"], "web")
         self.assertTrue(core._project(self.c, "deploy-web")["notes"].startswith("Deploys to target web,"))
         self.assertEqual(core.setting(self.c, "review", item_id=dep["id"]), "on")
-        shown = core.target_show(self.c, "site")
-        self.assertEqual((shown["name"], [a["name"] for a in shown["aliases"]], sorted(p["name"] for p in shown["projects"])),
-                         ("web", ["site"], ["deploy-web", "old"]))
-        self.assertEqual(core.project_known(self.c, "deploy-site"), "deploy-web")
-        # The next ship request joins the same deploy item, and the old target name still takes an owner.
+        shown = core.target_show(self.c, "web")
+        self.assertEqual((shown["name"], sorted(p["name"] for p in shown["projects"])), ("web", ["deploy-web", "old"]))
+        self.assertNotIn("aliases", shown)
+        # The old names of the target and of its deploy project are unknown at once.
+        with self.assertRaisesRegex(RiverError, "no target 'site'"):
+            core.target_show(self.c, "site")
+        with self.assertRaisesRegex(RiverError, "no project 'deploy-site'"):
+            core.project_show(self.c, "deploy-site")
+        # The next ship request joins the same deploy item.
         second = self.add("old", "more")
         self.assertEqual(core.ship(self.c, second, "t")["id"], dep["id"])
-        self.assertEqual(core.target_own(self.c, "site", "w1")["owner"], "w1")
-        self.assertEqual(core.project_target(self.c, "other", "site")["target"], "web")
+        self.assertEqual(core.target_own(self.c, "web", "w1")["owner"], "w1")
+        self.assertEqual(core.project_target(self.c, "other", "web")["target"], "web")
         self.assertEqual([t["name"] for t in core.targets_view(self.c) if t["pending"]], ["web"])
 
-    def test_the_command_renames_and_says_when_an_old_name_was_used(self):
+    def test_the_command_renames_and_says_that_the_old_name_stops(self):
         from river import cli
         old_env = os.environ.get("MAXPM_DB")
         os.environ["MAXPM_DB"] = self.path
         try:
             def run(*words):
                 out, err = io.StringIO(), io.StringIO()
-                core.ALIASES_USED.clear()
                 with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                     cli.run(list(words))
                 return out.getvalue(), err.getvalue()
-            out, err = run("project", "rename", "old", "new", "--alias-for", "30d")
+            out, err = run("project", "rename", "old", "new")
             self.assertIn("project old is now new: 1 items, 1 goals", out)
-            self.assertIn("the old name old still works until", out)
-            self.assertNotIn("is now", err)
-            out, err = run("list", "--project", "old")
-            self.assertIn("write it", out)
-            self.assertIn("(project old is now new: use the new name; the old name works until", err)
-            self.assertIn("new  (1 open)  [target site]  (old name: old until", run("project", "list")[0])
+            self.assertIn("the old name old does not work from now on", out)
+            self.assertNotIn("old name", err)
+            self.assertIn("new  (1 open)  [target site]\n", run("project", "list")[0])
             out, err = run("target", "rename", "site", "web")
             self.assertIn("target site is now web: 1 projects and 0 deploy, review and monitor items follow", out)
-            self.assertIn("web  (old name: site until", run("target", "show", "site")[0])
+            self.assertIn("the old name site does not work from now on", out)
+            self.assertTrue(run("target", "show", "web")[0].startswith("web\n"))
+            with self.assertRaises(SystemExit):
+                run("project", "rename", "new", "newer", "--alias-for", "30d")
         finally:
             if old_env is None:
                 del os.environ["MAXPM_DB"]

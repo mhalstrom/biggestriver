@@ -456,17 +456,6 @@ CREATE TABLE IF NOT EXISTS notifications (
   UNIQUE (event_id, channel)
 );
 
--- The old name of a renamed project or target (maxpm project rename, maxpm target rename): it finds
--- the row with the new name until `until` (NULL: no end), so running agents and old instructions work.
-CREATE TABLE IF NOT EXISTS aliases (
-  kind        TEXT NOT NULL CHECK (kind IN ('project','target')),
-  alias       TEXT NOT NULL,
-  ref_id      INTEGER NOT NULL,
-  created_at  TEXT NOT NULL,
-  until       TEXT,
-  PRIMARY KEY (kind, alias)
-);
-
 CREATE INDEX IF NOT EXISTS items_status ON items(status);
 CREATE INDEX IF NOT EXISTS deps_blocked_by ON deps(blocked_by);
 CREATE INDEX IF NOT EXISTS events_item ON events(item_id);
@@ -732,6 +721,8 @@ def _migrate(conn):
         conn.execute("ALTER TABLE goals ADD COLUMN shared INTEGER NOT NULL DEFAULT 0")
     if "held_at" not in {r["name"] for r in conn.execute("PRAGMA table_info(items)")}:
         conn.execute("ALTER TABLE items ADD COLUMN held_at TEXT")
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='aliases'").fetchone():
+        conn.execute("DROP TABLE aliases")  # the old names of renamed projects and targets are gone (#810)
 
 
 class tx:
@@ -1177,73 +1168,18 @@ def set_agent_model(conn, name, model):
 
 # ---------------------------------------------------------------- projects
 
-# How long the old name of a renamed project or target still finds it (rename --alias-for).
-ALIAS_TTL = "90d"
-# The old names this process used, for one note to the caller: {(kind, old name): (new name, until)}.
-ALIASES_USED = {}
-
-
-def _alias(conn, kind, name):
-    """The project or target row an old name stands for; None when the name was never one. An old name
-    past its time is refused with the new name."""
-    a = conn.execute("SELECT * FROM aliases WHERE kind=? AND alias=?", (kind, name)).fetchone()
-    r = a and conn.execute(f"SELECT * FROM {kind}s WHERE id=?", (a["ref_id"],)).fetchone()
-    if not r:
-        return None
-    if a["until"] and parse_iso(a["until"]) < now():
-        raise RiverError(f"{kind} {name} is now {r['name']}: use the new name (the old name worked until {a['until']})")
-    ALIASES_USED[(kind, name)] = (r["name"], a["until"])
-    return r
-
-
-def _alias_until(alias_for):
-    """rename --alias-for as an end time: a duration (default ALIAS_TTL); 0 or none: no alias (False)."""
-    text = str(ALIAS_TTL if alias_for is None else alias_for).strip().lower()
-    if text in ("0", "none", "no", "off"):
-        return False
-    return iso(now() + parse_duration(text))
-
-
 def _new_name(conn, kind, row, new):
-    """Check the new name of a project or target (inside a tx): refused when the name is in use, as a
-    name or as the old name of another one. The row's own old name is free to take back."""
+    """Check the new name of a project or target (inside a tx): refused when the name is in use."""
     if not re.match(r"^[a-z0-9][a-z0-9._-]*$", new or ""):
         raise RiverError(f"{kind} names use lower-case letters, digits, '.', '_', '-'")
     if new == row["name"]:
         raise RiverError(f"{kind} {new} has that name already")
     if conn.execute(f"SELECT 1 FROM {kind}s WHERE name=?", (new,)).fetchone():
         raise RiverError(f"{kind} {new!r} exists; a rename needs a name that is free")
-    _free_alias(conn, kind, new, but=row["id"])
-
-
-def _free_alias(conn, kind, name, but=None):
-    """Before a project or target gets `name`: refuse while it is the old name of another one; an old name
-    past its time, or of the row `but` itself, is removed. Inside a tx."""
-    a = conn.execute("SELECT * FROM aliases WHERE kind=? AND alias=?", (kind, name)).fetchone()
-    if not a:
-        return
-    r = conn.execute(f"SELECT name FROM {kind}s WHERE id=?", (a["ref_id"],)).fetchone()
-    if r and a["ref_id"] != but and not (a["until"] and parse_iso(a["until"]) < now()):
-        raise RiverError(f"{name!r} is the old name of {kind} {r['name']}"
-                         + (f" until {a['until']}" if a["until"] else "") + "; pick another name")
-    conn.execute("DELETE FROM aliases WHERE kind=? AND alias=?", (kind, name))
-
-
-def _set_alias(conn, kind, alias, ref_id, until):
-    if until:
-        conn.execute("INSERT OR REPLACE INTO aliases(kind,alias,ref_id,created_at,until) VALUES (?,?,?,?,?)",
-                     (kind, alias, ref_id, iso(now()), until))
-
-
-def aliases_of(conn, kind, ref_id):
-    """The old names of a project or target that still find it."""
-    return [{"name": a["alias"], "until": a["until"]} for a in conn.execute(
-        "SELECT alias, until FROM aliases WHERE kind=? AND ref_id=? ORDER BY created_at, alias", (kind, ref_id))
-        if not (a["until"] and parse_iso(a["until"]) < now())]
 
 
 def _project(conn, name):
-    r = conn.execute("SELECT * FROM projects WHERE name=?", (name,)).fetchone() or _alias(conn, "project", name)
+    r = conn.execute("SELECT * FROM projects WHERE name=?", (name,)).fetchone()
     if not r:
         names = [x["name"] for x in conn.execute("SELECT name FROM projects WHERE archived=0 ORDER BY rank")]
         raise RiverError(f"no project {name!r}; projects: {', '.join(names) or '(none; maxpm project add <name>)'}")
@@ -1256,7 +1192,6 @@ def project_add(conn, name, rank=None, notes="", actor=None, path=None, target=N
     with tx(conn):
         if conn.execute("SELECT 1 FROM projects WHERE name=?", (name,)).fetchone():
             raise RiverError(f"project {name!r} exists")
-        _free_alias(conn, "project", name)
         top = conn.execute("SELECT COALESCE(MAX(rank),0) m FROM projects").fetchone()["m"]
         conn.execute("INSERT INTO projects(name,rank,notes,created_at) VALUES (?,?,?,?)",
                      (name, top + 1, notes, iso(now())))
@@ -1363,7 +1298,6 @@ def project_show(conn, name):
         worked_recently=recent,
         goals=goal_list(conn, name, include_complete=False),
         tracker=setting(conn, "tracker", project_id=p["id"]),
-        aliases=aliases_of(conn, "project", p["id"]),
     )
     return p
 
@@ -1374,7 +1308,6 @@ def project_list(conn):
         "FROM projects p WHERE archived=0 ORDER BY rank, id")]
     for r in rows:
         r["tracker"] = setting(conn, "tracker", project_id=r["id"])
-        r["aliases"] = aliases_of(conn, "project", r["id"])
     return rows
 
 
@@ -1392,23 +1325,15 @@ def project_tracker(conn, name, text=None, actor=None):
     return {"name": p["name"], "tracker": setting(conn, "tracker", project_id=p["id"])}
 
 
-def project_known(conn, name):
-    """The name now of the project with this name, or with this old name while it still works; else None."""
-    try:
-        return _project(conn, name)["name"]
-    except RiverError:
-        return None
-
-
 def _names(conn, project):
-    """A project name or a comma list as the projects' names now (the old name of a renamed project finds it)."""
+    """A project name or a comma list as the projects' names now."""
     return [_project(conn, n.strip())["name"] for n in str(project).split(",") if n.strip()]
 
 
-def _rename_project(conn, p, new, actor, until):
+def _rename_project(conn, p, new, actor):
     """Inside a tx: project row p gets the name new. Items, goals, review steps, the folder, the rank and the
     target hold the project's id, so they follow; the settings of the project and the projects that waiting
-    agents named hold its name, so they change here. The old name finds the project until `until`."""
+    agents named hold its name, so they change here. The old name stops at once."""
     old = p["name"]
     conn.execute("UPDATE projects SET name=? WHERE id=?", (new, p["id"]))
     moved = conn.execute("UPDATE OR REPLACE settings SET scope=? WHERE scope=?",
@@ -1420,20 +1345,17 @@ def _rename_project(conn, p, new, actor, until):
             conn.execute("UPDATE agents SET waiting_in=? WHERE name=?",
                          (",".join(new if n == old else n for n in names), a["name"]))
             waiting += 1
-    _set_alias(conn, "project", old, p["id"], until)
-    _event(conn, None, actor, f"project {old} renamed to {new}"
-           + (f"; the old name works until {until}" if until else "; the old name stops now"))
-    return {"name": new, "was": old, "alias_until": until or None, "settings": moved, "waiting_agents": waiting,
+    _event(conn, None, actor, f"project {old} renamed to {new}")
+    return {"name": new, "was": old, "settings": moved, "waiting_agents": waiting,
             "items": conn.execute("SELECT COUNT(*) n FROM items WHERE project_id=?", (p["id"],)).fetchone()["n"],
             "goals": conn.execute("SELECT COUNT(*) n FROM goals WHERE project_id=?", (p["id"],)).fetchone()["n"]}
 
 
-def project_rename(conn, old, new, actor=None, alias_for=None):
+def project_rename(conn, old, new, actor=None):
     """Give a project a new name, in one transaction. Refused when the new name is in use. Everything of
     the project follows: items, goals, review steps, folder, rank, target, tracker and settings. The old
-    name stays an alias for alias_for (ALIAS_TTL; 0: none), so running agents and old instructions work.
-    Agents keep their names; a new agent gets the new name as its prefix. History keeps the old texts."""
-    until = _alias_until(alias_for)
+    name stops at once. Agents keep their names; a new agent gets the new name as its prefix. History
+    keeps the old texts."""
     with tx(conn):
         p = _project(conn, old)
         _new_name(conn, "project", p, new)
@@ -1443,14 +1365,13 @@ def project_rename(conn, old, new, actor=None, alias_for=None):
                              f"it; rename the target: maxpm target rename {t} <new>")
         if new.startswith("deploy-") and conn.execute("SELECT 1 FROM targets WHERE name=?", (new[7:],)).fetchone():
             raise RiverError(f"{new} is the name for the deploy items of target {new[7:]}; pick another name")
-        return _rename_project(conn, p, new, actor, until)
+        return _rename_project(conn, p, new, actor)
 
 
-def target_rename(conn, old, new, actor=None, alias_for=None):
+def target_rename(conn, old, new, actor=None):
     """Give a deploy target a new name, in one transaction: its projects, its deploy, review and monitor
     items (open ones also get the new name in their title), and its deploy project (deploy-<target>)
-    follow. Refused when the new name is in use. The old names stay aliases for alias_for (ALIAS_TTL)."""
-    until = _alias_until(alias_for)
+    follow. Refused when the new name is in use. The old names stop at once."""
     with tx(conn):
         t = _target(conn, old)
         old = t["name"]
@@ -1468,17 +1389,15 @@ def target_rename(conn, old, new, actor=None, alias_for=None):
         conn.execute("UPDATE items SET title=? || found_during WHERE kind='monitor' AND target=? "
                      f"AND title=? || found_during AND status IN {OPEN_STATES}",
                      (f"Monitor the {new} deploy #", new, f"Monitor the {old} deploy #"))
-        res = {"name": new, "was": old, "alias_until": until or None, "projects": projects, "items": items,
+        res = {"name": new, "was": old, "projects": projects, "items": items,
                "deploy_project": None}
         if dp is not None:
-            res["deploy_project"] = _rename_project(conn, dp, f"deploy-{new}", actor, until)["name"]
+            res["deploy_project"] = _rename_project(conn, dp, f"deploy-{new}", actor)["name"]
             was = f"Deploys to target {old},"
             if dp["notes"].startswith(was):
                 conn.execute("UPDATE projects SET notes=? WHERE id=?",
                              (f"Deploys to target {new}," + dp["notes"][len(was):], dp["id"]))
-        _set_alias(conn, "target", old, t["id"], until)
-        _event(conn, None, actor, f"target {old} renamed to {new}"
-               + (f"; the old name works until {until}" if until else "; the old name stops now"))
+        _event(conn, None, actor, f"target {old} renamed to {new}")
     return res
 
 
@@ -1739,7 +1658,7 @@ def goal_reopen(conn, name, actor=None):
 # ---------------------------------------------------------------- deploy targets
 
 def _target(conn, name):
-    r = conn.execute("SELECT * FROM targets WHERE name=?", (name,)).fetchone() or _alias(conn, "target", name)
+    r = conn.execute("SELECT * FROM targets WHERE name=?", (name,)).fetchone()
     if not r:
         names = [x["name"] for x in conn.execute("SELECT name FROM targets ORDER BY name")]
         raise RiverError(f"no target {name!r}; targets: {', '.join(names) or '(none; maxpm target add <name> --description ...)'}")
@@ -1753,7 +1672,6 @@ def target_add(conn, name, description="", actor=None):
     with tx(conn):
         if conn.execute("SELECT 1 FROM targets WHERE name=?", (name,)).fetchone():
             raise RiverError(f"target {name!r} exists")
-        _free_alias(conn, "target", name)
         conn.execute("INSERT INTO targets(name,description,created_at) VALUES (?,?,?)", (name, description, iso(now())))
         _event(conn, None, actor, f"target {name} added")
     return target_show(conn, name)
@@ -1902,7 +1820,6 @@ def target_list(conn):
 def target_show(conn, name):
     t = dict(_target(conn, name))
     name = t["name"]
-    t["aliases"] = aliases_of(conn, "target", t["id"])
     t["projects"] = [dict(r) for r in conn.execute(
         "SELECT p.name, p.rank, p.notes, (SELECT COUNT(*) FROM items i WHERE i.project_id=p.id "
         "AND i.status IN ('open','in_progress','held')) open_items "
