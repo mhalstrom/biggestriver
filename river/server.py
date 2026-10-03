@@ -1126,6 +1126,7 @@ def setup_status(conn):
         "claude_home": Path("~/.claude").expanduser().is_dir(),
         "skills": {n: ("installed" if (skills / n / "SKILL.md").is_file() else "missing") for n in ("river", "river-planner")},
         "launch_agents": [label for label, _ in agents],
+        "launch_in": core._launch_in(conn, None),
         # Each Start button agent, and whether its program is on this computer (the first word of its command).
         "start_agents": [{"label": label, "found": bool(term.get(core.entry_exe(cmd)))} for label, cmd in agents],
         "agent_clis": [{"label": label, "found": bool(term.get(exe)), "added": label in have,

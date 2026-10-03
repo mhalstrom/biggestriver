@@ -1000,7 +1000,9 @@ function renderSetup(st) {
   const none = !ready.length && !addable.length;
   const addBtns = addable.map(a => `<button class="btn${ready.length ? "" : " primary"}" data-su="agent" data-label="${esc(a.label)}" title="${esc(a.command)}">Add ${esc(a.label)}</button>`).join("");
   out.push(step(ready.length > 0, "Choose an agent",
-    ready.length ? "The Start button opens " + ready.map(esc).join(" or ") + "."
+    ready.length ? "The Start button opens " + ready.map(esc).join(" or ")
+        + (st.launch_in === "tmux" ? " in a tmux pane (<code>river view</code> in a terminal shows every agent side by side)."
+          : st.launch_in === "tab" ? " in a Terminal tab (with tmux installed, in a tmux pane: one terminal shows every agent)." : ".")
         + (addable.length ? ` Also on this Mac: <span class="fix" style="display:inline-flex">${addBtns}</span>` : "")
       : none ? `No AI coding agent is installed on this Mac yet. Install one, then check again:
           <a href="https://docs.claude.com/en/docs/claude-code/setup" target="_blank" rel="noopener">Claude Code</a> or

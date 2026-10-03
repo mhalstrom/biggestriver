@@ -121,6 +121,10 @@ SETUP = """Setting up agents to use river
      river config set lease_ttl 7d --agent <person>
 
 5. Watch it:  river serve --open
+   Sessions that river starts (river launch, the page's Start, fresh sessions)
+   open in tmux when tmux is installed (river view shows them all in one
+   terminal), else in a Terminal tab. To choose: river config set launch_in
+   tmux|tab|window   (auto is the default).
 
 6. Optional, the Claude desktop app: plan, manage, and answer what waits on
    you from a chat (river runs it with no folder):
@@ -2549,7 +2553,10 @@ def render(a, res):
     if c == "config":
         if "overrides" in res:
             for k, v in res["defaults"].items():
-                print(f"{k} = {v} (default)")
+                print(f"{k} = {v} (default)" + (
+                    (": tmux, because tmux is installed" if core.tmux_path() else
+                     ": tab, because tmux is not installed (brew install tmux; Linux: apt install tmux)")
+                    if (k, v) == ("launch_in", "auto") else ""))
             for o in res["overrides"]:
                 print(f"{o['key']} = {o['value']} ({o['scope']})")
         elif "migrated" in res:

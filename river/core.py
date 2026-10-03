@@ -91,7 +91,9 @@ DEFAULT_SETTINGS = {
     "launch_agents": "Claude Code=@claude-code",
     # Where a new session opens: a Terminal tab or window (macOS; Windows always opens a console window), or
     # tmux: a pane of the tmux session "river" on any system, and `river view` shows them all side by side.
-    "launch_in": "tab",
+    # auto (the default): tmux when tmux is installed, else tab. Every start uses it: river launch, the page's
+    # Start and Dispatch, and the fresh sessions of river serve.
+    "launch_in": "auto",
     # How river reaches a running session through its own platform, so a working agent sees a queue
     # instruction, a stop, or a message at once: "Label=ENV_VAR: command" entries separated by ";". river go
     # records the platform whose ENV_VAR is set in the session's environment, and its value as the address;
@@ -872,8 +874,8 @@ def config_set(conn, key, value, project=None, item=None, agent=None, actor=None
         raise RiverError("review is on or off")
     elif key == "setup_done" and value not in ("on", "off"):
         raise RiverError("setup_done is on or off")
-    elif key == "launch_in" and value not in LAUNCH_INS:
-        raise RiverError("launch_in is tab, window, or tmux")
+    elif key == "launch_in" and value not in ("auto", *LAUNCH_INS):
+        raise RiverError("launch_in is auto, tab, window, or tmux")
     elif key == "auto_continue" and value not in ("on", "off"):
         raise RiverError("auto_continue is on or off")
     elif key == "fresh_sessions" and value not in ("on", "off"):
@@ -5915,9 +5917,12 @@ def _start_next(conn):
 
 
 def _launch_in(conn, project_id, choice=None):
+    """Where a new session opens: the choice of one start, else the setting launch_in; auto is tmux when
+    tmux is installed, else tab."""
     if choice not in (None, "", *LAUNCH_INS):
         raise RiverError("launch_in is tab, window, or tmux")
-    return choice or setting(conn, "launch_in", project_id=project_id)
+    where = choice or setting(conn, "launch_in", project_id=project_id)
+    return ("tmux" if tmux_path() else "tab") if where == "auto" else where
 
 
 def _launch_agent_cmd(conn, project_id, agent, model=None, effort=None, options=None, name=None):
@@ -6055,7 +6060,7 @@ def state(conn):
         "model_ladder": parse_ladder(setting(conn, "model_ladder")),
         "model_ids": model_ids(conn),
         "launch_options": launch_options(conn),
-        "launch_in": setting(conn, "launch_in"),
+        "launch_in": _launch_in(conn, None),
         "tmux": bool(tmux_path()),  # the launch dialog offers tmux only when it is installed
         "start_next": _start_next(conn),
         "queues": {r["agent"]: queue_list(conn, r["agent"], ann)["entries"]

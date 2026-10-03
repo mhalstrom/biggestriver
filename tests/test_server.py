@@ -793,7 +793,7 @@ class LaunchInTmux(unittest.TestCase):
         y = core.item_add(self.c, "shop", "second")["id"]
         with self.assertRaisesRegex(RiverError, "works on macOS and Windows only"):
             server.launch_agent(self.c)  # the setting says tab, and Linux has no Terminal app
-        with self.assertRaisesRegex(RiverError, "launch_in is tab, window, or tmux"):
+        with self.assertRaisesRegex(RiverError, "launch_in is auto, tab, window, or tmux"):
             core.config_set(self.c, "launch_in", "screen")
         core.config_set(self.c, "launch_in", "tmux")
         t = server.launch_agent(self.c)
@@ -886,7 +886,9 @@ class LaunchInTmux(unittest.TestCase):
         self.assertIn("(its agent ended: river view --tidy closes it)", river("view", "--list"))
         self.assertIn(f"closed (its agent ended): #{x} work", river("view", "--tidy"))
         # Open chat for an agent in a pane, with no web link, names river view.
-        self.assertIs(core.state(self.c)["tmux"], bool(__import__("shutil").which("tmux")))
+        self.assertIs(core.state(self.c)["tmux"], False)  # the tests see no tmux (tests/__init__.py)
+        with mock.patch.object(core, "tmux_path", lambda: "/opt/homebrew/bin/tmux"):
+            self.assertIs(core.state(self.c)["tmux"], True)
         self.tmux.panes.append({"id": "%5", "window": "@0", "name": "#9 other", "agent": "w1", "running": "claude", "keys": []})
         self.tmux.windows["@0"] = {"name": "w", "tile": ""}
         self.assertEqual(server._tmux_pane_of("/dev/ttys005")["name"], "#9 other")
@@ -1195,6 +1197,32 @@ class LaunchInTmux(unittest.TestCase):
         with mock.patch.object(server, "watch_prompts", lambda c: (looks.append(1), stop.set())):
             notify.loop(stop, interval_s=1)
         self.assertEqual(looks, [1])
+
+    def test_tmux_is_the_default_when_tmux_is_installed(self):
+        from unittest import mock
+        core.register(self.c, "mark", human=True)
+        core.item_add(self.c, "shop", "first")
+        core.item_add(self.c, "shop", "second")
+        self.assertEqual(core.setting(self.c, "launch_in"), "auto")
+        # No tmux on this computer: a Terminal tab, as before (and Linux has no Terminal app).
+        self.assertEqual((core.state(self.c)["launch_in"], server.setup_status(self.c)["launch_in"]), ("tab", "tab"))
+        with self.assertRaisesRegex(RiverError, "works on macOS and Windows only"):
+            server.launch_agent(self.c)
+        # tmux is installed: every start opens a tmux pane, also the fresh sessions of river serve.
+        with mock.patch.object(core, "tmux_path", lambda: "/opt/homebrew/bin/tmux"):
+            self.assertEqual((core.state(self.c)["launch_in"], server.setup_status(self.c)["launch_in"]), ("tmux", "tmux"))
+            t = server.launch_agent(self.c)
+            self.assertEqual((t["launch_in"], t["tmux_pane"]), ("tmux", "%0"))
+            core.unregister(self.c, t["session_name"])
+            self.assertEqual(server.start_fresh(self.c, t["item"]["id"], "an answer came for it")["launch_in"], "tmux")
+            self.assertEqual(len(self.tmux.panes), 2)
+            # The setting of a person wins over auto, and auto can be set again.
+            core.config_set(self.c, "launch_in", "tab")
+            self.assertEqual(core.state(self.c)["launch_in"], "tab")
+            core.config_set(self.c, "launch_in", "auto")
+            self.assertEqual(core.state(self.c)["launch_in"], "tmux")
+            # One start can still choose.
+            self.assertEqual(core.launch_target(self.c, launch_in="window")["launch_in"], "window")
 
     def test_work_for_an_agent_idle_at_its_prompt_goes_to_a_fresh_session(self):
         import threading
