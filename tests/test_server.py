@@ -2073,13 +2073,13 @@ class ServeReload(unittest.TestCase):
                 core.config_set(self.c, "serve_reload", "maybe")
 
     def test_the_new_server_keeps_the_arguments_but_does_not_open_the_page_again(self):
-        with mock.patch.object(sys, "argv", ["/x/bin/river", "serve", "--port", "8765", "--open"]):
-            self.assertEqual(server._restart_argv(), [sys.executable, "/x/bin/river", "serve", "--port", "8765"])
+        with mock.patch.object(sys, "argv", ["/x/bin/maxpm", "serve", "--port", "8765", "--open"]):
+            self.assertEqual(server._restart_argv(), [sys.executable, "/x/bin/maxpm", "serve", "--port", "8765"])
             ran = []
             with mock.patch.object(os, "execv", lambda exe, argv: ran.append((exe, argv))), \
                     contextlib.redirect_stdout(io.StringIO()):
                 server.restart_now()
-            self.assertEqual(ran, [(sys.executable, [sys.executable, "/x/bin/river", "serve", "--port", "8765"])])
+            self.assertEqual(ran, [(sys.executable, [sys.executable, "/x/bin/maxpm", "serve", "--port", "8765"])])
 
     def test_only_the_loop_of_river_serve_starts_again(self):
         import threading

@@ -9,7 +9,7 @@ needs nothing installed. Run from this repo (`npm start`), it uses Python 3.10
 or newer from the machine (PATH, then the usual Homebrew and system places)
 and says so if Python is missing. It uses
 the same queue as the `maxpm` command (`MAXPM_DB`, else
-`~/.biggestriver/river.db`).
+`~/.maximizepm/maxpm.db`).
 
 ```
 cd desktop

@@ -1254,36 +1254,19 @@ class GoalClaim(Base):
 
 
 class DbLocation(unittest.TestCase):
-    def setUp(self):
-        self.dir = tempfile.TemporaryDirectory()
-        self.old = (core.HOME_DB, core.LEGACY_DB, os.environ.pop("MAXPM_DB", None))
-        core.HOME_DB = __import__("pathlib").Path(self.dir.name, "home", "river.db")
-        core.LEGACY_DB = __import__("pathlib").Path(self.dir.name, "clone", "data", "river.db")
-
-    def tearDown(self):
-        core.HOME_DB, core.LEGACY_DB, env = self.old
-        if env is not None:
-            os.environ["MAXPM_DB"] = env
-        self.dir.cleanup()
-
-    def test_clone_keeps_its_file_until_moved(self):
-        self.assertEqual(core.db_path(), core.HOME_DB)  # nothing yet: the home file
-        c = core.connect(core.LEGACY_DB)
-        core.project_add(c, "a")
-        core.item_add(c, "a", "x")
-        core.register(c, "busy-agent")
-        c.close()
-        self.assertEqual(core.db_path(), core.LEGACY_DB)  # a clone with data keeps using it
-        with self.assertRaises(RiverError):
-            core.db_move()  # an agent was active a moment ago
-        r = core.db_move(force=True)
-        self.assertEqual((r["items"], core.db_path()), (1, core.HOME_DB))
-        self.assertFalse(core.LEGACY_DB.exists())
-        c = core.connect()
-        self.assertEqual(c.execute("SELECT title FROM items").fetchone()[0], "x")
-        c.close()
-        with self.assertRaises(RiverError):
-            core.db_move(force=True)  # already moved
+    def test_the_queue_is_one_file_in_the_home_folder_or_where_the_variable_says(self):
+        from pathlib import Path
+        old = os.environ.pop("MAXPM_DB", None)
+        try:
+            self.assertEqual(str(core.HOME_DB), "~/.maximizepm/maxpm.db")
+            self.assertEqual(core.db_path(), core.HOME_DB.expanduser())
+            os.environ["MAXPM_DB"] = "/tmp/other.db"
+            self.assertEqual(core.db_path(), Path("/tmp/other.db"))
+            self.assertIn("set by MAXPM_DB", core.queue_note())
+        finally:
+            os.environ.pop("MAXPM_DB", None)
+            if old is not None:
+                os.environ["MAXPM_DB"] = old
 
 
 class SkillsInstall(unittest.TestCase):
@@ -2181,9 +2164,6 @@ class CommandNames(unittest.TestCase):
         self.assertIn('maxpm = "river.cli:main"', text)
         self.assertNotIn('river = "river.cli:main"', text)
         self.assertIn('name = "maximizepm"', text)
-
-    def test_the_data_stays_in_the_folder_of_the_first_name(self):
-        self.assertEqual(str(core.HOME_DB), "~/.biggestriver/river.db")
 
 
 class AgentBlock(unittest.TestCase):
@@ -3251,7 +3231,7 @@ class Kill(Base):
             self.assertTrue(core._between("maxpm.exe", "maxpm go"))
             self.assertTrue(core._between("python.exe", r"C:\py\python.exe C:\tools\maximizepm\bin\maxpm go"))
             self.assertTrue(core._between("python.exe", "python.exe -m river go"))  # the package is river
-            self.assertFalse(core._between("python.exe", r"D:\biggestriver\venv\python.exe agent.py"))
+            self.assertFalse(core._between("python.exe", r"D:\maximizepm\venv\python.exe agent.py"))
             self.assertFalse(core._between("node.exe", "node claude.js go"))
         self.p.kill()
         self.p.wait(10)

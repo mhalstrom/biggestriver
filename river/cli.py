@@ -798,11 +798,9 @@ def build_parser():
     x.add_argument("--dir", default="~/.claude/skills", help="skills folder (default ~/.claude/skills)")
     x.add_argument("--copy", action="store_true", help="copy the files instead of linking them")
     x.add_argument("--force", action="store_true", help="replace a folder that is not a link (your edits there are lost)")
-    db = sub.add_parser("db", help="where the queue database is, and moving it to ~/.biggestriver")
+    db = sub.add_parser("db", help="where the queue database is")
     dbs = db.add_subparsers(dest="dcmd", required=True)
     dbs.add_parser("path", help="print the database file MaximizePM uses")
-    x = dbs.add_parser("move", help="copy a clone's data/river.db to ~/.biggestriver/river.db and use it from now on")
-    x.add_argument("--force", action="store_true", help="even when agents were active in the last 10 minutes")
     sub.add_parser("mcp", help="an MCP server on stdin/stdout, for agents that cannot run shell commands")
     x = sub.add_parser("guide", help="how to use MaximizePM: worker loop, planner, or agent setup")
     x.add_argument("which", nargs="?", default="worker",
@@ -994,11 +992,7 @@ def run(argv=None):
             print(line)
         return 0
     if args.cmd == "db":
-        if args.dcmd == "move":
-            r = core.db_move(args.force)
-            print(f"moved {r['items']} items: {r['from']} -> {r['to']}; the old file is kept as {r['backup']}")
-        else:
-            print(core.db_path())
+        print(core.db_path())
         return 0
     if args.cmd == "mcp":
         from . import mcp

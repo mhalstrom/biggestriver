@@ -102,13 +102,9 @@ pipx install git+https://github.com/mhalstrom/maximizepm
 
 The package carries the agent guides (`maxpm guide`, `maxpm guide planner`);
 `maxpm skills install` links them into `~/.claude/skills` (`--copy` copies
-them instead). The queue database is one file per user, `~/.biggestriver/river.db`; set
-`MAXPM_DB` to use another file. A clone that already has `data/river.db`
-keeps using it until you run `maxpm db move`, which copies it to the home
-folder (stop agent sessions and `maxpm serve` first). `maxpm db path` shows
-the file in use. If your agents run in a sandbox, allow them to write to
-`~/.biggestriver` before you move it. The folder keeps the product's first name
-(Biggest River), so no queue moves.
+them instead). The queue database is one file per user, `~/.maximizepm/maxpm.db`; set
+`MAXPM_DB` to use another file. `maxpm db path` shows the file in use. If your
+agents run in a sandbox, allow them to write to `~/.maximizepm`.
 
 
 ## Desktop app
