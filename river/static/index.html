@@ -124,7 +124,7 @@
             </div>
           </details>
           <details style="margin-top:8px"><summary>Add a project</summary>
-            <div class="sub" style="margin-top:8px">A project is usually a folder you work in: river links it, and agents started there use the queue.</div>
+            <div class="sub" style="margin-top:8px">A project is usually a folder you work in: MaximizePM links it, and agents started there use the queue.</div>
             <div id="projFolderForm"></div>
             <div class="sub" style="margin-top:8px">A project without a folder (for example tasks for people):</div>
             <div class="form" style="margin-top:4px"><input id="projName" placeholder="name (lower-case)"><button class="btn" id="projGo">Add project</button></div>
@@ -174,7 +174,7 @@
       <h2>Settings</h2>
       <div class="muted" style="font-size:12px;margin-bottom:8px">The most specific value wins: item, then agent, then project, then global, then the built-in default.<br>
         <b>launch_agents</b> lists the agents the Start button offers, as <code>Label=command</code> entries separated by <code>;</code>. The first is the default.
-        <code>@claude-code</code> and <code>@codex</code> are launch profiles: river builds the command from their options, the <b>claude_*</b> and <b>codex_*</b> settings (Remote Control, permission or sandbox mode, more arguments, the first prompt; the setup guide has toggles for them). <code>@codex sandbox=read-only</code> sets an option for that entry alone. For example:
+        <code>@claude-code</code> and <code>@codex</code> are launch profiles: MaximizePM builds the command from their options, the <b>claude_*</b> and <b>codex_*</b> settings (Remote Control, permission or sandbox mode, more arguments, the first prompt; the setup guide has toggles for them). <code>@codex sandbox=read-only</code> sets an option for that entry alone. For example:
         <code>Claude Code=@claude-code; Plan first=@claude-code permission_mode=plan; Codex=@codex; Grok=grok "run river go in this folder and follow the briefing"</code>.
         Any other command is custom: <code>{model}</code> and <code>{effort}</code> take the launch dialog's choice, and with no choice the flag before them drops out.</div>
       <div style="margin-bottom:8px"><button class="btn" id="openSetup">Open setup guide</button></div>
@@ -215,14 +215,14 @@
     <h2 id="readyTitle" style="margin:0">Ready for agents</h2>
     <button class="iconbtn" id="readyClose" title="Close">✕</button>
   </div>
-  <div class="muted" style="font-size:13px;margin:4px 0 8px">Most important first. Dispatch gives the item to a session that waits for work in its project; else it starts a new agent in the project folder, and that agent's first river go takes this item.</div>
+  <div class="muted" style="font-size:13px;margin:4px 0 8px">Most important first. Dispatch gives the item to a session that waits for work in its project; else it starts a new agent in the project folder, and that agent's first <code>maxpm go</code> takes this item.</div>
   <div id="readyList"></div>
 </div></div>
 
 <!-- An old river serve with a new page cannot serve app.js: say so instead of showing a dead page. -->
 <script>function riverLoadFailed() { var d = document.createElement("div"); d.id = "loadFailed";
   d.style.cssText = "position:fixed;left:0;right:0;top:0;z-index:99;padding:14px 18px;background:#fde7e6;color:#b42318;font:14px system-ui,sans-serif";
-  d.textContent = "The page could not load its code (app.js). The river serve that runs this page is older than the page: stop it (Ctrl-C in its terminal) and start it again with river serve.";
+  d.textContent = "The page could not load its code (app.js). The maxpm serve that runs this page is older than the page: stop it (Ctrl-C in its terminal) and start it again with maxpm serve.";
   document.body.prepend(d); }</script>
 <script src="vendor/tabulator/tabulator.min.js"></script>
 <script type="module" src="app.js" onerror="riverLoadFailed()"></script>

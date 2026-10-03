@@ -119,7 +119,7 @@ export function itemDrawerHtml(it, { S, me }) {
       ${it.reserved_until ? `<div>Pushed to <b>${esc(it.reserved_for)}</b> by ${esc(it.reserved_by || "?")} · ${left(it.reserved_until)} left · <span class="link" data-unpush="${it.id}">cancel</span></div>`
         : `<div class="actions"><select id="dPushTo">${S.agents.filter(a => a.name !== me).map(a => `<option>${esc(a.name)}</option>`).join("")}</select>
            <input id="dPushNote" placeholder="note (optional)" style="flex:1"><button class="btn" data-do="push">Push</button></div>
-           <div class="muted" style="font-size:12px;margin-top:4px">Or drag the item row onto an agent. It is reserved for them for a while; their river go takes it first.</div>`}
+           <div class="muted" style="font-size:12px;margin-top:4px">Or drag the item row onto an agent. It is reserved for them for a while; their next maxpm go takes it first.</div>`}
     </div>` : ""}
     ${it.replan ? `<div class="sec"><h4>Replan</h4><div>${it.late_prereqs} prerequisites were added while it was claimed, so it is bigger than planned. Split or re-scope it, then <span class="link" data-do="replanned">clear the mark</span>.</div></div>` : ""}
     <div class="sec"><h4>Outside blocker</h4>

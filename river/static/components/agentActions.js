@@ -10,7 +10,7 @@ export function managerHtml(S) {
   const m = S.manager;
   if (!m) {
     return `<div class="st">No manager is running. A manager plans with you, starts agents, fills their queues, and stops stuck ones.</div>
-      <div class="actions" style="margin-top:6px"><button class="btn primary" data-start-manager="1" title="Opens the launch dialog; the agent starts with river manage">▶ Start manager</button></div>`;
+      <div class="actions" style="margin-top:6px"><button class="btn primary" data-start-manager="1" title="Opens the launch dialog; the agent starts with maxpm manage">▶ Start manager</button></div>`;
   }
   return `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="dot ${esc(m.state)}"></span><b>${esc(m.name)}</b>
       ${m.platform ? chip("c-p", esc(m.platform)) : ""}${m.model ? chip("c-p", esc(m.model)) : ""}${chip(m.state === "active" ? "c-ready" : "c-waiting", esc(m.state))}
@@ -75,7 +75,7 @@ export function chooseStop(a) {
       <button class="btn primary" data-stop-go="1">Ask it to stop</button>
     </div>
     ${a.can_kill ? `<div id="killConfirm" class="hidden" style="margin-top:10px;padding:8px;border:1px solid var(--line);border-radius:8px">
-      <b>Kill PID ${esc(a.pid)} now?</b> Emergency only: uncommitted work in its folder is lost. River releases its items, goals, and targets.
+      <b>Kill PID ${esc(a.pid)} now?</b> Emergency only: uncommitted work in its folder is lost. MaximizePM releases its items, goals, and targets.
       <div style="display:flex;justify-content:flex-end;margin-top:6px"><button class="btn primary" data-kill-go="1">Kill ${esc(a.name)}</button></div></div>` : ""}`;
   if (done) finish(null);
   dlg.open();

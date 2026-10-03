@@ -60,7 +60,7 @@ async function startRiver({ riverRoot, python, env = process.env, timeoutMs = 20
     ? "from python.org, or: winget install Python.Python.3.13" : "for example: brew install python") + "), then open the app again.");
   const [pyCmd, ...pyArgs] = Array.isArray(py) ? py : [py];
   const bin = path.join(riverRoot, "bin", "river");
-  if (!fs.existsSync(bin)) throw new Error(`river is missing from ${riverRoot}`);
+  if (!fs.existsSync(bin)) throw new Error(`MaximizePM is missing from ${riverRoot}`);
   const port = await freePort();
   const child = spawn(pyCmd, [...pyArgs, bin, "serve", "--port", String(port)],
     { cwd: riverRoot, env: { ...env, RIVER_DESKTOP: "1", PYTHONFAULTHANDLER: "1",
@@ -78,7 +78,7 @@ async function startRiver({ riverRoot, python, env = process.env, timeoutMs = 20
   });
   const until = Date.now() + timeoutMs;
   while (Date.now() < until) {
-    if (child.exitCode !== null) throw new Error(`river serve stopped (exit ${child.exitCode}):\n${log.trim().slice(-800)}`);
+    if (child.exitCode !== null) throw new Error(`maxpm serve stopped (exit ${child.exitCode}):\n${log.trim().slice(-800)}`);
     if (await get(url + "api/state") === 200) return { url, port, child, stop };
     await new Promise((r) => setTimeout(r, 200));
   }
@@ -87,7 +87,7 @@ async function startRiver({ riverRoot, python, env = process.env, timeoutMs = 20
     await new Promise((resolve) => { child.once("exit", resolve); child.kill("SIGABRT"); setTimeout(resolve, 2000).unref(); });
   }
   await stop();
-  throw new Error(`river serve did not answer on ${url} within ${timeoutMs / 1000}s:\n${log.trim().slice(0, 4000)}`);
+  throw new Error(`maxpm serve did not answer on ${url} within ${timeoutMs / 1000}s:\n${log.trim().slice(0, 4000)}`);
 }
 
 module.exports = { findPython, bundledPython, freePort, startRiver };

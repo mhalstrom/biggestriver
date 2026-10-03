@@ -165,7 +165,7 @@ function draw(prev) {
       <div class="actions" style="align-items:center"><span class="muted" style="font-size:12px">Open in:</span>
         <label style="display:flex;gap:4px;align-items:center"><input type="radio" name="lIn" value="tab" ${where === "tab" ? "checked" : ""}>a new tab</label>
         <label style="display:flex;gap:4px;align-items:center"><input type="radio" name="lIn" value="window" ${where === "window" ? "checked" : ""}>a new window</label>
-        ${S.tmux || where === "tmux" ? `<label style="display:flex;gap:4px;align-items:center" title="A pane of the tmux session river. Run river view in a terminal to see every agent side by side."><input type="radio" name="lIn" value="tmux" ${where === "tmux" ? "checked" : ""}>tmux</label>` : ""}</div>
+        ${S.tmux || where === "tmux" ? `<label style="display:flex;gap:4px;align-items:center" title="A pane of the tmux session river. Run maxpm view in a terminal to see every agent side by side."><input type="radio" name="lIn" value="tmux" ${where === "tmux" ? "checked" : ""}>tmux</label>` : ""}</div>
     </div>
     <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px">
       <button class="btn" data-launch-cancel="1">Cancel</button>

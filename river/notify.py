@@ -172,11 +172,11 @@ def setup_ntfy(conn, url=None, token=None, actor=None):
         "  1. Install the ntfy app (App Store or Google Play).",
         f"  2. Subscribe to topic {topic}" + ("" if server == "https://ntfy.sh" else f" on server {server}") + ".",
         "     Keep the topic secret: anyone who knows it can read these notifications.",
-        "  3. Test it: river notify test ntfy",
+        "  3. Test it: maxpm notify test ntfy",
         "     No banner or lock-screen alert? In the phone's settings, allow notifications for the ntfy app",
         "     (banners, lock screen, sound) and exempt it from Focus / Do Not Disturb and battery limits.",
-        "     river sends at ntfy priority high (river config set ntfy_priority urgent|default|low|min).",
-        "River shows only the end of the topic from now on (river config get ntfy_topic).",
+        "     MaximizePM sends at ntfy priority high (maxpm config set ntfy_priority urgent|default|low|min).",
+        "MaximizePM shows only the end of the topic from now on (maxpm config get ntfy_topic).",
     ]}
 
 
@@ -201,14 +201,14 @@ def compose(conn, rows):
         # waits on a prompt in its terminal and has no such link: its Terminal on the page.
         url = (core.origin_session_url(conn, r["item_id"], r["message_id"])
                or page_url(conn, r["item_id"], core.prompt_alert_agent(conn, r["message_id"])))
-        return "River: needs you", r["summary"], url
+        return "MaximizePM: needs you", r["summary"], url
     lines = [f"- {r['summary']}" for r in rows[:10]]
     if len(rows) > 10:
         lines.append(f"- and {len(rows) - 10} more")
     # One session behind every row: open it; else the page (phones get ntfy_click instead).
     urls = {core.origin_session_url(conn, r["item_id"], r["message_id"]) for r in rows}
     url = urls.pop() if len(urls) == 1 and None not in urls else page_url(conn)
-    return f"River: {len(rows)} things need you", "\n".join(lines), url
+    return f"MaximizePM: {len(rows)} things need you", "\n".join(lines), url
 
 
 def _adapter(conn, channel):
@@ -253,7 +253,7 @@ def run(conn, now_=False):
 def test(conn, channel):
     """Send a test message on one channel now, outside the outbox."""
     try:
-        _adapter(conn, channel)("River: test", "This is a test notification from river notify test.",
+        _adapter(conn, channel)("MaximizePM: test", "This is a test notification from maxpm notify test.",
                                   core.session_url_from_env() or page_url(conn))
     except RiverError:
         raise

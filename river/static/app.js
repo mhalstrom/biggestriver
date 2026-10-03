@@ -123,7 +123,7 @@ function renderAgents() {
   const done = S.tmux_done || [];
   $("#tidyPanes").classList.toggle("hidden", !done.length);
   $("#tidyPanes").textContent = `Close ${done.length} finished`;
-  $("#tidyPanes").title = "Close the tmux panes of the sessions that are done (river view --tidy). A session that holds work, or shows a prompt, stays.\n"
+  $("#tidyPanes").title = "Close the tmux panes of the sessions that are done (maxpm view --tidy). A session that holds work, or shows a prompt, stays.\n"
     + done.map(p => `${p.name}: ${p.why}`).join("\n");
   // The panel redraws every few seconds: leave it alone while someone picks from a Give work menu.
   if (document.activeElement && document.activeElement.matches("#agents select")) return;
@@ -179,13 +179,13 @@ function renderTargets() {
   $("#targets").innerHTML = T.map(t => nyCard(`<b>${esc(t.name)}</b>
         ${ownerChip(t.owner)}${t.owner ? `<span class="muted" style="font-size:12px">${t.owner_expires_at ? left(t.owner_expires_at) + " left" : ""}</span>` : ""}
         <span class="muted" style="font-size:12px">${t.project_names.length ? "projects: " + t.project_names.map(esc).join(", ") : "no projects"}</span>`, `${t.description ? `<div class="ny-c">${esc(clip(t.description, 300))}</div>` : ""}
-      <div class="muted" style="font-size:12px">${t.monitor ? "monitor after each deploy: " + esc(clip(t.monitor, 200)) : `no monitor (a session follows each deploy when you set one: river target monitor ${esc(t.name)} "&lt;what to watch, for how long&gt;")`}</div>
+      <div class="muted" style="font-size:12px">${t.monitor ? "monitor after each deploy: " + esc(clip(t.monitor, 200)) : `no monitor (a session follows each deploy when you set one: maxpm target monitor ${esc(t.name)} "&lt;what to watch, for how long&gt;")`}</div>
       ${t.pending.map(d => `<div class="st" style="margin-top:4px"><span class="link" data-open="${d.id}">#${d.id}</span> ${d.ready ? "ready to deploy" : d.status === "open" ? "collecting" : esc(d.status.replace("_", " ")) + (d.assignee ? " · " + esc(d.assignee) : "")}: ${shipList(d.ships)}${d.review ? `<div class="muted" style="font-size:12px">first a review: <span class="link" data-open="${d.review.id}">#${d.review.id}</span> (${esc(d.review.status.replace("_", " "))}${d.review.assignee ? " · " + esc(d.review.assignee) : ""})</div>` : ""}${monitorLines(d)}</div>`).join("") || '<div class="st muted">No pending ship requests.</div>'}
       <div class="actions" style="margin-top:6px">${t.pending.some(d => d.status === "open" && d.ships.length)
         ? agentStart(S.launch_agents, [
             { label: "Deploy now", cls: "btn primary", attrs: `data-deploy="${esc(t.name)}"`, title: "Start the deploy now: the owner gets an alert, or the chosen agent opens to take it" },
             { label: "Review and deploy", attrs: `data-deploy="${esc(t.name)}" data-review="1"`, title: "First one review of everything it ships (review steps per project), then the deploy" }])
-        : '<span class="muted" style="font-size:12px">Nothing to deploy: ship items first (river ship &lt;id&gt;, or done --ship).</span>'}</div>
+        : '<span class="muted" style="font-size:12px">Nothing to deploy: ship items first (maxpm ship &lt;id&gt;, or done --ship).</span>'}</div>
       <div class="st" style="margin-top:6px"><b>Deploys</b></div>
       ${(t.history || []).map(h => `<div class="st" style="margin-top:4px"><span class="link" data-open="${h.id}">#${h.id}</span> ${ago(h.closed_at)}${h.done_by ? " by " + esc(h.done_by) : ""}${h.output ? ": " + esc(clip(h.output, 200)) : ""}<div class="muted" style="font-size:12px">shipped ${shipList(h.ships)}</div>${monitorLines(h)}</div>`).join("") || '<div class="st muted">Never deployed.</div>'}`)).join("") || `<div class="muted">No deploy targets. Add one: river target add &lt;name&gt; --description "how it deploys"</div>`;
 }
@@ -625,7 +625,7 @@ function notifyNew() {
   const fresh = NY.filter(e => !known.has(e.id));
   if (!first && "Notification" in window && Notification.permission === "granted") {
     for (const e of fresh.slice(0, 5)) {
-      const n = new Notification("River: needs you", { body: e.summary, tag: "river-" + e.id });
+      const n = new Notification("MaximizePM: needs you", { body: e.summary, tag: "river-" + e.id });
       n.onclick = () => { window.focus(); if (promptAlert(e)) openTerminal(e.from_agent); else if (e.item_id) openDrawer(e.item_id); n.close(); };
     }
   }
@@ -677,7 +677,7 @@ document.addEventListener("click", async (e) => {
     return; }
   if (t.dataset.startManager) {
     const ch = await chooseLaunch(S, { title: "Start the manager", go: "Start manager",
-      what: "Manager: plans with you, starts agents, fills their queues, and stops stuck ones (river manage)" });
+      what: "Manager: plans with you, starts agents, fills their queues, and stops stuck ones (maxpm manage)" });
     if (!ch) return;
     try { const r = await act("start_manager", launchArgs(ch)); toast(`Started ${r.agent} as ${r.session_name}, the manager`); } catch (e) { /* toast shown */ }
     return; }
@@ -733,7 +733,7 @@ document.addEventListener("click", async (e) => {
   if (t.dataset.deploy) {
     if (t.dataset.busy) return; t.dataset.busy = "1"; setTimeout(() => delete t.dataset.busy, 4000);
     const ch = await chooseLaunch(S, { title: t.dataset.review ? "Review and deploy" : "Deploy now", go: "Start",
-      what: `${t.dataset.review ? "review and deploy" : "deploy"} ${t.dataset.deploy} (when the target has an owner, river alerts the owner instead)` });
+      what: `${t.dataset.review ? "review and deploy" : "deploy"} ${t.dataset.deploy} (when the target has an owner, MaximizePM alerts the owner instead)` });
     if (!ch) return;
     try {
       const r = await act("deploy_now", { target: t.dataset.deploy, review: !!t.dataset.review, ...launchArgs(ch) });
@@ -969,17 +969,17 @@ function renderSetup(st) {
   const extra = (ok, title, sub, fix) => `<div class="step"><div class="mark ${ok ? "ok" : "opt"}">${ok ? "✓" : "·"}</div>
     <div><b>${title}</b>${sub ? `<div class="sub">${sub}</div>` : ""}${!ok && fix ? `<div class="fix">${fix}</div>` : ""}</div></div>`;
   const out = [];
-  out.push(step(st.people.length > 0, "Tell river your name",
+  out.push(step(st.people.length > 0, "Tell MaximizePM your name",
     st.people.length ? "You're here as " + st.people.map(esc).join(", ") + ". Pick your name at the top right if it isn't chosen."
-      : "So river can show you what needs you, and let you know.",
+      : "So MaximizePM can show you what needs you, and let you know.",
     `<input id="suName" placeholder="your name" style="width:160px"><button class="btn primary" data-su="register">Save</button>`));
   // Agents run `river go`: a new terminal must find the river command (the app writes a small launcher).
   const rc = st.river_cmd || {};
-  if (!rc.unsupported) out.push(step(rc.ok, "Let agents use river",
+  if (!rc.unsupported) out.push(step(rc.ok, "Let agents use MaximizePM",
     rc.ok ? `Agents can run the river command${rc.shell_path ? ` (${esc(rc.shell_path)})` : ""}.`
       : rc.in_app_image ? "First drag MaximizePM to your Applications folder, then open it from there."
-      : rc.launcher === "old" ? "The river command still points at an older copy of river. Update it to this one."
-      : "The agents you start talk to river with a small command. One click adds it to this Mac.",
+      : rc.launcher === "old" ? "The river command still points at an older copy of MaximizePM. Update it to this one."
+      : "The agents you start talk to MaximizePM with a small command, river. One click adds it to this Mac.",
     rc.in_app_image ? "" : `<button class="btn primary" data-su="rivercmd">${rc.launcher === "old" ? "Update" : "Add"} the river command</button>`));
   // One instructions file for every agent: AGENTS.md holds the rules, CLAUDE.md imports it (@AGENTS.md).
   const blocks = st.folders.filter(f => f.exists && (f.claude_md !== "current" || f.agents_md !== "current"));
@@ -1001,7 +1001,7 @@ function renderSetup(st) {
   const addBtns = addable.map(a => `<button class="btn${ready.length ? "" : " primary"}" data-su="agent" data-label="${esc(a.label)}" title="${esc(a.command)}">Add ${esc(a.label)}</button>`).join("");
   out.push(step(ready.length > 0, "Choose an agent",
     ready.length ? "The Start button opens " + ready.map(esc).join(" or ")
-        + (st.launch_in === "tmux" ? " in a tmux pane (<code>river view</code> in a terminal shows every agent side by side)."
+        + (st.launch_in === "tmux" ? " in a tmux pane (<code>maxpm view</code> in a terminal shows every agent side by side)."
           : st.launch_in === "tab" ? " in a Terminal tab (with tmux installed, in a tmux pane: one terminal shows every agent)." : ".")
         + (addable.length ? ` Also on this Mac: <span class="fix" style="display:inline-flex">${addBtns}</span>` : "")
       : none ? `No AI coding agent is installed on this Mac yet. Install one, then check again:
@@ -1041,7 +1041,7 @@ function renderSetup(st) {
   const more = howStart ? [howStart] : [];
   const missing = Object.entries(st.skills).filter(([, v]) => v !== "installed").map(([k]) => k);
   if (st.claude_home) more.push(extra(missing.length === 0, "Claude Code skills",
-    missing.length ? "Teach Claude Code river's full workflow (missing: " + missing.join(", ") + ")." : "river and river-planner are installed.",
+    missing.length ? "Teach Claude Code MaximizePM's full workflow (missing: " + missing.join(", ") + ")." : "river and river-planner are installed.",
     `<button class="btn" data-su="skills">Install skills</button>`));
   more.push(extra(st.ntfy_ready && st.notify_channels.includes("ntfy"), "Phone notifications",
     st.ntfy_ready ? "Channels: " + (st.notify_channels.map(esc).join(", ") || "none") : "Get a push on your phone when something needs you (ntfy).",
@@ -1126,7 +1126,7 @@ window.addEventListener("hashchange", openFromHash);
 // Update button: shows how many new commits the river clone is missing; a click pulls them and restarts the server.
 // It also says when the server itself is out of date: code changed on disk after it started (mode "restart"),
 // or the server is too old to know the update route (mode "old": only a manual restart helps).
-const RESTART_BY_HAND = "This page is newer than its server. Stop river serve (Ctrl-C in its terminal) and start it again.";
+const RESTART_BY_HAND = "This page is newer than its server. Stop maxpm serve (Ctrl-C in its terminal) and start it again.";
 let updateMode = "update";
 async function checkUpdate() {
   const r = await fetch("/api/update"), b = $("#updateBtn");
@@ -1144,7 +1144,7 @@ async function checkUpdate() {
   b.textContent = u.behind ? `Update · ${u.behind} new` : u.stale ? "Restart · new code" : "Update";
   b.title = u.behind ? "New in MaximizePM:\n" + u.commits.join("\n")
       + (u.ahead ? `\n\nThis clone also has ${u.ahead} commit(s) of its own, so it cannot fast-forward: push or rebase them first.` : "")
-    : u.stale ? "MaximizePM's code changed since this server started. The server starts again by itself within a minute of the commit; river serve --restart does it now."
+    : u.stale ? "MaximizePM's code changed since this server started. The server starts again by itself within a minute of the commit; maxpm serve --restart does it now."
     : u.fetch_error ? "Could not check for updates: " + u.fetch_error
     : `Up to date (${u.head})` + (u.ahead ? `; this clone has ${u.ahead} commit(s) not on ${u.upstream} yet` : "");
 }
@@ -1153,7 +1153,7 @@ async function waitForRestart(boot) {
     await new Promise(res => setTimeout(res, 500));
     try { const s = await (await fetch("/api/update?fetch=0")).json(); if (s.boot !== boot) return location.reload(); } catch (e) {}
   }
-  toast("The server did not come back; run river serve again", true);
+  toast("The server did not come back; run maxpm serve again", true);
 }
 $("#updateBtn").onclick = async () => {
   if (updateMode === "old") return toast(RESTART_BY_HAND, true);

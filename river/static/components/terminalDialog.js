@@ -167,7 +167,7 @@ async function tick() {
     if (who !== agent) return;
     if (!r.ok) { $("#termNote").textContent = j.error || "no terminal"; wait = 3000; }
     else showScreen(j);
-  } catch (e) { $("#termNote").textContent = "river serve does not answer"; wait = 3000; }
+  } catch (e) { $("#termNote").textContent = "maxpm serve does not answer"; wait = 3000; }
   if (who === agent) timer = setTimeout(tick, wait);
 }
 

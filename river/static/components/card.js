@@ -22,7 +22,7 @@ export function goalCard(g, { selected, me }) {
     open && me && g.owner === me ? `<span class="link" data-goal-act="release" data-g="${esc(g.name)}">release</span>` : "",
     `<span class="link" data-goal-act="edit" data-g="${esc(g.name)}">edit</span>`,
     open ? (g.shared ? `<span class="link" data-goal-act="unshare" data-g="${esc(g.name)}" title="One agent can own this goal again">unshare</span>`
-      : `<span class="link" data-goal-act="share" data-g="${esc(g.name)}" title="No owner: river go gives this goal to no agent, and its items stay open to every agent">share</span>`) : "",
+      : `<span class="link" data-goal-act="share" data-g="${esc(g.name)}" title="No owner: maxpm go gives this goal to no agent, and its items stay open to every agent">share</span>`) : "",
     open ? `<span class="link" data-goal-act="done" data-g="${esc(g.name)}">complete</span>` : `<span class="link" data-goal-act="reopen" data-g="${esc(g.name)}">reopen</span>`,
   ].filter(Boolean).join("");
   return `<div class="goal${selected ? " on" : ""}${open ? "" : " complete"}" data-goal="${esc(g.name)}" title="${esc(tip)}">
