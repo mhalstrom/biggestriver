@@ -1802,6 +1802,9 @@ def render_manage(b):
             f"  kill:    {r} stop <agent> --kill --reason \"...\"   emergency only, and only after the user says yes",
             f"  targets: {r} target give <target> --to <agent>",
             f"  config:  {r} config set launch_agents|default_model|default_effort ...",
+            (f"  tidy:    river serve closes the tmux panes of finished sessions every tidy_every {b['tidy_every']}; "
+             f"river view --tidy does it now" if core.parse_duration(b["tidy_every"]).total_seconds() else
+             f"  tidy:    tidy_every is 0s: run river view --tidy for the tmux panes of finished sessions"),
             (f"In a chat, run {r} manage again when the user asks what changed (manage --watch is for a terminal)."
              if b.get("chat") else
              f"Then watch: keep {r} manage --watch running as a background command (Claude Code: run_in_background "

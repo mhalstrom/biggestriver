@@ -783,6 +783,7 @@ class LaunchInTmux(unittest.TestCase):
         if self.in_tmux is not None:
             os.environ["TMUX"] = self.in_tmux
         core.PLATFORM, server.TMUX_RUNNER = self.platform, None
+        server.TIDY.update(at=None, screens={})
         self.c.close()
         os.environ.pop("RIVER_DB", None)
         self.dir.cleanup()
@@ -965,6 +966,70 @@ class LaunchInTmux(unittest.TestCase):
         calls = len(self.tmux.calls)
         self.assertEqual([p["name"] for p in server.tmux_done(self.c)], [panes[other]["name"]])
         self.assertFalse(any(c[0] == "display-message" for c in self.tmux.calls[calls:]))
+
+    def test_river_serve_tidies_every_tidy_every_and_never_a_busy_agent(self):
+        import threading
+        from unittest import mock
+        from river import notify
+        core.config_set(self.c, "launch_in", "tmux")
+        clock = [core.now()]
+        fake_now = mock.patch.object(core, "now", lambda: clock[0])
+        fake_now.start()
+        self.addCleanup(fake_now.stop)
+
+        def tick(seconds):
+            clock[0] += core.timedelta(seconds=seconds)
+            return [c["name"] for c in server.auto_tidy(self.c)]
+        # No agent runs in tmux yet: nothing to close, and the pass waits tidy_every for the next look.
+        self.assertEqual(tick(0), [])
+        calls = len(self.tmux.calls)
+        self.assertEqual(tick(60), [])
+        self.assertEqual(self.tmux.calls[calls:], [])  # not due: no tmux command at all
+        for n in range(4):
+            core.item_add(self.c, "shop", f"work {n}")
+        ended, idle, busy, works = [server.launch_agent(self.c, "shop")["session_name"] for _ in range(4)]
+        panes = {name: p for name, p in zip((ended, idle, busy, works), self.tmux.panes)}
+        for name, p in panes.items():
+            p["screen"] = f"{name} at its prompt"
+        panes[ended]["running"] = "zsh"  # the agent CLI ended: a shell is all that is left
+        core.unregister(self.c, idle)  # the CLI stays open, and the agent left the queue
+        core.unregister(self.c, busy)
+        # Due after tidy_every (20m): the pane with a shell closes at once; the open CLIs wait for idle_after (2m).
+        self.assertEqual(tick(18 * 60), [])
+        self.assertEqual(tick(60), [panes[ended]["name"]])
+        for seconds in (40, 40):
+            panes[busy]["screen"] += "\n... working"  # its screen changes: a busy agent stays
+            self.assertEqual(tick(seconds), [])
+        self.assertEqual(tick(40), [panes[idle]["name"]])  # the same screen for 2m
+        panes[busy]["screen"] += "\n... done"
+        self.assertEqual((tick(60), tick(60)), ([], []))
+        self.assertEqual(tick(60), [panes[busy]["name"]])
+        self.assertEqual([p["agent"] for p in self.tmux.panes], [works])  # a session in the queue stays
+        # After a pass with nothing left to wait for, the next one comes after tidy_every.
+        core.unregister(self.c, works)
+        self.assertEqual(tick(60), [])
+        calls = len(self.tmux.calls)
+        self.assertEqual((tick(18 * 60), self.tmux.calls[calls:]), ([], []))
+        self.assertEqual((tick(60), tick(120)), ([], [panes[works]["name"]]))
+        # 0s: never; and the setting is a duration.
+        core.item_add(self.c, "shop", "work 4")
+        server.launch_agent(self.c, "shop")
+        last = self.tmux.panes[-1]
+        last["running"] = "zsh"
+        core.config_set(self.c, "tidy_every", "0s")
+        self.assertEqual(tick(3600), [])
+        with self.assertRaisesRegex(RiverError, "bad duration"):
+            core.config_set(self.c, "tidy_every", "often")
+        core.config_set(self.c, "tidy_every", "5m")
+        self.assertEqual(tick(0), [last["name"]])
+        # The manager's briefing names it, and the loop of river serve runs the pass every time.
+        self.assertEqual(core.manage(self.c, self.dir.name)["tidy_every"], "5m")
+        stop, looks = threading.Event(), []
+        with mock.patch.object(server, "watch_prompts", lambda c: None), \
+                mock.patch.object(server, "fresh_sessions", lambda c: None), \
+                mock.patch.object(server, "auto_tidy", lambda c: (looks.append(1), stop.set())):
+            notify.loop(stop, interval_s=1)
+        self.assertEqual(looks, [1])
 
     def test_tmux_is_not_installed(self):
         server.TMUX_RUNNER = None
@@ -1385,6 +1450,21 @@ class LaunchInTmux(unittest.TestCase):
         self.assertEqual([p["name"] for p in server.tmux_done(self.c)], ["#1 first: a | b"])
         self.assertEqual([c["name"] for c in server.tmux_tidy(self.c)["closed"]], ["#1 first: a | b"])
         self.assertEqual(sorted(p["name"] for p in server.tmux_view(None, conn=self.c)["panes"]), ["#2 second", "#4 fourth", "#5 fifth"])
+        # river serve tidies by itself: a shell closes at once, an open CLI after the same screen for idle_after, a prompt never.
+        server._open_terminal({"project": "shop", "path": self.dir.name, "session_title": "#8 eighth", "command": "sleep 60",
+                               "launch_in": "tmux"}, {"RIVER_AGENT": "shop-dddd"})
+        panes(lambda p: p["name"] != "#8 eighth" or p["running"] == "sleep")
+        server._tmux("send-keys", "-t", other, "C-c")
+        panes(lambda p: p["name"] != "#2 second" or p["ended"])
+        self.addCleanup(server.TIDY.update, at=None, screens={})
+        clock = [core.now()]
+        with mock.patch.object(core, "now", lambda: clock[0]):
+            self.assertEqual([c["name"] for c in server.auto_tidy(self.c)], ["#2 second"])
+            clock[0] += core.timedelta(minutes=1)
+            self.assertEqual(server.auto_tidy(self.c), [])
+            clock[0] += core.timedelta(minutes=1)
+            self.assertEqual([c["name"] for c in server.auto_tidy(self.c)], ["#8 eighth"])
+        self.assertEqual(sorted(p["name"] for p in server.tmux_view(None)["panes"]), ["#4 fourth", "#5 fifth"])
 
 
 class Watched(unittest.TestCase):

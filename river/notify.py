@@ -290,6 +290,7 @@ def loop(stop, interval_s=None):
             from . import server
             server.watch_prompts(conn)  # an agent that waits on a prompt in its tmux pane: tell the person
             server.fresh_sessions(conn)  # work for an agent idle at its prompt goes to a fresh session
+            server.auto_tidy(conn)  # every tidy_every: close the tmux panes of sessions that are done
             if core._channels(core.setting(conn, "notify_channels")):
                 run(conn)
         except Exception as e:  # keep the loop alive; the next pass retries

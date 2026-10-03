@@ -664,6 +664,57 @@ def tmux_tidy(conn):
     return {"closed": tmux_view(None, tidy=True, conn=conn)["closed"]}
 
 
+# river serve tidies by itself (tidy_every). TIDY: when its last pass ended, and for each pane it may close while
+# the agent CLI is still open, the pane's screen and since when that screen has not changed.
+TIDY = {"at": None, "screens": {}}
+
+
+def auto_tidy(conn):
+    """One pass of the loop of river serve (every notify_interval): every tidy_every (0s: never) it closes the panes
+    that river view --tidy closes (_done_panes). A pane where the agent CLI still runs closes only when its screen
+    stayed the same for idle_after: a screen that changes is a busy agent. Such a pane is read again on the next
+    passes, until it is idle or no longer done. Returns the panes it closed: [{"pane", "name", "why"}]."""
+    every = core.parse_duration(core.setting(conn, "tidy_every"))
+    t = core.now()
+    if not every.total_seconds() or (TIDY["at"] and t - TIDY["at"] < every):
+        return []
+    if TMUX_RUNNER is None and not _tmux_cmd():
+        return []
+    try:
+        if _tmux("has-session", "-t", "=" + TMUX_SESSION, check=False) is None:
+            TIDY.update(at=t, screens={})  # no agent runs in tmux
+            return []
+        panes = [p for p in _tmux_panes() if p["name"]]
+        done = _done_panes(conn, panes)
+        open_cli = [p["pane"] for p in panes if p["pane"] in done and not p["ended"]]
+        texts = _pane_texts(open_cli) if open_cli else {}
+    except RiverError:
+        return []
+    after = core.parse_duration(core.setting(conn, "idle_after"))
+    screens, busy, closed = {}, False, []
+    for p in panes:
+        why = done.get(p["pane"])
+        if not why:
+            continue
+        if not p["ended"]:
+            if p["pane"] not in texts:
+                continue  # the pane closed since the list
+            st = TIDY["screens"].get(p["pane"])
+            if not st or st["sig"] != texts[p["pane"]]:
+                st = {"sig": texts[p["pane"]], "since": t}
+            screens[p["pane"]] = st
+            if t - st["since"] < after:
+                busy = True
+                continue
+        if _tmux("kill-pane", "-t", p["pane"], check=False) is not None:
+            closed.append({"pane": p["pane"], "name": p["name"], "why": why})
+            screens.pop(p["pane"], None)
+    TIDY["screens"] = screens
+    if not busy:
+        TIDY["at"] = t
+    return closed
+
+
 # The keys the page may send to an agent's terminal by name (tmux's names); any other input is plain text.
 TERMINAL_KEYS = ("Enter", "Escape", "Tab", "BTab", "BSpace", "DC", "Space", "Up", "Down", "Left", "Right", "Home", "End",
                  "PPage", "NPage", *(f"C-{c}" for c in "abcdefghijklmnopqrstuvwxyz"))

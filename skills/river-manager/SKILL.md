@@ -81,7 +81,9 @@ Stop when the user tells you to, and tell the user what you did.
   `--tmux` (or the setting `launch_in tmux`) starts the session as a pane of the tmux session `river`. It needs
   no Terminal app, so it works over SSH and on Linux. The user sees every such agent side by side with
   `river view` in a terminal (`--windows`: one window each; `--tidy`: close the panes of sessions that are done);
-  `river view --list` prints the panes for you. A sandbox around your session blocks Terminal and tmux, so
+  `river view --list` prints the panes for you. `river serve` closes the panes of finished sessions by itself
+  every `tidy_every` (20m; a pane where the agent CLI still runs only when its screen stays the same for
+  `idle_after`, never one with a prompt), so you need not tidy by hand. A sandbox around your session blocks Terminal and tmux, so
   `river launch` then asks the running `river serve` to open the session. The sandbox must allow the host
   `127.0.0.1:<serve_port>` (8765) for that command (Claude Code: the command's `allowed_domains`); the error
   names it. `river view` needs a terminal outside the sandbox.

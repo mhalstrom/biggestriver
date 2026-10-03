@@ -147,6 +147,9 @@ DEFAULT_SETTINGS = {
     "idle_after": "2m",
     "fresh_sessions": "on",
     "idle_end": "15m",
+    # river serve closes the tmux panes of sessions that are done every tidy_every, as river view --tidy does; a pane
+    # it closes by the queue's word (the CLI is still open) must show the same screen for idle_after first. 0s: never.
+    "tidy_every": "20m",
     "manage_every": "30m",
     # river cleanup lists a ready item that nobody claimed for this long.
     "stale_after": "14d",
@@ -834,7 +837,7 @@ def config_set(conn, key, value, project=None, item=None, agent=None, actor=None
         raise RiverError(f"unknown setting {key!r}; known: {', '.join(sorted(DEFAULT_SETTINGS))}")
     if key.endswith(("_ttl", "_after", "_before", "_interval", "_window")) or key in (
             "wait_max", "wait_step", "human_wait_max", "goal_lease", "wait_too_long", "manage_every", "connect_within",
-            "prompt_wait", "idle_end"):
+            "prompt_wait", "idle_end", "tidy_every"):
         parse_duration(value)
     elif key == "prompt_pattern":
         try:
@@ -6852,6 +6855,7 @@ def manage(conn, cwd, actor=None, takeover=None):
         conn.execute("UPDATE agents SET manage_seen=? WHERE name=?", (json.dumps(_finding_keys(f)), actor))
     return {"agent": actor, "new_name": new_name, "role": "manager", "status": status(conn), "findings": f,
             "took_over": other, "every": setting(conn, "manage_every"), "wait_too_long": setting(conn, "wait_too_long"),
+            "tidy_every": setting(conn, "tidy_every"),
             "native": has_native(conn, actor)}
 
 
