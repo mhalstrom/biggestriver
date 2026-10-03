@@ -309,10 +309,12 @@ ready agent work and no agent yet whose top item is most important, and only
 when every such project has an agent, the top item. Start names the new
 session and reserves its item for it, so two quick clicks go to two projects.
 
-To see every agent in one terminal, start them in tmux:
-`maxpm config set launch_in tmux` (or `--tmux` for one launch, or the tmux
-choice in the dialog). Each session then starts as a pane of one tmux session
-named `river`, in place of a Terminal tab. `maxpm view` shows the panes side by
+With tmux installed, every agent starts in tmux, so one terminal shows them
+all: the setting `launch_in` is `auto` by default, which is tmux when tmux is
+installed and a Terminal tab when it is not (`maxpm config set launch_in
+tab`, `window`, or `tmux` to choose; `--tab`, `--window`, or `--tmux` for
+one launch, or the choice in the dialog). Each session then starts as a pane
+of one tmux session named `river`, in place of a Terminal tab. `maxpm view` shows the panes side by
 side in the terminal where you run it, each with its session's name on its
 border, and a new agent joins them. `maxpm view --windows` gives each agent a
 tmux window of its own again, and `maxpm view --list` prints the panes.
@@ -327,8 +329,8 @@ the same for two minutes (`idle_after`), so a busy agent keeps its pane. A
 prompt of an agent shows in its pane: move to the pane (`Ctrl-b`, then an
 arrow) and answer it.
 `Ctrl-b z` makes one pane large and back, and `Ctrl-b d` leaves the view while
-the agents continue. tmux is optional (`brew install tmux`), and a Terminal tab
-stays the default. tmux needs no Terminal app, so it also works over SSH and
+the agents continue. tmux is optional (`brew install tmux`): without it, sessions open in a
+Terminal tab. tmux needs no Terminal app, so it also works over SSH and
 on Linux. A session inside a sandbox (Claude Code's, Codex's) cannot reach
 tmux itself: its `maxpm launch` asks the running `maxpm serve` to start the
 session, and a person runs `maxpm view`.
