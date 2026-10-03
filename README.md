@@ -452,8 +452,17 @@ blocker trees, the agent registry, capacity, settings, and the web page.
   filters by goal.
 - `river go` roles: owner, worker, unblocker, planner, deployer, idle. After
   `done`, an agent takes the next item at once (`auto_continue`). With no
-  item, it runs `river wait`, which returns when work is pushed to it or gets
-  ready, and ends the session after `wait_max` (30m) without work.
+  item, it runs `river wait` in the foreground (a blocking command costs no
+  tokens), which returns when work is pushed to it or gets ready, and ends
+  the session after `wait_max` (45m) without work.
+- Fresh sessions: river never types into an agent's terminal. When an agent
+  sits idle at its prompt in tmux and work or an answer comes for it,
+  `river serve` gives the work to a new session (the item's notes carry the
+  answer, with the item's model and effort) and ends the idle one. An agent
+  idle at its prompt with nothing in hand ends after `idle_end` (15m). An
+  agent that needs a person files a person's item and releases its item;
+  when the person answers, a fresh session takes the item
+  (`fresh_sessions`, `idle_after`, `idle_end`).
 - Per-item context fields (context, files it touches, check command), so a
   new agent can start without searching.
 - Keep or release a claimed item when a prerequisite appears, and a
