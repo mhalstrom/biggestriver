@@ -161,6 +161,8 @@ export MAXPM_AGENT=alex                          # or pass --as alex
 
 maxpm target add prod-web --description "rsync to the VPS, then restart nginx"
 maxpm project add website --path ~/code/shop --target prod-web --description "Storefront pages in web/; React"
+maxpm project rename website shop                # items, goals, folder and settings follow
+maxpm target rename prod-web prod                # its projects and deploy items follow
 maxpm go                                         # in ~/code/shop: name, role, item, briefing
 maxpm add website "Build the checkout page" -p 0 --doer ai --after 3 4
 maxpm next                                       # most important ready item overall
