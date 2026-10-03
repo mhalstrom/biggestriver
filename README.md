@@ -88,9 +88,8 @@ cd maximizepm
 ./install.sh          # links `maxpm` and `river` into ~/.local/bin and the Claude Code skills into ~/.claude/skills
 ```
 
-The command is `maxpm`. `river` is the same command under the product's first
-name: agent briefings, the agent guides, and the `## Work queue` block in your
-projects run `river`, and both keep working. This README writes `maxpm`.
+The command is `maxpm`. `maxpm init --refresh` brings the `## Work queue` block
+in every project folder to the current text.
 
 `./install.sh --bin-dir DIR` picks another folder; `--no-skills` skips the
 skills.
