@@ -87,8 +87,7 @@ cd maximizepm
 ./install.sh          # links `maxpm` into ~/.local/bin and the Claude Code skills into ~/.claude/skills
 ```
 
-The command is `maxpm`. `maxpm init --refresh` brings the `## Work queue` block
-in every project folder to the current text.
+The command is `maxpm`.
 
 `./install.sh --bin-dir DIR` picks another folder; `--no-skills` skips the
 skills.

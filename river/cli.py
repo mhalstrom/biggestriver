@@ -45,7 +45,7 @@ More:
 """
 
 # The block maxpm init puts in AGENTS.md: only what an agent needs before its first maxpm command.
-# How to work (keep going, wait, report) is in the go and plan briefings, which update with river.
+# How to work (keep going, wait, report) is in the go and plan briefings, which update with maxpm.
 AGENT_SNIPPET = """## Work queue
 
 This project uses MaximizePM (`maxpm`) to track work and who is doing it.
@@ -53,60 +53,6 @@ When the user says "go" (or asks you to take work from the queue), run
 `maxpm go` in this folder and follow the briefing it prints, to its end.
 When the user says "plan", run `maxpm plan` and follow its briefing.
 """
-
-# Earlier versions of the block, longest first; river init replaces them with AGENT_SNIPPET,
-# and river go says when a folder still has one. The product was called Biggest River before MaximizePM.
-# The command was river before maxpm (river stays the same command, so a block that names it still works).
-_SNIPPET_RIVER = """## Work queue
-
-This project uses MaximizePM (`river`) to track work and who is doing it.
-When the user says "go" (or asks you to take work from the queue), run
-`river go` in this folder and follow the briefing it prints, to its end.
-When the user says "plan", run `river plan` and follow its briefing.
-"""
-_SNIPPET_BR = """## Work queue
-
-This project uses Biggest River (`river`) to track work and who is doing it.
-When the user says "go" (or asks you to take work from the queue), run
-`river go` in this folder and follow the briefing it prints, to its end.
-When the user says "plan", run `river plan` and follow its briefing.
-"""
-_WAIT_BLOCK = """## Work queue
-
-This project uses Biggest River (`river`) to track work and who is doing it.
-When the user says "go" (or asks you to take work from the queue), run
-`river go` in this folder and follow the briefing it prints: it names you,
-gives you a role and an item, and says what to run when you finish.
-Keep going: after each `river done`, run `river go` again at once and take the
-next item. When go gives you no item, run `river wait` as the briefing says:
-it returns when work comes, and ends the session after a while without work.
-Stop when wait says END or you need the user, then report everything you
-finished.
-When the user says "plan", run `river plan` instead and ask the user what
-outcome they want before you add items.
-"""
-_KEEP_GOING_BLOCK = """## Work queue
-
-This project uses Biggest River (`river`) to track work and who is doing it.
-When the user says "go" (or asks you to take work from the queue), run
-`river go` in this folder and follow the briefing it prints: it names you,
-gives you a role and an item, and says what to run when you finish.
-Keep going: after each `river done`, run `river go` again at once and take the
-next item. Stop only when go gives you no item or you need the user, then
-report everything you finished.
-When the user says "plan", run `river plan` instead and ask the user what
-outcome they want before you add items.
-"""
-_PLAN_BLOCK = """## Work queue
-
-This project uses Biggest River (`river`) to track work and who is doing it.
-When the user says "go" (or asks you to take work from the queue), run
-`river go` in this folder and follow the briefing it prints: it names you,
-gives you a role and an item, and says what to run when you finish.
-When the user says "plan", run `river plan` instead and ask the user what
-outcome they want before you add items.
-"""
-OLD_SNIPPETS = [_WAIT_BLOCK, _KEEP_GOING_BLOCK, _PLAN_BLOCK, _SNIPPET_RIVER, _SNIPPET_BR, _PLAN_BLOCK.split('When the user says "plan"')[0]]
 
 SETUP = """Setting up agents to use MaximizePM
 
@@ -560,9 +506,6 @@ def build_parser():
     x.add_argument("--move", action="store_true", default=None,
                    help="move the rules in CLAUDE.md to AGENTS.md; CLAUDE.md becomes @AGENTS.md")
     x.add_argument("--no-move", dest="move", action="store_false", help="keep CLAUDE.md and AGENTS.md apart")
-    x.add_argument("--refresh", action="store_true",
-                   help="in every project folder of the queue: bring the work queue block in CLAUDE.md and AGENTS.md "
-                        "to the current text (only a block that is there already; nothing else changes)")
     x.add_argument("--tracker", help="the outside tracker it uses: \"github owner/repo via gh\", \"jira PROJ via the Jira MCP server\"")
 
     x = sub.add_parser("go", help="start or continue an agent session: name, role, item, briefing")
@@ -1248,29 +1191,9 @@ def _hint(a, res, actor):
 def _append_block(f):
     old = f.read_text() if f.exists() else ""
     if core.names_product(old):
-        for prev in OLD_SNIPPETS:
-            if prev in old and AGENT_SNIPPET not in old:
-                f.write_text(old.replace(prev, AGENT_SNIPPET, 1))
-                return f"{f.name}: updated the work queue block to the current text"
         return f"{f.name}: already has the work queue block"
     f.write_text(old + ("\n" if old and not old.endswith("\n") else "") + ("\n" if old else "") + AGENT_SNIPPET)
     return f"{f.name}: added the work queue block"
-
-
-def old_blocks(conn, cwd):
-    """Instructions files in this folder's projects that still hold an earlier agent block."""
-    dirs = {Path(core._project(conn, n)["path"]) for n in core.projects_for_dir(conn, cwd)} or {Path(cwd)}
-    found = []
-    for d in sorted(dirs):
-        for name in ("AGENTS.md", "CLAUDE.md"):
-            f = d / name
-            try:
-                text = f.read_text(errors="replace")
-            except OSError:
-                continue
-            if AGENT_SNIPPET not in text and any(prev in text for prev in OLD_SNIPPETS):
-                found.append(str(f))
-    return found
 
 
 def _imports_agents(text):
@@ -1279,16 +1202,14 @@ def _imports_agents(text):
 
 
 def _only_block(text):
-    for prev in (AGENT_SNIPPET, *OLD_SNIPPETS):
-        text = text.replace(prev, "")
-    return not text.strip()
+    return not text.replace(AGENT_SNIPPET, "").strip()
 
 
 def instructions_layout(folder):
     """How a folder's agent instructions are laid out:
     shared: CLAUDE.md imports AGENTS.md, so every agent reads one file.
-    none: no rules (no file, or only the river block).  agents_only: the rules are in AGENTS.md.
-    claude_only: the rules are in CLAUDE.md, and AGENTS.md is missing or holds only the river block.
+    none: no rules (no file, or only the work queue block).  agents_only: the rules are in AGENTS.md.
+    claude_only: the rules are in CLAUDE.md, and AGENTS.md is missing or holds only the work queue block.
     both: each file holds its own rules."""
     c, a = Path(folder, "CLAUDE.md"), Path(folder, "AGENTS.md")
     ct = c.read_text(errors="replace") if c.exists() else None
@@ -1322,7 +1243,7 @@ def setup_instructions(folder, move=None):
         out.append("CLAUDE.md: now the one line @AGENTS.md, so Claude Code and every other agent read the same rules")
         return out
     if layout in ("none", "agents_only", "shared"):
-        if layout != "shared" and c.exists():  # CLAUDE.md holds only an old river block: AGENTS.md has it now
+        if layout != "shared" and c.exists():  # CLAUDE.md holds only the block: AGENTS.md has it now
             c.write_text("@AGENTS.md\n")
             out.append("CLAUDE.md: now the one line @AGENTS.md (it held only the work queue block)")
         out.append(_append_block(a))
@@ -1373,45 +1294,8 @@ def link_folder(conn, here, project=None, description="", actor=None):
     return name, linked_here, lines
 
 
-def refresh_blocks(conn):
-    """maxpm init --refresh: in every project folder of the queue, replace an earlier work queue block in
-    CLAUDE.md and AGENTS.md with the current one. Only the block changes: a file with no block, or with
-    the current one, stays as it is, and no file is added. Returns [{"file", "project", "result"}], where
-    result is updated, current, or no block."""
-    out, seen = [], set()
-    for p in core.project_list(conn):
-        d = Path(p["path"]).expanduser() if p["path"] else None
-        if d is None or d in seen or not d.is_dir():
-            continue
-        seen.add(d)
-        for name in ("AGENTS.md", "CLAUDE.md"):
-            f = d / name
-            try:
-                text = f.read_text()
-            except (OSError, UnicodeDecodeError):
-                continue
-            prev = next((x for x in OLD_SNIPPETS if x in text), None)
-            if AGENT_SNIPPET in text or prev is None:
-                out.append({"file": str(f), "project": p["name"], "result": "current" if AGENT_SNIPPET in text else "no block"})
-                continue
-            f.write_text(text.replace(prev, AGENT_SNIPPET, 1))
-            out.append({"file": str(f), "project": p["name"], "result": "updated"})
-    return out
-
-
 def init_folder(args):
     conn = core.connect()
-    if args.refresh:
-        rows = refresh_blocks(conn)
-        for r in rows:
-            print(f"{r['file']}: " + {"updated": "updated the work queue block to the current text",
-                                      "current": "already has the current work queue block",
-                                      "no block": "has no work queue block; left as it is"}[r["result"]])
-        n = sum(r["result"] == "updated" for r in rows)
-        print(f"{n} file(s) updated in {len({r['file'].rsplit('/', 1)[0] for r in rows})} project folder(s). "
-              + ("Commit each one in its repository." if n else ""))
-        conn.close()
-        return 0
     here = Path.cwd()
     name, linked_here, lines = link_folder(conn, here, args.project, args.description, args.actor)
     if args.tracker:
@@ -1608,7 +1492,6 @@ def dispatch(conn, a, actor):
         # The platform's own messaging reaches this session at once (native_message): record its address.
         core.set_native(conn, res["agent"], *core.native_from_env(conn, os.environ))
         _record_process(conn, res["agent"])
-        res["old_blocks"] = old_blocks(conn, os.getcwd())
         return res
     if c == "plan":
         return {**core.plan(conn, os.getcwd(), actor, a.project), "chat": a.chat}
@@ -2001,9 +1884,6 @@ def render_go(b):
     out.append(f"You are MaximizePM agent {me}. Role: {b['role'].upper()}. ({b['why']})")
     if core.queue_note():
         out.append(core.queue_note() + ". Tell the user if that is not what they meant.")
-    if b.get("old_blocks"):
-        out.append(f"This folder's agent block is old ({', '.join(b['old_blocks'])}): run maxpm init there to update "
-                   "it. This briefing is current; follow it.")
     if b["new_name"]:
         out.append(f"Your shell may not keep environment variables, so pass --as {me} on every maxpm command.")
     # Only Claude Code has session names and ListAgents; it sets CLAUDECODE in the commands it runs.

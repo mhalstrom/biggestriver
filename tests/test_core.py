@@ -2132,8 +2132,9 @@ class CommandNames(unittest.TestCase):
     """The command is maxpm: one entry point, and no text names another."""
 
     def test_the_product_names(self):
-        self.assertTrue(core.names_product("uses Biggest River (`river`)") and core.names_product("uses MaximizePM"))
+        self.assertTrue(core.names_product("uses MaximizePM"))
         self.assertFalse(core.names_product("uses another queue"))
+        self.assertFalse(hasattr(core, "OLD_PRODUCTS"))
 
     def test_no_agent_takes_the_name_of_the_notices(self):
         with tempfile.TemporaryDirectory() as d:
@@ -2167,96 +2168,28 @@ class CommandNames(unittest.TestCase):
 
 
 class AgentBlock(unittest.TestCase):
-    def test_block_is_added_upgraded_and_not_repeated(self):
-        from pathlib import Path
-        from river import cli
-        with tempfile.TemporaryDirectory() as d:
-            new, old = Path(d, "AGENTS.md"), Path(d, "CLAUDE.md")
-            self.assertIn("added", cli._append_block(new))  # created
-            old.write_text("# Notes\n\n" + cli._PLAN_BLOCK)
-            self.assertIn("updated", cli._append_block(old))
-            text = old.read_text()
-            self.assertIn(cli.AGENT_SNIPPET, text)
-            self.assertEqual(text.count("## Work queue"), 1)
-            self.assertIn("already", cli._append_block(old))
-            self.assertEqual(new.read_text(), cli.AGENT_SNIPPET)
-
-    def test_a_block_that_names_biggest_river_becomes_the_maximizepm_block(self):
-        from pathlib import Path
-        from river import cli
-        with tempfile.TemporaryDirectory() as d:
-            f = Path(d, "CLAUDE.md")
-            f.write_text("# Notes\n\n" + cli._SNIPPET_BR + "\n## More\n")
-            self.assertIn("updated", cli._append_block(f))
-            self.assertEqual(f.read_text(), "# Notes\n\n" + cli.AGENT_SNIPPET + "\n## More\n")
-            self.assertIn("MaximizePM", cli.AGENT_SNIPPET)
-            self.assertIn("already", cli._append_block(f))
-
-    def test_a_block_that_runs_river_becomes_the_maxpm_block_in_every_project_folder(self):
+    def test_block_is_added_and_not_repeated(self):
         from pathlib import Path
         from river import cli
         self.assertIn("uses MaximizePM (`maxpm`)", cli.AGENT_SNIPPET)
         self.assertIn("`maxpm go`", cli.AGENT_SNIPPET)
         self.assertNotIn("river", cli.AGENT_SNIPPET)
         with tempfile.TemporaryDirectory() as d:
-            c = core.connect(Path(d, "r.db"))
-            a, b, plain = Path(d, "a").resolve(), Path(d, "b").resolve(), Path(d, "plain").resolve()
-            for x in (a, b, plain):
-                x.mkdir()
-            core.project_add(c, "a", path=str(a))
-            core.project_add(c, "a2", path=str(a))  # two projects in one folder: the folder once
-            core.project_add(c, "b", path=str(b))
-            core.project_add(c, "plain", path=str(plain))
-            core.project_add(c, "nofolder")
-            core.project_add(c, "gone", path=str(Path(d, "gone")))
-            (a / "CLAUDE.md").write_text("# Rules\n\n- keep this line\n\n" + cli._SNIPPET_RIVER + "\n## More\n")
-            (a / "AGENTS.md").write_text(cli._SNIPPET_BR)
-            (b / "AGENTS.md").write_text(cli.AGENT_SNIPPET)
-            (plain / "CLAUDE.md").write_text("# Only my own rules\n")
-            rows = {(Path(r["file"]).parent.name, Path(r["file"]).name): r["result"] for r in cli.refresh_blocks(c)}
-            self.assertEqual(rows, {("a", "CLAUDE.md"): "updated", ("a", "AGENTS.md"): "updated",
-                                    ("b", "AGENTS.md"): "current", ("plain", "CLAUDE.md"): "no block"})
-            # Only the block changed; a file with no block stays, and no file is added.
-            self.assertEqual((a / "CLAUDE.md").read_text(), "# Rules\n\n- keep this line\n\n" + cli.AGENT_SNIPPET + "\n## More\n")
-            self.assertEqual((a / "AGENTS.md").read_text(), cli.AGENT_SNIPPET)
-            self.assertEqual((plain / "CLAUDE.md").read_text(), "# Only my own rules\n")
-            self.assertEqual(sorted(x.name for x in plain.iterdir()), ["CLAUDE.md"])
-            self.assertEqual(sorted(x.name for x in b.iterdir()), ["AGENTS.md"])
-            self.assertEqual({r["result"] for r in cli.refresh_blocks(c)}, {"current", "no block"})  # again: nothing
-            c.close()
-            # The command: maxpm init --refresh.
-            os.environ["MAXPM_DB"] = str(Path(d, "r.db"))
-            try:
-                (a / "AGENTS.md").write_text(cli._WAIT_BLOCK)
-                out = io.StringIO()
-                with contextlib.redirect_stdout(out):
-                    self.assertEqual(cli.run(["init", "--refresh"]), 0)
-            finally:
-                os.environ.pop("MAXPM_DB", None)
-            self.assertIn(f"{a / 'AGENTS.md'}: updated the work queue block to the current text", out.getvalue())
-            self.assertIn("1 file(s) updated in 3 project folder(s). Commit each one in its repository.", out.getvalue())
-            self.assertEqual((a / "AGENTS.md").read_text(), cli.AGENT_SNIPPET)
+            new, notes = Path(d, "AGENTS.md"), Path(d, "CLAUDE.md")
+            self.assertIn("added", cli._append_block(new))  # created
+            self.assertIn("already", cli._append_block(new))
+            self.assertEqual(new.read_text(), cli.AGENT_SNIPPET)
+            notes.write_text("# Notes\n")
+            self.assertIn("added", cli._append_block(notes))
+            self.assertEqual(notes.read_text(), "# Notes\n\n" + cli.AGENT_SNIPPET)
 
-    def test_go_names_an_old_block_until_init_updates_it(self):
-        from pathlib import Path
+    def test_no_old_blocks_and_no_refresh(self):
+        # No old installs (mark, 2026-10-03): the earlier blocks, init --refresh and the briefing's note are gone.
         from river import cli
-        with tempfile.TemporaryDirectory() as d:
-            c = core.connect(Path(d, "r.db"))
-            core.project_add(c, "p", path=d)
-            f = Path(d, "AGENTS.md").resolve()  # the project keeps the resolved path (/tmp is /private/tmp on macOS)
-            f.write_text("# Rules\n\n" + cli._WAIT_BLOCK)
-            self.assertEqual(cli.old_blocks(c, d), [str(f)])
-            core.register(c, "ag")
-            b = core.go(c, d, "ag")
-            b["old_blocks"] = cli.old_blocks(c, d)
-            out = io.StringIO()
-            with contextlib.redirect_stdout(out):
-                cli.render_go(b)
-            self.assertIn(f"agent block is old ({f})", out.getvalue())
-            self.assertIn("updated", cli._append_block(f))
-            self.assertEqual(cli.old_blocks(c, d), [])
-            self.assertEqual(f.read_text(), "# Rules\n\n" + cli.AGENT_SNIPPET)
-            c.close()
+        for name in ("OLD_SNIPPETS", "old_blocks", "refresh_blocks"):
+            self.assertFalse(hasattr(cli, name), name)
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            cli.run(["init", "--refresh"])
 
     def test_the_session_step_is_only_for_claude_code(self):
         from pathlib import Path

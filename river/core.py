@@ -1,4 +1,4 @@
-"""MaximizePM core (the product was called Biggest River before): storage, graph ordering, claims, registry, capacity.
+"""MaximizePM core: storage, graph ordering, claims, registry, capacity.
 
 Every public function takes an open connection from `connect()` and returns
 plain dicts and lists, so the CLI and the web server share one code path.
@@ -15,9 +15,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # One database per user, in the home folder (sandboxed agents must be allowed to write there).
-# The product, and the names it had before: an instructions file that names one of them has its block.
+# The product: an instructions file that names it has its block.
 PRODUCT = "MaximizePM"
-OLD_PRODUCTS = ("Biggest River",)
 COMMAND = "maxpm"
 HOME_DB = Path("~/.maximizepm/maxpm.db")
 
@@ -470,8 +469,8 @@ class RiverError(Exception):
 
 
 def names_product(text):
-    """True when the text names the product by its name now or by one it had before."""
-    return any(n in text for n in (PRODUCT, *OLD_PRODUCTS))
+    """True when the text names the product."""
+    return PRODUCT in text
 
 
 # ---------------------------------------------------------------- time
