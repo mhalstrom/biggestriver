@@ -312,8 +312,12 @@ tmux window of its own again, and `river view --list` prints the panes.
 ended, or its CLI is still open but the agent left the queue, stopped, or is
 gone, and holds nothing. A pane that shows a prompt stays, and
 `river view --list` says for each pane why `--tidy` closes it. On the page,
-Close N finished in the Agents panel does the same. A prompt of an agent
-shows in its pane: move to the pane (`Ctrl-b`, then an arrow) and answer it.
+Close N finished in the Agents panel does the same. `river serve` also does
+it by itself every 20 minutes (`tidy_every`; `0s` turns it off), and it
+closes a pane where the agent CLI is still open only when the screen stayed
+the same for two minutes (`idle_after`), so a busy agent keeps its pane. A
+prompt of an agent shows in its pane: move to the pane (`Ctrl-b`, then an
+arrow) and answer it.
 `Ctrl-b z` makes one pane large and back, and `Ctrl-b d` leaves the view while
 the agents continue. tmux is optional (`brew install tmux`), and a Terminal tab
 stays the default. tmux needs no Terminal app, so it also works over SSH and
