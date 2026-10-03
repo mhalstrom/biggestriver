@@ -307,8 +307,12 @@ choice in the dialog). Each session then starts as a pane of one tmux session
 named `river`, in place of a Terminal tab. `river view` shows the panes side by
 side in the terminal where you run it, each with its session's name on its
 border, and a new agent joins them. `river view --windows` gives each agent a
-tmux window of its own again, `river view --tidy` closes the panes of agents
-that ended, and `river view --list` prints the panes. A prompt of an agent
+tmux window of its own again, and `river view --list` prints the panes.
+`river view --tidy` closes the panes of sessions that are done: the agent
+ended, or its CLI is still open but the agent left the queue, stopped, or is
+gone, and holds nothing. A pane that shows a prompt stays, and
+`river view --list` says for each pane why `--tidy` closes it. On the page,
+Close N finished in the Agents panel does the same. A prompt of an agent
 shows in its pane: move to the pane (`Ctrl-b`, then an arrow) and answer it.
 `Ctrl-b z` makes one pane large and back, and `Ctrl-b d` leaves the view while
 the agents continue. tmux is optional (`brew install tmux`), and a Terminal tab
