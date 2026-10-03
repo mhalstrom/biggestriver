@@ -1449,7 +1449,7 @@ class SetupGuide(unittest.TestCase):
         self.assertEqual((r["project"], r["layout"]), ("my-blog", "claude_only"))
         self.assertEqual(core._project(self.c, "my-blog")["path"], os.path.realpath(blog))
         self.assertEqual(core._project(self.c, "my-blog")["notes"], "my writing")
-        self.assertIn("Biggest River", open(os.path.join(blog, "AGENTS.md")).read())
+        self.assertIn("MaximizePM", open(os.path.join(blog, "AGENTS.md")).read())
         # the rules choice, then the same folder again: nothing new, still one project
         r = server.folder_add(self.c, blog, move=True)
         self.assertEqual((r["project"], r["layout"]), ("my-blog", "shared"))
@@ -1482,7 +1482,9 @@ class SetupGuide(unittest.TestCase):
             self.assertIn(server.LAUNCHER_MARK, open(launcher).read())
             prof = open(os.path.join(home, ".zprofile")).read()
             self.assertIn('$HOME/.local/bin', prof)
-            self.assertEqual(len(r["changed"]), 2)
+            self.assertEqual(len(r["changed"]), 3)
+            # maxpm is the same command under the product's name
+            self.assertEqual(open(os.path.join(home, ".local", "bin", "maxpm")).read(), open(launcher).read())
             found["path"] = launcher  # a new terminal now finds it
             self.assertTrue(server.river_command_status()["ok"])
             server.install_river_command()  # again: the profile line is not added twice
@@ -1491,6 +1493,10 @@ class SetupGuide(unittest.TestCase):
             found["path"] = "/opt/elsewhere/river"
             self.assertTrue(server.river_command_status()["ok"])
             self.assertIn("already installed", server.install_river_command()["note"])
+            # a launcher written under the product's first name is river's own, and the guide rewrites it
+            with open(launcher, "w") as f:
+                f.write("#!/bin/sh\n# Biggest River launcher: runs the river ...\n")
+            self.assertEqual(server.river_command_status()["launcher"], "old")
         finally:
             for k, v in (("HOME", old[0]), ("SHELL", old[1])):
                 if v is None:

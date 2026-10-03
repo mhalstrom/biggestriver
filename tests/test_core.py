@@ -1,6 +1,7 @@
 import contextlib
 import io
 import os
+import sys
 import tempfile
 import threading
 import unittest
@@ -2144,6 +2145,42 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class CommandNames(unittest.TestCase):
+    """The command is maxpm, and river is the same command: both entry points, the same behaviour."""
+
+    def test_the_name_the_command_runs_under(self):
+        for argv0, name in (("maxpm", "maxpm"), ("/usr/local/bin/river", "river"), (r"C:\\tools\\maxpm.exe", "maxpm"),
+                            ("maxpm-script.py", "maxpm"), ("python3", "river"), ("", "river")):
+            self.assertEqual(core.command_name(argv0), name, argv0)
+        self.assertTrue(core.names_product("uses Biggest River (`river`)") and core.names_product("uses MaximizePM"))
+        self.assertFalse(core.names_product("uses another queue"))
+
+    def test_both_commands_run_with_the_same_queue(self):
+        import subprocess
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent
+        with tempfile.TemporaryDirectory() as d:
+            env = {**os.environ, "RIVER_DB": str(Path(d, "q.db"))}
+            out = {}
+            for c in ("maxpm", "river"):
+                h = subprocess.run([sys.executable, str(root / "bin" / c), "--help"], capture_output=True, text=True, env=env)
+                self.assertEqual(h.returncode, 0, h.stderr)
+                self.assertTrue(h.stdout.startswith(f"usage: {c} "), h.stdout[:40])
+                self.assertIn("maxpm and river are the same command", " ".join(h.stdout.split()))
+            subprocess.run([sys.executable, str(root / "bin" / "maxpm"), "project", "add", "shop"], check=True,
+                           capture_output=True, env=env)
+            ls = subprocess.run([sys.executable, str(root / "bin" / "river"), "project", "list"], capture_output=True,
+                                text=True, env=env)
+            self.assertIn("shop", ls.stdout)
+        text = (root / "pyproject.toml").read_text()
+        self.assertIn('maxpm = "river.cli:main"', text)
+        self.assertIn('river = "river.cli:main"', text)
+        self.assertIn('name = "maximizepm"', text)
+
+    def test_the_data_stays_in_the_folder_of_the_first_name(self):
+        self.assertEqual(str(core.HOME_DB), "~/.biggestriver/river.db")
+
+
 class AgentBlock(unittest.TestCase):
     def test_block_is_added_upgraded_and_not_repeated(self):
         from pathlib import Path
@@ -2158,6 +2195,17 @@ class AgentBlock(unittest.TestCase):
             self.assertEqual(text.count("## Work queue"), 1)
             self.assertIn("already", cli._append_block(old))
             self.assertEqual(new.read_text(), cli.AGENT_SNIPPET)
+
+    def test_a_block_that_names_biggest_river_becomes_the_maximizepm_block(self):
+        from pathlib import Path
+        from river import cli
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d, "CLAUDE.md")
+            f.write_text("# Notes\n\n" + cli._SNIPPET_BR + "\n## More\n")
+            self.assertIn("updated", cli._append_block(f))
+            self.assertEqual(f.read_text(), "# Notes\n\n" + cli.AGENT_SNIPPET + "\n## More\n")
+            self.assertIn("MaximizePM", cli.AGENT_SNIPPET)
+            self.assertIn("already", cli._append_block(f))
 
     def test_go_names_an_old_block_until_init_updates_it(self):
         from pathlib import Path

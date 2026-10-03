@@ -3,7 +3,7 @@ requires = ["hatchling>=1.18"]
 build-backend = "hatchling.build"
 
 [project]
-name = "biggestriver"
+name = "maximizepm"
 version = "0.1.0"
 description = "A dependency-ordered work queue for AI agents and the people they work with"
 readme = "README.md"
@@ -17,10 +17,11 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://biggestriver.com"
-Source = "https://github.com/mhalstrom/biggestriver"
+Homepage = "https://maximizepm.com"
+Source = "https://github.com/mhalstrom/maximizepm"
 
 [project.scripts]
+maxpm = "river.cli:main"
 river = "river.cli:main"
 
 [tool.hatch.build.targets.wheel]

@@ -1,9 +1,9 @@
 ---
 name: river
-description: Take, do, and hand back work items from the Biggest River queue (the `river` command). Use when the user says "go" in a project that uses river, tells you to work from the queue, or when you finish, release, or find new work.
+description: Take, do, and hand back work items from the MaximizePM queue (the `river` command, also `maxpm`). Use when the user says "go" in a project that uses river, tells you to work from the queue, or when you finish, release, or find new work.
 ---
 
-# Biggest River: working from the queue
+# MaximizePM: working from the queue
 
 The queue holds projects, items, and the dependencies between them. You pick
 the area where you already hold context; inside it, `river next` returns the

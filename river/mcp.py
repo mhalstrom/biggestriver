@@ -71,8 +71,8 @@ TOOLS = [
          "as": _AS, "takeover": {"type": "string", "description": "why you take over from the active manager"}}}},
 ]
 
-INSTRUCTIONS = "Call go to take work from the Biggest River queue, and follow its briefing."
-CHAT_INSTRUCTIONS = ("Biggest River is the user's work queue for AI agents. In this chat (no folder, no shell) you can: "
+INSTRUCTIONS = "Call go to take work from the MaximizePM queue, and follow its briefing."
+CHAT_INSTRUCTIONS = ("MaximizePM is the user's work queue for AI agents. In this chat (no folder, no shell) you can: "
                      "plan work with the user (plan), run the coding agents (manage), go through what waits on the user "
                      "(river tool: [\"needs-you\"], then [\"prompt\", \"--all\"]), and do items that need no code, "
                      "such as writing or research (go; the result goes in done). Call the tool, then follow its briefing; "
@@ -178,7 +178,7 @@ class Server:
         if method == "initialize":
             result = {"protocolVersion": msg.get("params", {}).get("protocolVersion") or PROTOCOL,
                       "capabilities": {"tools": {}},
-                      "serverInfo": {"name": "biggest-river", "version": __version__},
+                      "serverInfo": {"name": "maximizepm", "version": __version__},
                       "instructions": CHAT_INSTRUCTIONS if self.chat else INSTRUCTIONS}
         elif method == "tools/list":
             result = {"tools": TOOLS}

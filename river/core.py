@@ -1,4 +1,4 @@
-"""Biggest River core: storage, graph ordering, claims, registry, capacity.
+"""MaximizePM core (the product was called Biggest River before): storage, graph ordering, claims, registry, capacity.
 
 Every public function takes an open connection from `connect()` and returns
 plain dicts and lists, so the CLI and the web server share one code path.
@@ -16,6 +16,12 @@ from pathlib import Path
 
 # One database per user. A repository clone that already has data/river.db keeps using it until
 # `river db move` copies it to the home folder (sandboxed agents may not be allowed to write there yet).
+# The product, and the names it had before: an instructions file that names one of them has its block.
+PRODUCT = "MaximizePM"
+OLD_PRODUCTS = ("Biggest River",)
+# The command: maxpm, and river, the same command under its first name (every project, briefing, and agent
+# prompt runs river). The data stays in ~/.biggestriver, the folder of the first name, so no queue moves.
+COMMANDS = ("maxpm", "river")
 HOME_DB = Path("~/.biggestriver/river.db")
 LEGACY_DB = Path(__file__).resolve().parent.parent / "data" / "river.db"
 
@@ -449,7 +455,19 @@ class RiverError(Exception):
     """A refusal. The message names the rule and, where possible, the next command."""
 
 
+def names_product(text):
+    """True when the text names the product by its name now or by one it had before."""
+    return any(n in text for n in (PRODUCT, *OLD_PRODUCTS))
+
+
+def command_name(argv0=None):
+    """The name the command runs under (maxpm or river), for its help; river when it is neither."""
+    name = re.split(r"[\\/]", argv0 if argv0 is not None else sys.argv[0])[-1].lower()  # a Windows path too
+    return next((c for c in COMMANDS if name in (c, c + ".exe", c + "-script.py")), "river")
+
+
 # ---------------------------------------------------------------- time
+
 
 def now() -> datetime:
     return datetime.now(timezone.utc).replace(microsecond=0)
@@ -5412,7 +5430,7 @@ PROMPT_STEPS = """How to help:
 4. When it is decided or done, record it with the "record the result" command, in their words.
    If you can do the step yourself without them, say so; with their yes, take it over instead:
    river register <your-agent-name>, then river --as <your-agent-name> takeover <id> --note "<how>".
-If the river command is not found, ask {person} where Biggest River is installed."""
+If the river command is not found, ask {person} where MaximizePM is installed."""
 
 
 def prompt_for(conn, item_id, person=None):
@@ -5421,7 +5439,7 @@ def prompt_for(conn, item_id, person=None):
     iid = _item(conn, item_id)["id"]
     person = _person(conn, person)
     a = ann[iid]
-    head = (f"You are helping {person} with one step in their work queue (Biggest River, the `river` command). "
+    head = (f"You are helping {person} with one step in their work queue (MaximizePM, the `river` command). "
             + ("It is marked for a person to do or decide." if a["doer"] == "human"
                else f"{person} took it to do themselves, with your help."))
     return "\n\n".join([head, _item_prompt_section(conn, a, ann, person), PROMPT_STEPS.format(person=person)])
@@ -5437,9 +5455,9 @@ def prompt_for_all(conn, person=None):
         "SELECT id, from_agent, body, item_id FROM messages WHERE kind='question' AND state='open' AND to_agent=? ORDER BY id",
         (person,))]
     if not items and not qs:
-        return f"Nothing in the Biggest River queue waits on {person} now."
+        return f"Nothing in the MaximizePM queue waits on {person} now."
     parts = [f"You are helping {person} work through everything that waits on them in their work queue "
-             f"(Biggest River, the `river` command): {len(items)} item(s) and {len(qs)} question(s), most important "
+             f"(MaximizePM, the `river` command): {len(items)} item(s) and {len(qs)} question(s), most important "
              f"first. Take them one at a time: finish or park one before you start the next."]
     parts += [_item_prompt_section(conn, a, ann, person, n) for n, a in enumerate(items, 1)]
     for n, q in enumerate(qs, len(items) + 1):

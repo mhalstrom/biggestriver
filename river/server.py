@@ -1,4 +1,4 @@
-"""Local web page for Biggest River. Binds to 127.0.0.1 only."""
+"""Local web page for MaximizePM. Binds to 127.0.0.1 only."""
 
 from __future__ import annotations
 
@@ -1046,7 +1046,7 @@ def _block_state(path):
     text = path.read_text(errors="replace")
     if path.name == "CLAUDE.md" and _imports_agents(text):
         return _block_state(path.with_name("AGENTS.md"))  # Claude Code reads AGENTS.md through the import
-    return "current" if AGENT_SNIPPET in text else "old" if "Biggest River" in text else "missing"
+    return "current" if AGENT_SNIPPET in text else "old" if core.names_product(text) else "missing"
 
 
 def setup_status(conn):
@@ -1127,7 +1127,8 @@ def folder_add(conn, path, name=None, description="", move=None, actor=None):
 
 # The river command for agents: a small launcher in ~/.local/bin that runs this river with this Python, so an
 # agent started from the app (or any terminal) can run `river go` on a Mac that has only the app.
-LAUNCHER_MARK = "# Biggest River launcher"
+LAUNCHER_MARK = "# MaximizePM launcher"
+OLD_LAUNCHER_MARKS = ("# Biggest River launcher",)  # the product's first name
 
 
 def _launcher_path():
@@ -1166,7 +1167,7 @@ def river_command_status():
         return {"ok": True, "unsupported": True}
     lp = _launcher_path()
     text = lp.read_text(errors="replace") if lp.is_file() else ""
-    launcher = "missing" if not text else "current" if text == _launcher_text() else "old" if LAUNCHER_MARK in text else "other"
+    launcher = "missing" if not text else "current" if text == _launcher_text() else "old" if any(m in text for m in (LAUNCHER_MARK, *OLD_LAUNCHER_MARKS)) else "other"
     found = _login_shell_river()
     # A river command that the setup guide did not write (a link to a clone, pip) is the person's own: fine.
     ours = bool(found) and Path(found).expanduser() == lp and launcher in ("current", "old")
@@ -1182,11 +1183,12 @@ def _launcher_text():
              "# The setup guide rewrites it (Install the river command); delete it to remove it."]
     if DESKTOP:
         # An app opened from Downloads and then moved to Applications: use the copy in Applications.
-        app = "/Applications/Biggest River.app/Contents/Resources/river-app"
-        lines += [f"if [ ! -f {script} ] && [ -x '{app}/python/bin/python3' ]; then",
-                  f"  exec '{app}/python/bin/python3' '{app}/bin/river' \"$@\"", "fi"]
+        for name in ("MaximizePM", "Biggest River"):  # the app under its first name too
+            app = f"/Applications/{name}.app/Contents/Resources/river-app"
+            lines += [f"if [ ! -f {script} ] && [ -x '{app}/python/bin/python3' ]; then",
+                      f"  exec '{app}/python/bin/python3' '{app}/bin/river' \"$@\"", "fi"]
     lines += [f"if [ ! -x {py} ] || [ ! -f {script} ]; then",
-              f"  echo \"river: {root} is gone (the app moved or was removed). Open Biggest River, then Settings,\" >&2",
+              f"  echo \"river: {root} is gone (the app moved or was removed). Open MaximizePM, then Settings,\" >&2",
               "  echo \"the setup guide, and Install the river command again.\" >&2", "  exit 1", "fi",
               f"exec {py} {script} \"$@\""]
     return "\n".join(lines) + "\n"
@@ -1200,7 +1202,7 @@ def install_river_command():
                          "folder's bin to PATH")
     st = river_command_status()
     if st["in_app_image"]:
-        raise RiverError("the app runs from its download image: drag Biggest River to Applications, open it "
+        raise RiverError("the app runs from its download image: drag MaximizePM to Applications, open it "
                          "from there, then install the river command")
     if st["shell_path"] and not st["ours"]:
         return {"changed": [], "note": f"river is already installed at {st['shell_path']}; left as it is"}
@@ -1211,11 +1213,17 @@ def install_river_command():
     lp.write_text(_launcher_text())
     lp.chmod(0o755)
     changed.append(f"{lp}: runs river from {Path(__file__).resolve().parent.parent}")
+    mp = lp.with_name("maxpm")  # the same command under the product's name; a maxpm of the person's own stays
+    old = mp.read_text(errors="replace") if mp.is_file() else ""
+    if not mp.exists() or any(m in old for m in (LAUNCHER_MARK, *OLD_LAUNCHER_MARKS)):
+        mp.write_text(_launcher_text())
+        mp.chmod(0o755)
+        changed.append(f"{mp}: the same command as river")
     if not _login_shell_river():
         shell = Path(os.environ.get("SHELL") or "/bin/zsh").name
         prof = Path("~/.zprofile" if shell == "zsh" else "~/.bash_profile" if shell == "bash" else "~/.profile").expanduser()
         old = prof.read_text() if prof.exists() else ""
-        line = 'export PATH="$HOME/.local/bin:$PATH"  # Biggest River: the river command'
+        line = 'export PATH="$HOME/.local/bin:$PATH"  # MaximizePM: the river command'
         if line not in old:
             prof.write_text(old + ("\n" if old and not old.endswith("\n") else "") + line + "\n")
             changed.append(f"{prof}: adds ~/.local/bin to PATH for new terminals")
@@ -1601,7 +1609,7 @@ def serve(port: int, open_browser=False, dev=False):
     httpd = _Server(("127.0.0.1", port), Handler)
     url = f"http://127.0.0.1:{port}/"
     DEV["on"] = dev
-    print(f"Biggest River on {url} (database {core.db_path()}){' [dev: restarts on code change]' if dev else ''}",
+    print(f"MaximizePM on {url} (database {core.db_path()}){' [dev: restarts on code change]' if dev else ''}",
           flush=True)
     if dev:
         threading.Thread(target=_restart_on_change, args=(httpd,), daemon=True).start()

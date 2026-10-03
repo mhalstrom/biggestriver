@@ -15,7 +15,7 @@ from .core import RiverError
 GUIDES = next((p for p in (Path(__file__).resolve().parent / "skills", Path(__file__).resolve().parent.parent / "skills")
                if p.is_dir()), Path(__file__).resolve().parent / "skills")
 
-QUICKSTART = """Biggest River: a shared work queue for people and agent sessions.
+QUICKSTART = """MaximizePM (the maxpm command; river is the same command): a shared work queue for people and agent sessions.
 
 Items live in projects and can wait on other items. `river next` gives the
 most important ready item in the area you choose; `--claim` takes it.
@@ -47,14 +47,21 @@ More:
 # How to work (keep going, wait, report) is in the go and plan briefings, which update with river.
 AGENT_SNIPPET = """## Work queue
 
-This project uses Biggest River (`river`) to track work and who is doing it.
+This project uses MaximizePM (`river`) to track work and who is doing it.
 When the user says "go" (or asks you to take work from the queue), run
 `river go` in this folder and follow the briefing it prints, to its end.
 When the user says "plan", run `river plan` and follow its briefing.
 """
 
 # Earlier versions of the block, longest first; river init replaces them with AGENT_SNIPPET,
-# and river go says when a folder still has one.
+# and river go says when a folder still has one. The product was called Biggest River before MaximizePM.
+_SNIPPET_BR = """## Work queue
+
+This project uses Biggest River (`river`) to track work and who is doing it.
+When the user says "go" (or asks you to take work from the queue), run
+`river go` in this folder and follow the briefing it prints, to its end.
+When the user says "plan", run `river plan` and follow its briefing.
+"""
 _WAIT_BLOCK = """## Work queue
 
 This project uses Biggest River (`river`) to track work and who is doing it.
@@ -90,7 +97,7 @@ gives you a role and an item, and says what to run when you finish.
 When the user says "plan", run `river plan` instead and ask the user what
 outcome they want before you add items.
 """
-OLD_SNIPPETS = [_WAIT_BLOCK, _KEEP_GOING_BLOCK, _PLAN_BLOCK, _PLAN_BLOCK.split('When the user says "plan"')[0]]
+OLD_SNIPPETS = [_WAIT_BLOCK, _KEEP_GOING_BLOCK, _PLAN_BLOCK, _SNIPPET_BR, _PLAN_BLOCK.split('When the user says "plan"')[0]]
 
 SETUP = """Setting up agents to use river
 
@@ -377,7 +384,7 @@ def _fmt_msg(m, indent=""):
 
 
 def build_parser():
-    p = argparse.ArgumentParser(prog="river", description="Biggest River: a dependency-ordered work queue for agents and people.")
+    p = argparse.ArgumentParser(prog=core.command_name(), description="MaximizePM: a dependency-ordered work queue for agents and people. maxpm and river are the same command.")
     p.add_argument("--version", action="version", version=f"river {__version__}")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     p.add_argument("--as", dest="actor", default=os.environ.get("RIVER_AGENT"), help="agent name (default $RIVER_AGENT)")
@@ -977,8 +984,8 @@ def run(argv=None):
             return 0
         f = Path(args.append)
         old = f.read_text() if f.exists() else ""
-        if "Biggest River" in old:
-            print(f"{f} already mentions Biggest River; nothing added")
+        if core.names_product(old):
+            print(f"{f} already mentions {core.PRODUCT}; nothing added")
             return 0
         f.write_text(old + ("\n" if old and not old.endswith("\n") else "") + ("\n" if old else "") + AGENT_SNIPPET)
         print(f"added the work queue block to {f}")
@@ -1189,7 +1196,7 @@ def _hint(a, res, actor):
 
 def _append_block(f):
     old = f.read_text() if f.exists() else ""
-    if "Biggest River" in old:
+    if core.names_product(old):
         for prev in OLD_SNIPPETS:
             if prev in old and AGENT_SNIPPET not in old:
                 f.write_text(old.replace(prev, AGENT_SNIPPET, 1))

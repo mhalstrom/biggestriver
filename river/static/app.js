@@ -588,7 +588,7 @@ async function pollNeedsYou() {
 const promptAlert = e => e.message_kind === "alert" && (e.body || "").startsWith("waits on a prompt in its terminal");
 
 function renderNeedsYou() {
-  document.title = NY.length ? `(${NY.length}) Biggest River` : "Biggest River";
+  document.title = NY.length ? `(${NY.length}) MaximizePM` : "MaximizePM";
   $("#notifyOn").classList.toggle("hidden", !("Notification" in window) || Notification.permission !== "default");
   $("#needsYouPanel").classList.toggle("hidden", !NY.length);
   $("#nothingForYou").classList.toggle("hidden", !!NY.length || !!(S && (S.takeovers || []).length));
@@ -977,7 +977,7 @@ function renderSetup(st) {
   const rc = st.river_cmd || {};
   if (!rc.unsupported) out.push(step(rc.ok, "Let agents use river",
     rc.ok ? `Agents can run the river command${rc.shell_path ? ` (${esc(rc.shell_path)})` : ""}.`
-      : rc.in_app_image ? "First drag Biggest River to your Applications folder, then open it from there."
+      : rc.in_app_image ? "First drag MaximizePM to your Applications folder, then open it from there."
       : rc.launcher === "old" ? "The river command still points at an older copy of river. Update it to this one."
       : "The agents you start talk to river with a small command. One click adds it to this Mac.",
     rc.in_app_image ? "" : `<button class="btn primary" data-su="rivercmd">${rc.launcher === "old" ? "Update" : "Add"} the river command</button>`));
@@ -1140,9 +1140,9 @@ async function checkUpdate() {
   updateMode = u.behind ? "update" : u.stale ? "restart" : "update";
   b.classList.toggle("primary", u.behind > 0 || !!u.stale);
   b.textContent = u.behind ? `Update · ${u.behind} new` : u.stale ? "Restart · new code" : "Update";
-  b.title = u.behind ? "New in Biggest River:\n" + u.commits.join("\n")
+  b.title = u.behind ? "New in MaximizePM:\n" + u.commits.join("\n")
       + (u.ahead ? `\n\nThis clone also has ${u.ahead} commit(s) of its own, so it cannot fast-forward: push or rebase them first.` : "")
-    : u.stale ? "Biggest River's code changed since this server started. Restart the server to run it."
+    : u.stale ? "MaximizePM's code changed since this server started. Restart the server to run it."
     : u.fetch_error ? "Could not check for updates: " + u.fetch_error
     : `Up to date (${u.head})` + (u.ahead ? `; this clone has ${u.ahead} commit(s) not on ${u.upstream} yet` : "");
 }

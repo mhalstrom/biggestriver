@@ -46,7 +46,7 @@ jobs:
       - name: The apps are signed (ad hoc) as a whole; a broken signature makes macOS call the app damaged
         working-directory: desktop
         run: |
-          for a in out/mac*/"Biggest River.app"; do codesign --verify --deep --strict "$a" && echo "signature OK: $a"; done
+          for a in out/mac*/"MaximizePM.app"; do codesign --verify --deep --strict "$a" && echo "signature OK: $a"; done
       - name: The app starts river from its own bundle, with its own Python
         working-directory: desktop
         run: |
@@ -54,7 +54,7 @@ jobs:
             const { startRiver } = require("./server");
             // find: () => null proves the app does not fall back to a Python on the runner.
             startRiver({ riverRoot: process.argv[1], find: () => null }).then(async (r) => { console.log("river answers on", r.url, "with", r.child.spawnargs[0]); await r.stop(); })
-              .catch((e) => { console.error(e.message); process.exit(1); });' "$PWD/out/mac-arm64/Biggest River.app/Contents/Resources/river-app"
+              .catch((e) => { console.error(e.message); process.exit(1); });' "$PWD/out/mac-arm64/MaximizePM.app/Contents/Resources/river-app"
       - uses: actions/upload-artifact@v4
         with:
           name: mac
@@ -83,9 +83,9 @@ jobs:
         run: |
           [ "$(uname -m)" = x86_64 ] || { echo "not an Intel runner: $(uname -m)"; exit 1; }
           hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/app" ../dmg/*-x64.dmg
-          app="$RUNNER_TEMP/app/Biggest River.app"
+          app="$RUNNER_TEMP/app/MaximizePM.app"
           codesign --verify --deep --strict "$app" && echo "signature OK"
-          file "$app/Contents/MacOS/Biggest River" "$app/Contents/Resources/river-app/python/bin/python3"
+          file "$app/Contents/MacOS/MaximizePM" "$app/Contents/Resources/river-app/python/bin/python3"
           RIVER_DB="$RUNNER_TEMP/q.db" node -e '
             const { startRiver } = require("./server");
             startRiver({ riverRoot: process.argv[1], find: () => null }).then(async (r) => { console.log("river answers on", r.url, "with", r.child.spawnargs[0]); await r.stop(); })
@@ -154,5 +154,5 @@ jobs:
           if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/* --clobber -R "$GITHUB_REPOSITORY"
           else
-            gh release create "$TAG" dist/* --title "Biggest River ${TAG}" --notes-file "$RUNNER_TEMP/notes.md" --target "$GITHUB_SHA" -R "$GITHUB_REPOSITORY"
+            gh release create "$TAG" dist/* --title "MaximizePM ${TAG}" --notes-file "$RUNNER_TEMP/notes.md" --target "$GITHUB_SHA" -R "$GITHUB_REPOSITORY"
           fi

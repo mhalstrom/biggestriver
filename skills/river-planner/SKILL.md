@@ -1,9 +1,9 @@
 ---
 name: river-planner
-description: Plan work with the user into Biggest River queue items with dependencies and priorities (the `river` command). Use when the user says "plan" in a project that uses river, when you plan a project into tasks, load a checklist into the queue, re-rank projects, or fix priorities and dependencies.
+description: Plan work with the user into MaximizePM queue items with dependencies and priorities (the `river` command). Use when the user says "plan" in a project that uses river, when you plan a project into tasks, load a checklist into the queue, re-rank projects, or fix priorities and dependencies.
 ---
 
-# Biggest River: planning work into the queue
+# MaximizePM: planning work into the queue
 
 ## The planning conversation
 

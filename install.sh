@@ -1,5 +1,5 @@
 #!/bin/sh
-# Biggest River setup: put `river` on PATH and install the Claude Code skills.
+# MaximizePM setup: put `maxpm` and `river` (the same command) on PATH and install the Claude Code skills.
 # Usage: ./install.sh [--bin-dir DIR] [--no-skills]
 set -e
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -18,8 +18,10 @@ command -v python3 >/dev/null || { echo "python3 is required (3.10 or later)" >&
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' || { echo "python3 3.10 or later is required" >&2; exit 1; }
 
 mkdir -p "$BIN_DIR"
-ln -sf "$ROOT/bin/river" "$BIN_DIR/river"
-echo "linked $BIN_DIR/river -> $ROOT/bin/river"
+for c in maxpm river; do
+  ln -sf "$ROOT/bin/$c" "$BIN_DIR/$c"
+  echo "linked $BIN_DIR/$c -> $ROOT/bin/$c"
+done
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *) echo "note: $BIN_DIR is not on PATH; add it to your shell profile" ;;

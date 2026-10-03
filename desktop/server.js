@@ -56,7 +56,7 @@ function get(url) {
 async function startRiver({ riverRoot, python, env = process.env, timeoutMs = 20000, find = findPython } = {}) {
   const own = python ? null : bundledPython(riverRoot);
   const py = python || own || find();
-  if (!py) throw new Error("Biggest River needs Python 3.10 or newer. Install it (" + (process.platform === "win32"
+  if (!py) throw new Error("MaximizePM needs Python 3.10 or newer. Install it (" + (process.platform === "win32"
     ? "from python.org, or: winget install Python.Python.3.13" : "for example: brew install python") + "), then open the app again.");
   const [pyCmd, ...pyArgs] = Array.isArray(py) ? py : [py];
   const bin = path.join(riverRoot, "bin", "river");

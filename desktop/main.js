@@ -1,4 +1,4 @@
-// Biggest River desktop app: runs `river serve` on a free local port and shows the page in a window.
+// MaximizePM desktop app: runs `river serve` on a free local port and shows the page in a window.
 const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const path = require("node:path");
 const { startRiver } = require("./server");
@@ -11,12 +11,12 @@ async function open() {
   try {
     river = await startRiver({ riverRoot });
   } catch (e) {
-    dialog.showErrorBox("Biggest River could not start", e.message);
+    dialog.showErrorBox("MaximizePM could not start", e.message);
     app.quit();
     return;
   }
-  console.log(`Biggest River app: ${river.url}`);
-  const win = new BrowserWindow({ width: 1400, height: 900, title: "Biggest River",
+  console.log(`MaximizePM app: ${river.url}`);
+  const win = new BrowserWindow({ width: 1400, height: 900, title: "MaximizePM",
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: path.join(__dirname, "preload.js") } });
   // "Add a project folder" on the page: the system folder picker, only for the page river serves.
   ipcMain.handle("river:pick-folder", async (e) => {

@@ -1,4 +1,4 @@
-// Takes the pictures for the README and biggestriver.com from the page, with the demo data of
+// Takes the pictures for the README and maximizepm.com from the page, with the demo data of
 // seed/screenshots.sh, and writes them to site/img/ (or to OUT). Uses the desktop app's Electron (no other
 // packages), tmux, and ffmpeg:
 //   cd desktop && npm ci && npx electron ../seed/shoot.js

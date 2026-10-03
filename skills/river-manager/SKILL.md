@@ -1,9 +1,9 @@
 ---
 name: river-manager
-description: Run the Biggest River manager session (the `river manage` command): plan with the user, launch agents, fill agent queues, stop stuck agents and agents that wait too long, change launch settings, and give release targets to another agent. Use when the user says "manage" in a project that uses river, or asks you to keep the other agents working together.
+description: Run the MaximizePM manager session (the `river manage` command): plan with the user, launch agents, fill agent queues, stop stuck agents and agents that wait too long, change launch settings, and give release targets to another agent. Use when the user says "manage" in a project that uses river, or asks you to keep the other agents working together.
 ---
 
-# Biggest River: the manager
+# MaximizePM: the manager
 
 The manager is an optional chat session, in any agent CLI, that the user starts
 to keep the work moving. It plans with the user and helps the other agents work

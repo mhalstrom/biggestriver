@@ -1,8 +1,8 @@
 {
-  "name": "biggest-river",
-  "productName": "Biggest River",
+  "name": "maximizepm",
+  "productName": "MaximizePM",
   "version": "0.1.0",
-  "description": "Biggest River dashboard in its own window: runs river serve and shows the page.",
+  "description": "MaximizePM dashboard in its own window: runs river serve and shows the page.",
   "main": "main.js",
   "license": "MIT",
   "private": true,
@@ -21,8 +21,8 @@
     "electron-builder": "^26.15.3"
   },
   "build": {
-    "appId": "com.biggestriver.app",
-    "productName": "Biggest River",
+    "appId": "com.maximizepm.app",
+    "productName": "MaximizePM",
     "publish": null,
     "directories": {
       "output": "out"
@@ -60,14 +60,14 @@
       "hardenedRuntime": false
     },
     "dmg": {
-      "artifactName": "Biggest-River-${version}-${arch}.${ext}"
+      "artifactName": "MaximizePM-${version}-${arch}.${ext}"
     },
     "win": {
       "target": "nsis",
       "icon": "icon.png"
     },
     "nsis": {
-      "artifactName": "Biggest-River-${version}-${arch}-setup.${ext}"
+      "artifactName": "MaximizePM-${version}-${arch}-setup.${ext}"
     }
   }
 }

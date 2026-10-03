@@ -1,11 +1,11 @@
 ## Work queue
 
-This project uses Biggest River (`river`) to track work and who is doing it.
+This project uses MaximizePM (`river`) to track work and who is doing it.
 When the user says "go" (or asks you to take work from the queue), run
 `river go` in this folder and follow the briefing it prints, to its end.
 When the user says "plan", run `river plan` and follow its briefing.
 
-## Working on Biggest River itself
+## Working on MaximizePM itself
 
 - Run the tests before each commit: `python3 -m unittest discover -s tests -t .`
 - Commit with explicit file paths, then push to `main` right away. The public
